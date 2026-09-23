@@ -924,15 +924,40 @@ export default {
         const dashboardSessionStorage=env.DB
           ?await dashboardSessionStorageReady(env)
           :false;
+
+        let discordApiReachable=false;
+        let discordBotId:string|null=null;
+        let discordBotUsername:string|null=null;
+        let discordGuildCount:number|null=null;
+        let discordApplicationMatchesToken:boolean|null=null;
+        let discordApiError:string|null=null;
+        try{
+          const bot=await botJson<{id:string;username:string}>(env,"/users/@me");
+          discordApiReachable=true;
+          discordBotId=bot.id;
+          discordBotUsername=bot.username;
+          discordApplicationMatchesToken=bot.id===env.DISCORD_APPLICATION_ID.trim();
+          const guilds=await botJson<Array<{id:string}>>(env,"/users/@me/guilds?limit=200");
+          discordGuildCount=guilds.length;
+        }catch(error){
+          discordApiError=error instanceof Error?error.message:String(error);
+        }
+
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v7-cors",
+          version:"dashboard-auth-v8-diagnostics",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
             publicKey:Boolean(env.DISCORD_PUBLIC_KEY),
             botToken:Boolean(env.DISCORD_BOT_TOKEN),
-            clientSecret:Boolean(env.DISCORD_CLIENT_SECRET)
+            clientSecret:Boolean(env.DISCORD_CLIENT_SECRET),
+            apiReachable:discordApiReachable,
+            botId:discordBotId,
+            botUsername:discordBotUsername,
+            guildCount:discordGuildCount,
+            applicationMatchesToken:discordApplicationMatchesToken,
+            apiError:discordApiError
           },
           encryptionKey:Boolean(env.SESSION_ENCRYPTION_KEY),
           dashboardPassword:Boolean(env.DASHBOARD_PASSWORD),
