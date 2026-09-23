@@ -249,6 +249,18 @@ export default function VendingManager({
     finally{setBusy(false);}
   }
 
+  async function clearStockNotification(){
+    if(!selectedId) return;
+    setBusy(true);
+    try{
+      await api(`/api/guilds/${guildId}/vending/${selectedId}/stock-notification`,{method:"DELETE"});
+      setNotifyChannel("");
+      setNotifyRole("");
+      onNotice("在庫追加通知を解除しました");
+    }catch(reason){onError(reason);}
+    finally{setBusy(false);}
+  }
+
   async function addProduct(event:FormEvent){
     event.preventDefault();
     if(!selectedId||!newProduct.name.trim()) return;
@@ -777,7 +789,10 @@ export default function VendingManager({
                       {roles.map(role=><option key={role.id} value={role.id}>@{role.name}</option>)}
                     </select>
                   </label>
-                  <button className="secondary" onClick={()=>void saveStockNotification()} disabled={!notifyChannel||!notifyRole}>通知設定を保存</button>
+                  <div className="button-row">
+                    <button className="secondary" onClick={()=>void saveStockNotification()} disabled={!notifyChannel||!notifyRole}>通知設定を保存</button>
+                    <button className="danger" onClick={()=>void clearStockNotification()} disabled={!notifyChannel&&!notifyRole}>解除</button>
+                  </div>
                 </div>
               </div>
             </>
