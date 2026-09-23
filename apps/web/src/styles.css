@@ -2800,3 +2800,75 @@ body.dsm-touch-reordering .discord-category {
     font-size: 8.5px;
   }
 }
+
+/* Task-focused vending navigation; hidden panels stay mounted to retain drafts. */
+.vending-main [hidden] { display: none !important; }
+.vending-section-nav, .vending-mobile-view {
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid #293750;
+  border-radius: 12px;
+  background: #0b1322;
+  margin-bottom: 14px;
+}
+.vending-section-nav button, .vending-mobile-view button {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #acbad1;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.vending-section-nav button[aria-pressed="true"], .vending-mobile-view button[aria-pressed="true"] {
+  background: #203b58;
+  color: #b9efff;
+}
+.vending-mobile-view { display: none; }
+.payment-connect summary, .vending-add-product summary {
+  min-height: 44px;
+  padding: 12px 4px;
+  color: #b8cbe1;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+}
+.payment-connect:not([open]) { display: block; }
+.vending-product-editor { scroll-margin-top: 20px; }
+.vending-section-nav button:focus-visible, .vending-mobile-view button:focus-visible {
+  outline: 2px solid #8cdeff;
+  outline-offset: 2px;
+}
+@media (max-width: 700px) {
+  .vending-mobile-view { display: flex; }
+  .vending-view-edit .vending-preview-pane,
+  .vending-view-preview .vending-designer-controls { display: none; }
+  .vending-main { padding: 8px 0; }
+  .vending-tabs-section { padding: 12px 8px; }
+  .vending-control-group, .vending-advanced-settings { padding: 12px; }
+  .vending-panel input, .vending-panel textarea, .vending-panel select,
+  .vending-layout input, .vending-layout textarea, .vending-layout select {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  .vending-layout button { min-height: 44px; }
+  .vending-control-title, .vending-layout .field > span,
+  .vending-advanced-settings summary { font-size: 13px; }
+  .vending-designer-subtitle { font-size: 12px; line-height: 1.6; }
+  .vending-designer-controls { margin-bottom: 0; }
+  .vending-designer-section > .section-head { align-items: stretch; }
+  .vending-designer-section > .section-head > .button-row { width: 100%; }
+  .vending-designer-section > .section-head .primary { flex: 1; }
+  .vending-discord-message { grid-template-columns: minmax(0,1fr); }
+  .vending-bot-avatar { display: none; }
+  .vending-message-body { grid-column: 1; }
+  .vending-preview-product strong { font-size: 15px; }
+  .vending-preview-product span { font-size: 12px; line-height: 1.6; }
+  .vending-publish-box { margin-top: 16px; }
+  .vending-product-editor .form-grid { grid-template-columns: minmax(0,1fr); }
+}

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 
 type Channel = { id:string; name:string };
@@ -58,6 +58,9 @@ const emptyProduct = {
 export default function VendingManager({
   guildId, channels, roles, onNotice, onError
 }:Props){
+  const [activeSection,setActiveSection]=useState<"panel"|"products"|"settings">("panel");
+  const [mobilePanelView,setMobilePanelView]=useState<"edit"|"preview">("edit");
+  const productEditorRef=useRef<HTMLDivElement>(null);
   const [machines,setMachines]=useState<Machine[]>([]);
   const [selectedId,setSelectedId]=useState<string|null>(null);
   const [detail,setDetail]=useState<MachineDetail|null>(null);
@@ -93,6 +96,11 @@ export default function VendingManager({
     infiniteStock:false,
     infiniteContent:""
   });
+  useEffect(()=>{
+    if(activeSection==="products"&&editingProduct){
+      productEditorRef.current?.scrollIntoView({block:"start",behavior:"smooth"});
+    }
+  },[activeSection,editingProduct]);
   const [stockText,setStockText]=useState("");
   const [stockPreview,setStockPreview]=useState<Array<{id:string;content:string}>>([]);
   const [withdrawQuantity,setWithdrawQuantity]=useState(1);
@@ -129,7 +137,11 @@ export default function VendingManager({
     machineForm.name!==detail.name ||
     machineForm.panelTitle!==(detail.panel_title??"") ||
     machineForm.panelDescription!==(detail.panel_description??"") ||
-    machineForm.panelImageUrl!==(detail.panel_image_url??"")
+    machineForm.panelImageUrl!==(detail.panel_image_url??"") ||
+    machineForm.roleId!==(detail.role_id??"") ||
+    machineForm.publicLogChannelId!==(detail.public_log_channel_id??"") ||
+    machineForm.localLogChannelId!==(detail.local_log_channel_id??"") ||
+    machineForm.privateLogChannelId!==(detail.private_log_channel_id??"")
   );
 
   const productDirty = Boolean(editingProduct) && (
@@ -339,6 +351,9 @@ export default function VendingManager({
   }
 
   function editProduct(product:Product){
+    setActiveSection("products");
+    if(editingProduct?.id===product.id) return;
+    if(productDirty&&!window.confirm("編集中の商品に未保存の変更があります。破棄して別の商品を開きますか？")) return;
     setEditingProduct(product);
     setProductEdit({
       name:product.name,
@@ -570,8 +585,8 @@ export default function VendingManager({
             {machines.length===0&&<div className="vending-empty">まだ自販機がありません。</div>}
           </div>
 
-          <div className="payment-connect">
-            <strong>決済アカウント</strong>
+          <details className="payment-connect">
+            <summary>決済アカウント・接続設定</summary>
             {paymentStatus.paypay&&(
               <button className="danger vending-disconnect" onClick={()=>void disconnectPayPay()} disabled={busy}>
                 PayPay切断
@@ -641,7 +656,7 @@ export default function VendingManager({
                 </form>
               )
             )}
-          </div>
+          </details>
         </aside>
 
         <div className="vending-main">
@@ -652,17 +667,22 @@ export default function VendingManager({
             </div>
           ) : (
             <>
-              <div className="vending-tabs-section vending-designer-section">
+              <nav className="vending-section-nav" aria-label="自販機の管理メニュー">
+                {([['panel','パネル'],['products','商品・在庫'],['settings','クーポン・通知']] as const).map(([id,label])=>(
+                  <button type="button" key={id} aria-pressed={activeSection===id} onClick={()=>setActiveSection(id)}>{label}</button>
+                ))}
+              </nav>
+              <div hidden={activeSection!=="panel"} className="vending-tabs-section vending-designer-section">
                 <div className="section-head compact">
                   <div>
                     <span className="eyebrow">WYSIWYG PANEL DESIGNER</span>
                     <h3>{detail.name}</h3>
                     <small className="vending-designer-subtitle">
-                      編集内容は右のDiscordプレビューへ即時反映されます
+                      設定とプレビューは連動します。商品をタップすると編集できます
                     </small>
                   </div>
                   <div className="button-row">
-                    {(panelDirty||productDirty)&&(
+                    {panelDirty&&(
                       <span className="vending-unsaved">● 未保存</span>
                     )}
                     <button className="primary" onClick={()=>void saveMachine()} disabled={busy}>
@@ -672,7 +692,11 @@ export default function VendingManager({
                   </div>
                 </div>
 
-                <div className="vending-designer-layout">
+                <div className="vending-mobile-view" aria-label="パネルの表示切り替え">
+                  <button type="button" aria-pressed={mobilePanelView==="edit"} onClick={()=>setMobilePanelView("edit")}>設定を編集</button>
+                  <button type="button" aria-pressed={mobilePanelView==="preview"} onClick={()=>setMobilePanelView("preview")}>プレビュー・設置</button>
+                </div>
+                <div className={`vending-designer-layout vending-view-${mobilePanelView}`}>
                   <div className="vending-designer-controls">
                     <div className="vending-control-group">
                       <span className="vending-control-title">基本設定</span>
@@ -799,6 +823,7 @@ export default function VendingManager({
                                 onChange={e=>setMachineForm({...machineForm,panelTitle:e.target.value})}
                                 placeholder={machineForm.name||"自販機"}
                                 aria-label="パネルタイトル"
+                                maxLength={256}
                               />
 
                               <textarea
@@ -807,6 +832,7 @@ export default function VendingManager({
                                 onChange={e=>setMachineForm({...machineForm,panelDescription:e.target.value})}
                                 placeholder="購入したい商品を下のボタンから選択してください。"
                                 aria-label="パネル説明"
+                                maxLength={3000}
                               />
 
                               <div className="vending-preview-products">
@@ -882,7 +908,7 @@ export default function VendingManager({
                 </div>
               </div>
 
-              <div className="vending-tabs-section">
+              <div hidden={activeSection!=="products"} className="vending-tabs-section vending-products-section">
                 <div className="section-head compact">
                   <div>
                     <span className="eyebrow">PRODUCTS</span>
@@ -891,6 +917,8 @@ export default function VendingManager({
                   <span className="status-pill"><i /> {detail.products.length} products</span>
                 </div>
 
+                <details className="vending-add-product">
+                  <summary>＋ 新しい商品を追加</summary>
                 <form className="vending-product-create" onSubmit={(event)=>void addProduct(event)}>
                   <div className="form-grid three">
                     <label className="field"><span>商品名</span><input required value={newProduct.name} onChange={e=>setNewProduct({...newProduct,name:e.target.value})}/></label>
@@ -904,6 +932,7 @@ export default function VendingManager({
                   <button className="secondary" type="submit" disabled={busy}>＋ 商品を追加</button>
                 </form>
 
+                </details>
                 <div className="vending-products">
                   {detail.products.map(product=>(
                     <article key={product.id} className={`vending-product-card ${editingProduct?.id===product.id?"active":""}`}>
@@ -921,9 +950,9 @@ export default function VendingManager({
                 </div>
 
                 {editingProduct&&(
-                  <div className="vending-product-editor">
+                  <div className="vending-product-editor" ref={productEditorRef}>
                     <div className="section-head compact">
-                      <h3>{editingProduct.name} を編集</h3>
+                      <h3>{editingProduct.name} を編集 {productDirty&&<span className="vending-unsaved">● 未保存</span>}</h3>
                       <button className="editor-close" onClick={()=>setEditingProduct(null)}>×</button>
                     </div>
                     <div className="form-grid three">
@@ -982,7 +1011,7 @@ export default function VendingManager({
                 )}
               </div>
 
-              <div className="vending-grid-two">
+              <div hidden={activeSection!=="settings"} className="vending-grid-two">
                 <div className="vending-tabs-section">
                   <span className="eyebrow">COUPONS</span>
                   <h3>クーポン</h3>
