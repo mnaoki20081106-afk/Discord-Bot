@@ -182,6 +182,10 @@ export default function ServerEditor({
   const [showPermissionBadges, setShowPermissionBadges] = useState(
     () => localStorage.getItem("dsm_show_permission_badges") !== "0"
   );
+  const [permissionPreviewRoleId, setPermissionPreviewRoleId] = useState(() => {
+    const saved = localStorage.getItem(`dsm_permission_preview_role_${guildId}`);
+    return saved || guildId;
+  });
 
   const selectedChannel = useMemo(
     () =>
@@ -203,6 +207,30 @@ export default function ServerEditor({
     () => meta.channels.filter((channel) => !channel.parentId),
     [meta.channels]
   );
+
+  const permissionPreviewRole = useMemo(
+    () =>
+      permissionPreviewRoleId === guildId
+        ? null
+        : meta.roles.find((role) => role.id === permissionPreviewRoleId) ?? null,
+    [permissionPreviewRoleId, guildId, meta.roles]
+  );
+
+  const permissionPreviewRoleName =
+    permissionPreviewRoleId === guildId
+      ? "@everyone"
+      : permissionPreviewRole
+        ? `@${permissionPreviewRole.name}`
+        : "@everyone";
+
+  useEffect(() => {
+    const valid =
+      permissionPreviewRoleId === guildId ||
+      meta.roles.some((role) => role.id === permissionPreviewRoleId);
+    if (valid) return;
+    setPermissionPreviewRoleId(guildId);
+    localStorage.setItem(`dsm_permission_preview_role_${guildId}`, guildId);
+  }, [permissionPreviewRoleId, guildId, meta.roles]);
 
   function openChannel(id: string) {
     const channel = meta.channels.find((item) => item.id === id);
@@ -259,10 +287,18 @@ export default function ServerEditor({
     if (!showPermissionBadges) return null;
     const key: PermissionKey =
       channel.type === "voice" || channel.type === "stage" ? "speak" : "send";
-    const mode = permissionMode(channel, guildId, key);
+    const mode = permissionMode(channel, permissionPreviewRoleId, key);
     const label =
       mode === "allow" ? "発言 可" : mode === "deny" ? "発言 不可" : "発言 継承";
-    return <span className={`permission-badge ${mode}`}>{label}</span>;
+    return (
+      <span
+        className={`permission-badge ${mode}`}
+        title={`${permissionPreviewRoleName}: ${label}`}
+      >
+        <span className="permission-badge-role">{permissionPreviewRoleName}</span>
+        <span className="permission-badge-state">{label}</span>
+      </span>
+    );
   }
 
   async function saveExisting(event: FormEvent) {
@@ -740,18 +776,46 @@ export default function ServerEditor({
           </p>
         </div>
         <div className="editor-heading-actions">
-          <label className="permission-preview-toggle">
-            <input
-              type="checkbox"
-              checked={showPermissionBadges}
-              onChange={(event) => {
-                const checked = event.target.checked;
-                setShowPermissionBadges(checked);
-                localStorage.setItem("dsm_show_permission_badges", checked ? "1" : "0");
-              }}
-            />
-            <span>発言権を表示</span>
-          </label>
+          <div className="permission-preview-controls">
+            <label className="permission-preview-toggle">
+              <input
+                type="checkbox"
+                checked={showPermissionBadges}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setShowPermissionBadges(checked);
+                  localStorage.setItem("dsm_show_permission_badges", checked ? "1" : "0");
+                }}
+              />
+              <span>発言権を表示</span>
+            </label>
+            {showPermissionBadges && (
+              <label className="permission-preview-role-select">
+                <span>対象</span>
+                <select
+                  value={permissionPreviewRoleId}
+                  onChange={(event) => {
+                    const roleId = event.target.value;
+                    setPermissionPreviewRoleId(roleId);
+                    localStorage.setItem(
+                      `dsm_permission_preview_role_${guildId}`,
+                      roleId
+                    );
+                  }}
+                  aria-label="発言権を表示する対象ロール"
+                >
+                  <option value={guildId}>@everyone</option>
+                  {meta.roles
+                    .filter((role) => role.id !== guildId)
+                    .map((role) => (
+                      <option key={role.id} value={role.id}>
+                        @{role.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
+          </div>
           <button className="secondary editor-add-category" onClick={() => openCreate(null, "category")}>
             ＋ カテゴリ
           </button>
@@ -804,6 +868,14 @@ export default function ServerEditor({
               ＋
             </button>
           </div>
+
+          {showPermissionBadges && (
+            <div className="permission-preview-context">
+              <span className="permission-preview-context-icon">◉</span>
+              <span>発言権表示</span>
+              <strong>{permissionPreviewRoleName}</strong>
+            </div>
+          )}
 
           <div className="discord-channel-scroll" ref={channelScrollRef}>
             {touchDraggingId && (
