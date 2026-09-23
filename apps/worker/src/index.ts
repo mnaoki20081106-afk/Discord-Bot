@@ -372,6 +372,8 @@ async function handleInteraction(
   if(!(await verifyInteraction(env,request,text))) return new Response("invalid signature",{status:401});
   const interaction=JSON.parse(text) as any;
   if(interaction.type===1) return interactionResponse({type:1});
+
+  await ensureSchema(env);
   const vendingResponse=await handleVendingInteraction(interaction,env,ctx);
   if(vendingResponse) return vendingResponse;
 
@@ -860,18 +862,31 @@ async function paymentSweep(env:Env):Promise<void>{
 export default {
   async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
     try{
-      await ensureSchema(env);
       const url=new URL(request.url);
 
       if(request.method==="OPTIONS"){
         return new Response(null,{status:204,headers:corsHeaders(env)});
       }
       if(url.pathname==="/health"){
-        return json(env,{ok:true,runtime:"cloudflare-workers"});
+        return json(env,{
+          ok:true,
+          runtime:"cloudflare-workers",
+          discord:{
+            applicationId:Boolean(env.DISCORD_APPLICATION_ID),
+            publicKey:Boolean(env.DISCORD_PUBLIC_KEY),
+            botToken:Boolean(env.DISCORD_BOT_TOKEN),
+            clientSecret:Boolean(env.DISCORD_CLIENT_SECRET)
+          },
+          encryptionKey:Boolean(env.SESSION_ENCRYPTION_KEY),
+          d1Bound:Boolean(env.DB)
+        });
       }
       if(url.pathname==="/interactions"&&request.method==="POST"){
         return handleInteraction(request,env,ctx);
       }
+
+      await ensureSchema(env);
+
       if(url.pathname==="/paypay/webhook"&&request.method==="POST"){
         return handlePayPayWebhook(request,env,ctx);
       }
