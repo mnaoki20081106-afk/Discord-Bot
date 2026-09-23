@@ -8,10 +8,7 @@ type Guild = {
   id: string;
   name: string;
   icon: string | null;
-  owner: boolean;
-  permissions: string;
-  botInstalled: boolean;
-  inviteUrl: string;
+  botInstalled: true;
 };
 type Meta = {
   id: string;
@@ -60,8 +57,10 @@ type Product = {
 };
 type ServiceStatus = {
   discordReady: boolean;
+  dashboardPasswordConfigured: boolean;
   payPayConfigured: boolean;
   payPayEnvironment: string;
+  inviteUrl: string;
 };
 
 const emptyProduct = {
@@ -122,6 +121,7 @@ function Field({
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(Boolean(currentSession()));
+  const [password, setPassword] = useState("");
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -165,9 +165,9 @@ export default function App() {
       setMe(user);
       setGuilds(serverList);
       setStatus(service);
-      const firstInstalled = serverList.find((guild) => guild.botInstalled);
-      if (!selectedId && firstInstalled) {
-        await selectGuild(firstInstalled.id);
+      const firstGuild = serverList[0];
+      if (!selectedId && firstGuild) {
+        await selectGuild(firstGuild.id);
       }
     } catch (reason) {
       fail(reason);
@@ -344,23 +344,39 @@ export default function App() {
         <section className="login-card">
           <div className="logo-mark">D</div>
           <span className="eyebrow">Discord Server Manager</span>
-          <h1>サーバー管理を、ひとつの画面に。</h1>
+          <h1>管理パスワードでアクセス</h1>
           <p>
-            サーバー構成、チャンネル編集、セキュリティ、認証、Ticketを
-            Discordログインからまとめて管理します。
+            共同編集者は同じ管理パスワードでログインできます。
+            BOTが参加しているDiscordサーバーだけが管理画面に表示されます。
           </p>
-          <button
-            className="primary big"
-            onClick={() => {
+          <form
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setBusy(true);
+              setError(null);
               try {
-                login();
+                await login(password);
+                setPassword("");
+                setAuthenticated(true);
               } catch (reason) {
                 fail(reason);
+              } finally {
+                setBusy(false);
               }
             }}
           >
-            Discordでログイン
-          </button>
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="管理パスワード"
+              autoComplete="current-password"
+              required
+            />
+            <button className="primary big" type="submit" disabled={busy}>
+              {busy ? "確認中..." : "管理画面へ"}
+            </button>
+          </form>
           {error && <div className="alert error">{error}</div>}
         </section>
       </main>
@@ -384,9 +400,7 @@ export default function App() {
             <button
               key={guild.id}
               className={`server-button ${selectedId === guild.id ? "active" : ""}`}
-              onClick={() => {
-                if (guild.botInstalled) void selectGuild(guild.id);
-              }}
+              onClick={() => void selectGuild(guild.id)}
             >
               {guild.icon ? (
                 <img
@@ -398,9 +412,9 @@ export default function App() {
               )}
               <span className="server-copy">
                 <strong>{guild.name}</strong>
-                <small>{guild.botInstalled ? "管理可能" : "BOT未導入"}</small>
+                <small>BOT導入済み</small>
               </span>
-              <span className={`dot ${guild.botInstalled ? "online" : ""}`} />
+              <span className="dot online" />
             </button>
           ))}
         </div>
@@ -408,8 +422,8 @@ export default function App() {
         <div className="account">
           <div className="avatar">{me?.username?.slice(0, 1).toUpperCase() ?? "?"}</div>
           <div>
-            <strong>{me?.username ?? "Discord User"}</strong>
-            <small>管理者</small>
+            <strong>{me?.username ?? "共同管理者"}</strong>
+            <small>共同編集</small>
           </div>
           <button className="icon-button" onClick={() => void logout()} title="ログアウト">
             ↪
@@ -424,6 +438,11 @@ export default function App() {
             <h1>{selectedGuild?.name ?? "サーバーを選択"}</h1>
           </div>
           <div className="status-row">
+            {status?.inviteUrl && (
+              <a className="primary" href={status.inviteUrl} target="_blank" rel="noreferrer">
+                BOTをサーバーへ追加
+              </a>
+            )}
             <span className={`status-pill ${status?.discordReady ? "good" : "bad"}`}>
               <i /> BOT {status?.discordReady ? "Online" : "Offline"}
             </span>
@@ -440,24 +459,11 @@ export default function App() {
         {!selectedGuild && (
           <section className="empty-state card">
             <h2>管理するサーバーを選んでください</h2>
-            <p>左側に、あなたが「サーバー管理」権限を持つDiscordサーバーだけを表示しています。</p>
+            <p>BOTを追加すると、参加済みサーバーがここに自動表示されます。</p>
           </section>
         )}
 
-        {selectedGuild && !selectedGuild.botInstalled && (
-          <section className="card install-card">
-            <div>
-              <span className="eyebrow">BOT REQUIRED</span>
-              <h2>まずBOTをこのサーバーへ追加</h2>
-              <p>必要な権限だけを要求する招待URLを生成しています。</p>
-            </div>
-            <a className="primary" href={selectedGuild.inviteUrl} target="_blank" rel="noreferrer">
-              BOTを追加
-            </a>
-          </section>
-        )}
-
-        {selectedGuild?.botInstalled && meta && settings && (
+        {selectedGuild && meta && settings && (
           <>
             <ServerEditor
               guildId={selectedId!}
