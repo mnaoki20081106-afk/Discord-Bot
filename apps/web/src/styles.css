@@ -2435,3 +2435,368 @@ body.dsm-touch-reordering .discord-category {
   opacity: 0;
   pointer-events: none;
 }
+
+
+/* Final vending responsive overrides.
+   Keep these after the WYSIWYG desktop rules so narrow iPhone layouts cannot
+   be overridden by later min-width/grid declarations. */
+.vending-manager,
+.vending-layout,
+.vending-sidebar,
+.vending-main,
+.vending-tabs-section,
+.vending-designer-section,
+.vending-designer-layout,
+.vending-designer-controls,
+.vending-control-group,
+.vending-advanced-settings,
+.vending-preview-pane,
+.vending-discord-stage,
+.vending-discord-window,
+.vending-discord-message,
+.vending-message-body,
+.vending-discord-embed,
+.vending-publish-box {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.vending-designer-layout > *,
+.vending-grid-two > *,
+.vending-publish-row > *,
+.vending-panel-update > *,
+.vending-product-summary > * {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .vending-manager {
+    width: 100%;
+    padding: 12px;
+    overflow: hidden;
+  }
+
+  .vending-layout {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    border-radius: 14px;
+  }
+
+  .vending-sidebar {
+    width: 100%;
+    padding: 12px;
+    overflow: hidden;
+  }
+
+  .vending-create {
+    grid-template-columns: minmax(0, 1fr) 40px;
+  }
+
+  .vending-machine-list,
+  .payment-connect {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vending-main {
+    width: 100%;
+    padding: 10px;
+    overflow: hidden;
+  }
+
+  .vending-tabs-section {
+    width: 100%;
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .vending-designer-layout {
+    display: block;
+    width: 100%;
+  }
+
+  .vending-designer-controls {
+    width: 100%;
+    margin-bottom: 14px;
+  }
+
+  .vending-control-group,
+  .vending-advanced-settings {
+    width: 100%;
+    padding: 11px;
+  }
+
+  .vending-control-group .field,
+  .vending-advanced-settings .field,
+  .vending-control-group input,
+  .vending-control-group textarea,
+  .vending-control-group select,
+  .vending-advanced-settings input,
+  .vending-advanced-settings textarea,
+  .vending-advanced-settings select {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .vending-advanced-settings .form-grid.two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vending-preview-pane {
+    position: static;
+    width: 100%;
+  }
+
+  .vending-preview-toolbar {
+    width: 100%;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .vending-preview-size {
+    flex: 0 0 auto;
+  }
+
+  .vending-discord-stage {
+    width: 100%;
+    padding: 6px;
+    overflow: hidden;
+    border-radius: 10px;
+  }
+
+  .vending-discord-stage.desktop .vending-discord-window,
+  .vending-discord-stage.mobile .vending-discord-window,
+  .vending-discord-window {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .vending-discord-channelbar {
+    width: 100%;
+    height: 40px;
+    padding: 0 10px;
+    box-sizing: border-box;
+  }
+
+  .vending-discord-message {
+    width: 100%;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 7px;
+    padding: 11px 8px 13px;
+  }
+
+  .vending-bot-avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 10px;
+  }
+
+  .vending-message-author {
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 3px 5px;
+  }
+
+  .vending-message-author strong {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .vending-discord-embed {
+    width: 100%;
+    padding: 10px 9px 10px 13px;
+  }
+
+  .vending-wysiwyg-title,
+  .vending-wysiwyg-description {
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .vending-preview-product {
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .vending-preview-product strong,
+  .vending-preview-product span {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .vending-preview-image {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .vending-discord-components {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .discord-component {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .vending-preview-match {
+    overflow-wrap: anywhere;
+  }
+
+  .vending-publish-box {
+    width: 100%;
+    padding: 9px;
+  }
+
+  .vending-publish-row,
+  .vending-panel-update,
+  .vending-grid-two,
+  .coupon-create {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vending-publish-row select,
+  .vending-publish-row button,
+  .vending-panel-update input,
+  .vending-panel-update button {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .vending-product-summary {
+    width: 100%;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    gap: 7px;
+    padding: 10px 8px;
+  }
+
+  .vending-product-emoji {
+    width: 32px;
+    height: 32px;
+    font-size: 15px;
+  }
+
+  .vending-product-copy {
+    min-width: 0;
+  }
+
+  .vending-product-copy strong,
+  .vending-product-copy small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .vending-stock-count {
+    min-width: 36px;
+    padding: 5px 7px;
+  }
+
+  .vending-sales {
+    grid-column: 2 / -1;
+    white-space: normal;
+  }
+
+  .vending-product-editor {
+    width: 100%;
+    padding: 12px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .vending-product-editor .form-grid.three,
+  .vending-product-editor .form-grid.two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vending-stock-file-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .withdraw-input {
+    width: 100%;
+  }
+
+  .coupon-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .coupon-row .danger {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+
+@media (max-width: 390px) {
+  .vending-manager {
+    padding: 8px;
+  }
+
+  .vending-main {
+    padding: 7px;
+  }
+
+  .vending-tabs-section,
+  .vending-designer-section {
+    padding: 9px;
+  }
+
+  .vending-preview-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .vending-preview-size {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vending-preview-size button {
+    width: 100%;
+  }
+
+  .vending-discord-stage {
+    padding: 4px;
+  }
+
+  .vending-discord-message {
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 6px;
+    padding: 9px 6px 11px;
+  }
+
+  .vending-bot-avatar {
+    width: 24px;
+    height: 24px;
+    font-size: 9px;
+  }
+
+  .vending-discord-embed {
+    padding: 9px 7px 9px 11px;
+  }
+
+  .vending-message-author small {
+    width: 100%;
+  }
+
+  .vending-wysiwyg-title {
+    font-size: 12px;
+  }
+
+  .vending-preview-product strong {
+    font-size: 9px;
+  }
+
+  .vending-preview-product span,
+  .vending-wysiwyg-description {
+    font-size: 8.5px;
+  }
+}
