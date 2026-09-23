@@ -962,6 +962,13 @@ export default function ServerEditor({
                   onChange={(event) => {
                     const roleId = event.target.value;
                     setPermissionPreviewRoleId(roleId);
+                    setPermissionTargetId(roleId);
+                    if (selectedChannel) {
+                      setPermissionDraft(draftFor(selectedChannel, roleId));
+                    }
+                    if (bulkMode) {
+                      setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
+                    }
                     localStorage.setItem(
                       `dsm_permission_preview_role_${guildId}`,
                       roleId
@@ -1042,6 +1049,18 @@ export default function ServerEditor({
             </div>
           )}
 
+          {bulkMode && (
+            <div className="bulk-selection-bar">
+              <div>
+                <strong>{bulkSelectedIds.length}チャンネル選択中</strong>
+                <span>{permissionPreviewRoleName} の権限を一括編集</span>
+              </div>
+              <button type="button" onClick={exitBulkSelection}>
+                完了
+              </button>
+            </div>
+          )}
+
           <div className="discord-channel-scroll" ref={channelScrollRef}>
             {touchDraggingId && (
               <div
@@ -1059,7 +1078,7 @@ export default function ServerEditor({
                   <button
                     key={channel.id}
                     data-channel-id={channel.id}
-                    draggable
+                    draggable={!bulkMode}
                     onDragStart={() => setDragging({ kind: "channel", id: channel.id })}
                     onDragEnd={() => setDragging(null)}
                     onDragOver={(event) => event.preventDefault()}
@@ -1069,9 +1088,13 @@ export default function ServerEditor({
                     onTouchEnd={endPendingLongPress}
                     onTouchCancel={endPendingLongPress}
                     onContextMenu={(event) => event.preventDefault()}
-                    className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""} ${pressingChannelId === channel.id ? "long-pressing" : ""} ${touchDraggingId === channel.id ? "touch-dragging" : ""} ${touchDropTarget?.kind === "channel" && touchDropTarget.id === channel.id ? `touch-drop-${touchDropTarget.placement}` : ""}`}
+                    className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${bulkMode ? "bulk-mode" : ""} ${bulkSelectedIds.includes(channel.id) ? "bulk-selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""} ${pressingChannelId === channel.id ? "long-pressing" : ""} ${touchDraggingId === channel.id ? "touch-dragging" : ""} ${touchDropTarget?.kind === "channel" && touchDropTarget.id === channel.id ? `touch-drop-${touchDropTarget.placement}` : ""}`}
                     onClick={() => {
                       if (Date.now() < suppressClickUntilRef.current) return;
+                      if (bulkMode) {
+                        toggleBulkChannel(channel.id);
+                        return;
+                      }
                       openChannel(channel.id);
                     }}
                   >
@@ -1080,7 +1103,17 @@ export default function ServerEditor({
                     </span>
                     <span className="channel-name">{channel.name}</span>
                     {renderPermissionBadge(channel)}
-                    <span className="channel-edit">›</span>
+                    {bulkMode ? (
+                      <span
+                        className={`bulk-select-indicator ${
+                          bulkSelectedIds.includes(channel.id) ? "selected" : ""
+                        }`}
+                      >
+                        {bulkSelectedIds.includes(channel.id) ? "✓" : "○"}
+                      </span>
+                    ) : (
+                      <span className="channel-edit">›</span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -1126,7 +1159,7 @@ export default function ServerEditor({
                     <button
                       key={channel.id}
                       data-channel-id={channel.id}
-                      draggable
+                      draggable={!bulkMode}
                       onDragStart={(event) => {
                         event.stopPropagation();
                         setDragging({ kind: "channel", id: channel.id });
@@ -1145,9 +1178,13 @@ export default function ServerEditor({
                       onTouchEnd={endPendingLongPress}
                       onTouchCancel={endPendingLongPress}
                       onContextMenu={(event) => event.preventDefault()}
-                      className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""} ${pressingChannelId === channel.id ? "long-pressing" : ""} ${touchDraggingId === channel.id ? "touch-dragging" : ""} ${touchDropTarget?.kind === "channel" && touchDropTarget.id === channel.id ? `touch-drop-${touchDropTarget.placement}` : ""}`}
+                      className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${bulkMode ? "bulk-mode" : ""} ${bulkSelectedIds.includes(channel.id) ? "bulk-selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""} ${pressingChannelId === channel.id ? "long-pressing" : ""} ${touchDraggingId === channel.id ? "touch-dragging" : ""} ${touchDropTarget?.kind === "channel" && touchDropTarget.id === channel.id ? `touch-drop-${touchDropTarget.placement}` : ""}`}
                       onClick={() => {
                         if (Date.now() < suppressClickUntilRef.current) return;
+                        if (bulkMode) {
+                          toggleBulkChannel(channel.id);
+                          return;
+                        }
                         openChannel(channel.id);
                       }}
                     >
@@ -1156,7 +1193,17 @@ export default function ServerEditor({
                       </span>
                       <span className="channel-name">{channel.name}</span>
                     {renderPermissionBadge(channel)}
-                      <span className="channel-edit">›</span>
+                      {bulkMode ? (
+                        <span
+                          className={`bulk-select-indicator ${
+                            bulkSelectedIds.includes(channel.id) ? "selected" : ""
+                          }`}
+                        >
+                          {bulkSelectedIds.includes(channel.id) ? "✓" : "○"}
+                        </span>
+                      ) : (
+                        <span className="channel-edit">›</span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -1173,13 +1220,135 @@ export default function ServerEditor({
         </div>
 
         <div className="server-editor-inspector">
-          {!selection && (
+          {bulkMode && (
+            <div className="bulk-permission-editor">
+              <div className="editor-inspector-title">
+                <div>
+                  <span className="eyebrow">BULK PERMISSIONS</span>
+                  <h3>チャンネル権限を一括編集</h3>
+                  <p>
+                    {bulkSelectedIds.length}チャンネルを選択中。変更した項目だけまとめて反映します。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="editor-close"
+                  onClick={exitBulkSelection}
+                  aria-label="一括選択を終了"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="bulk-selected-channels">
+                {bulkSelectedChannels.map((channel) => (
+                  <button
+                    type="button"
+                    key={channel.id}
+                    onClick={() => toggleBulkChannel(channel.id)}
+                    title="選択解除"
+                  >
+                    <span>{channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}</span>
+                    <strong>{channel.name}</strong>
+                    <i>×</i>
+                  </button>
+                ))}
+              </div>
+
+              <div className="channel-permission-editor bulk-channel-permission-editor">
+                <div className="permission-editor-head">
+                  <div>
+                    <strong>対象ロール</strong>
+                    <small>発言権プレビューと同じロールを使用します</small>
+                  </div>
+                </div>
+
+                <label>
+                  <span>対象ロール</span>
+                  <select
+                    value={permissionPreviewRoleId}
+                    onChange={(event) => {
+                      const roleId = event.target.value;
+                      setPermissionPreviewRoleId(roleId);
+                      setPermissionTargetId(roleId);
+                      setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
+                      localStorage.setItem(
+                        `dsm_permission_preview_role_${guildId}`,
+                        roleId
+                      );
+                    }}
+                  >
+                    <option value={guildId}>@everyone</option>
+                    {meta.roles
+                      .filter((role) => role.id !== guildId)
+                      .map((role) => (
+                        <option key={role.id} value={role.id}>
+                          @{role.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+
+                <div className="bulk-permission-note">
+                  <strong>変更なし</strong> を選んだ権限は、各チャンネルの現在設定をそのまま残します。
+                </div>
+
+                <div className="permission-list bulk-permission-list">
+                  {bulkPermissionRows.map((permission) => (
+                    <div className="permission-row bulk-permission-row" key={permission.key}>
+                      <span>{permission.label}</span>
+                      <div className="permission-modes bulk-permission-modes">
+                        {(["keep", "inherit", "allow", "deny"] as BulkPermissionMode[]).map((mode) => (
+                          <button
+                            type="button"
+                            key={mode}
+                            className={
+                              bulkPermissionDraft[permission.key] === mode
+                                ? `active ${mode}`
+                                : ""
+                            }
+                            onClick={() =>
+                              setBulkPermissionDraft({
+                                ...bulkPermissionDraft,
+                                [permission.key]: mode
+                              })
+                            }
+                          >
+                            {mode === "keep"
+                              ? "変更なし"
+                              : mode === "inherit"
+                                ? "継承"
+                                : mode === "allow"
+                                  ? "許可"
+                                  : "拒否"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="primary permission-save bulk-permission-save"
+                  disabled={saving}
+                  onClick={() => void saveBulkPermissions()}
+                >
+                  {bulkSavingProgress
+                    ? `反映中… ${bulkSavingProgress.done}/${bulkSavingProgress.total}`
+                    : `${bulkSelectedIds.length}チャンネルへ一括反映`}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!selection && !bulkMode && (
             <div className="editor-welcome">
               <div className="editor-welcome-icon">＋</div>
               <h3>プレビューから編集</h3>
               <p>
                 カテゴリ横の＋でその中にチャンネルを追加。チャンネル名を押すと、
-                名前・トピック・所属カテゴリを変更できます。PCはドラッグ、スマホは長押ししてカテゴリをまたいで移動・並べ替えできます。
+                名前・トピック・所属カテゴリを変更できます。スマホは長押しして離すと一括選択、長押し後そのまま動かすと並べ替えできます。
               </p>
               <div className="editor-quick-actions">
                 <button className="primary" onClick={() => openCreate(null, "text")}>
@@ -1192,7 +1361,7 @@ export default function ServerEditor({
             </div>
           )}
 
-          {selection?.kind === "create" && (
+          {!bulkMode && selection?.kind === "create" && (
             <form className="editor-form" onSubmit={(event) => void createItem(event)}>
               <div className="editor-inspector-title">
                 <div>
@@ -1265,7 +1434,7 @@ export default function ServerEditor({
             </form>
           )}
 
-          {(selectedChannel || selectedCategory) && selection?.kind !== "create" && (
+          {!bulkMode && (selectedChannel || selectedCategory) && selection?.kind !== "create" && (
             <form className="editor-form" onSubmit={(event) => void saveExisting(event)}>
               <div className="editor-inspector-title">
                 <div>
@@ -1327,7 +1496,12 @@ export default function ServerEditor({
                         onChange={(event) => {
                           const targetId = event.target.value;
                           setPermissionTargetId(targetId);
+                          setPermissionPreviewRoleId(targetId);
                           setPermissionDraft(draftFor(selectedChannel, targetId));
+                          localStorage.setItem(
+                            `dsm_permission_preview_role_${guildId}`,
+                            targetId
+                          );
                         }}
                       >
                         <option value={guildId}>@everyone</option>
