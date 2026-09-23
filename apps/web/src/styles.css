@@ -738,8 +738,65 @@ textarea { min-height: 92px; resize: vertical; }
 }
 
 .discord-channel.touch-dragging {
-  opacity: .42;
+  opacity: .16;
   background: #41444d;
+  box-shadow: inset 0 0 0 1px rgba(114, 128, 255, .22);
+}
+
+.touch-channel-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10000;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  border: 1px solid rgba(135, 146, 255, .72);
+  border-radius: 8px;
+  color: #f3f5ff;
+  background: rgba(64, 66, 78, .97);
+  box-shadow:
+    0 16px 38px rgba(0, 0, 0, .42),
+    0 4px 12px rgba(0, 0, 0, .3),
+    0 0 0 1px rgba(114, 128, 255, .16);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  will-change: transform;
+  transform-origin: center;
+  animation: touch-channel-lift .13s ease-out;
+}
+
+.touch-channel-ghost .channel-hash {
+  font-size: 20px;
+}
+
+.touch-channel-ghost .channel-name {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.touch-ghost-grip {
+  justify-self: end;
+  color: #b7beff;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: -2px;
+}
+
+@keyframes touch-channel-lift {
+  from {
+    opacity: .7;
+    filter: brightness(.9);
+  }
+  to {
+    opacity: 1;
+    filter: brightness(1);
+  }
 }
 
 .discord-channel.touch-drop-before {
