@@ -157,7 +157,14 @@ async function discordMeta(env:Env,guildId:string){
     roles:roles
       .filter(r=>!r.managed)
       .sort((a,b)=>b.position-a.position)
-      .map(r=>({id:r.id,name:r.name,position:r.position}))
+      .map(r=>({
+        id:r.id,
+        name:r.name,
+        position:r.position,
+        color:r.color??0,
+        permissions:r.permissions,
+        isEveryone:r.id===guildId
+      }))
   };
 }
 
@@ -713,6 +720,143 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     return json(env,{ok:true});
   }
 
+  const rolesCollectionMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/roles$/);
+  if(rolesCollectionMatch&&request.method==="POST"){
+    const guildId=rolesCollectionMatch[1]!;
+    await requireGuild(request,env,guildId);
+    const input=await bodyObject<{
+      name?:string;
+      color?:number;
+      permissions?:string;
+    }>(request);
+
+    const name=String(input.name??"").trim();
+    if(!name||name.length>100) throw new HttpError(400,"ロール名が不正です");
+
+    const color=input.color===undefined?0:Number(input.color);
+    if(!Number.isInteger(color)||color<0||color>0xFFFFFF){
+      throw new HttpError(400,"ロール色が不正です");
+    }
+
+    let permissions="0";
+    try{
+      const parsed=BigInt(input.permissions??"0");
+      if(parsed<0n) throw new Error();
+      permissions=parsed.toString();
+    }catch{
+      throw new HttpError(400,"ロール権限が不正です");
+    }
+
+    try{
+      const role=await botJson<DiscordRole>(env,`/guilds/${guildId}/roles`,{
+        method:"POST",
+        body:JSON.stringify({name,color,permissions})
+      });
+      return json(env,{
+        id:role.id,
+        name:role.name,
+        position:role.position,
+        color:role.color??0,
+        permissions:role.permissions,
+        isEveryone:false
+      },201);
+    }catch(error){
+      if(error instanceof DiscordApiError&&error.status===403){
+        throw new HttpError(
+          403,
+          "ロールを追加できません。BOTに「ロールの管理」権限があるか確認してください"
+        );
+      }
+      throw error;
+    }
+  }
+
+  const roleItemMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/roles\/(\d+)$/);
+  if(roleItemMatch){
+    const guildId=roleItemMatch[1]!;
+    const roleId=roleItemMatch[2]!;
+    await requireGuild(request,env,guildId);
+
+    if(request.method==="PATCH"){
+      const input=await bodyObject<{
+        name?:string;
+        color?:number;
+        permissions?:string;
+      }>(request);
+
+      const payload:Record<string,unknown>={};
+      if(input.permissions!==undefined){
+        try{
+          const parsed=BigInt(input.permissions);
+          if(parsed<0n) throw new Error();
+          payload.permissions=parsed.toString();
+        }catch{
+          throw new HttpError(400,"ロール権限が不正です");
+        }
+      }
+
+      if(roleId===guildId){
+        if(input.name!==undefined||input.color!==undefined){
+          throw new HttpError(400,"@everyone は名前や色を変更できません");
+        }
+      }else{
+        if(input.name!==undefined){
+          const name=String(input.name).trim();
+          if(!name||name.length>100) throw new HttpError(400,"ロール名が不正です");
+          payload.name=name;
+        }
+        if(input.color!==undefined){
+          const color=Number(input.color);
+          if(!Number.isInteger(color)||color<0||color>0xFFFFFF){
+            throw new HttpError(400,"ロール色が不正です");
+          }
+          payload.color=color;
+        }
+      }
+
+      try{
+        const role=await botJson<DiscordRole>(env,`/guilds/${guildId}/roles/${roleId}`,{
+          method:"PATCH",
+          body:JSON.stringify(payload)
+        });
+        return json(env,{
+          id:role.id,
+          name:role.name,
+          position:role.position,
+          color:role.color??0,
+          permissions:role.permissions,
+          isEveryone:role.id===guildId
+        });
+      }catch(error){
+        if(error instanceof DiscordApiError&&error.status===403){
+          throw new HttpError(
+            403,
+            "このロールを編集できません。BOTの「ロールの管理」権限、またはBOTより上にあるロールの並び順を確認してください"
+          );
+        }
+        throw error;
+      }
+    }
+
+    if(request.method==="DELETE"){
+      if(roleId===guildId) throw new HttpError(400,"@everyone は削除できません");
+      try{
+        await botJson<void>(env,`/guilds/${guildId}/roles/${roleId}`,{
+          method:"DELETE"
+        });
+        return json(env,{ok:true});
+      }catch(error){
+        if(error instanceof DiscordApiError&&error.status===403){
+          throw new HttpError(
+            403,
+            "このロールを削除できません。BOTの「ロールの管理」権限、またはBOTより上にあるロールの並び順を確認してください"
+          );
+        }
+        throw error;
+      }
+    }
+  }
+
   const channelPermissionMatch=url.pathname.match(
     /^\/api\/guilds\/(\d+)\/channels\/(\d+)\/permissions\/(\d+)$/
   );
@@ -1093,7 +1237,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v16-channel-permissions",
+          version:"dashboard-auth-v17-role-manager",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -1133,6 +1277,7 @@ export default {
         (url.pathname==="/api/guilds"&&request.method==="GET")||
         (/^\/api\/guilds\/\d+\/meta$/.test(url.pathname)&&request.method==="GET")||
         (/^\/api\/guilds\/\d+\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)&&request.method==="PATCH")||
+        (/^\/api\/guilds\/\d+\/roles(?:\/\d+)?$/.test(url.pathname)&&["POST","PATCH","DELETE"].includes(request.method))||
         (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")
       ){
         return await handleApi(request,env,url);
