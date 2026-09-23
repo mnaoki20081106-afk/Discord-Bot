@@ -678,7 +678,7 @@ async function onInteraction(interaction: Interaction): Promise<void> {
       await interaction.reply({ ephemeral: true, content: "チケットを閉じます。" });
       const ticketChannel = interaction.guild?.channels.cache.get(interaction.channelId);
       setTimeout(() => {
-        if (ticketChannel?.deletable) void ticketChannel.delete().catch(() => undefined);
+        if (ticketChannel) void ticketChannel.delete().catch(() => undefined);
       }, 1200);
       return;
     }
