@@ -703,21 +703,124 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     await requireGuild(request,env,guildId);
     const input=await bodyObject<{
       id:string;
-      position:number;
+      targetId?:string|null;
+      placement?:"before"|"after"|"start";
       parentId?:string|null;
+      position?:number;
     }>(request);
-    if(!input.id||!Number.isInteger(input.position)) throw new HttpError(400,"並び替え情報が不正です");
+
+    if(!/^\d+$/.test(input.id??"")) throw new HttpError(400,"並び替え対象が不正です");
+
+    const channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+    const source=channels.find(channel=>channel.id===input.id);
+    if(!source) throw new HttpError(404,"移動するチャンネルが見つかりません");
+
+    // Keep the existing desktop category reorder behavior.
+    if(source.type===4){
+      if(!Number.isInteger(input.position)){
+        throw new HttpError(400,"カテゴリの並び替え位置が不正です");
+      }
+      await botJson(env,`/guilds/${guildId}/channels`,{
+        method:"PATCH",
+        body:JSON.stringify([{id:source.id,position:input.position}])
+      });
+      return json(env,{ok:true,kind:"category"});
+    }
+
+    let destinationParent: string|null;
+    let destinationIndex=0;
+    let destinationSiblings:DiscordChannel[];
+
+    if(input.targetId){
+      const target=channels.find(channel=>channel.id===input.targetId);
+      if(!target||target.type===4) throw new HttpError(400,"移動先チャンネルが不正です");
+      if(target.id===source.id) return json(env,{ok:true,unchanged:true});
+
+      destinationParent=target.parent_id??null;
+      destinationSiblings=channels
+        .filter(channel=>channel.type!==4&&channel.id!==source.id&&(channel.parent_id??null)===destinationParent)
+        .sort((a,b)=>(a.position??0)-(b.position??0));
+
+      const targetIndex=destinationSiblings.findIndex(channel=>channel.id===target.id);
+      if(targetIndex<0) throw new HttpError(400,"移動先を判定できませんでした");
+      destinationIndex=targetIndex+(input.placement==="after"?1:0);
+    }else{
+      destinationParent=input.parentId??null;
+      if(destinationParent!==null){
+        const category=channels.find(channel=>channel.id===destinationParent&&channel.type===4);
+        if(!category) throw new HttpError(400,"移動先カテゴリが見つかりません");
+      }
+      destinationSiblings=channels
+        .filter(channel=>channel.type!==4&&channel.id!==source.id&&(channel.parent_id??null)===destinationParent)
+        .sort((a,b)=>(a.position??0)-(b.position??0));
+      destinationIndex=input.placement==="start"?0:destinationSiblings.length;
+    }
+
+    destinationIndex=Math.max(0,Math.min(destinationIndex,destinationSiblings.length));
+    const reordered=[...destinationSiblings];
+    reordered.splice(destinationIndex,0,source);
+
+    // Send the full destination sibling order instead of only one position.
+    // Discord then has an unambiguous order even when moving across categories.
+    const payload=reordered.map((channel,index)=>({
+      id:channel.id,
+      position:index,
+      ...(channel.id===source.id
+        ?{parent_id:destinationParent,lock_permissions:false}
+        :{})
+    }));
+
     await botJson(env,`/guilds/${guildId}/channels`,{
       method:"PATCH",
-      body:JSON.stringify([{
-        id:input.id,
-        position:input.position,
-        ...(input.parentId!==undefined
-          ?{parent_id:input.parentId||null,lock_permissions:false}
-          :{})
-      }])
+      body:JSON.stringify(payload)
     });
-    return json(env,{ok:true});
+
+    // Read back from Discord and verify the move really stuck before reporting success.
+    const confirmed=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+    const confirmedSource=confirmed.find(channel=>channel.id===source.id);
+    if(!confirmedSource||(confirmedSource.parent_id??null)!==destinationParent){
+      throw new HttpError(502,"Discord側でカテゴリ移動を反映できませんでした");
+    }
+
+    const confirmedSiblings=confirmed
+      .filter(channel=>channel.type!==4&&(channel.parent_id??null)===destinationParent)
+      .sort((a,b)=>(a.position??0)-(b.position??0));
+    const actualIndex=confirmedSiblings.findIndex(channel=>channel.id===source.id);
+    const expectedPrevious=reordered[destinationIndex-1]?.id??null;
+    const expectedNext=reordered[destinationIndex+1]?.id??null;
+    const actualPrevious=actualIndex>0?confirmedSiblings[actualIndex-1]?.id??null:null;
+    const actualNext=actualIndex>=0?confirmedSiblings[actualIndex+1]?.id??null:null;
+
+    const orderMatches=
+      actualIndex>=0&&
+      (expectedPrevious===null||actualPrevious===expectedPrevious)&&
+      (expectedNext===null||actualNext===expectedNext);
+
+    if(!orderMatches){
+      // One retry with a fresh canonical position list handles Discord's occasional
+      // position normalization after a parent change.
+      const retrySiblings=confirmedSiblings.filter(channel=>channel.id!==source.id);
+      const retryIndex=Math.max(0,Math.min(destinationIndex,retrySiblings.length));
+      retrySiblings.splice(retryIndex,0,confirmedSource);
+      await botJson(env,`/guilds/${guildId}/channels`,{
+        method:"PATCH",
+        body:JSON.stringify(retrySiblings.map((channel,index)=>({
+          id:channel.id,
+          position:index,
+          ...(channel.id===source.id
+            ?{parent_id:destinationParent,lock_permissions:false}
+            :{})
+        })))
+      });
+    }
+
+    return json(env,{
+      ok:true,
+      id:source.id,
+      parentId:destinationParent,
+      targetId:input.targetId??null,
+      placement:input.targetId?(input.placement==="after"?"after":"before"):"start"
+    });
   }
 
   const rolesCollectionMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/roles$/);
@@ -1237,7 +1340,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v17-role-manager",
+          version:"dashboard-auth-v18-reorder",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
