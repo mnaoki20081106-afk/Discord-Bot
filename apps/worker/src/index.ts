@@ -533,8 +533,20 @@ async function handleDashboardLogin(request:Request,env:Env):Promise<Response>{
 
 async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(url.pathname==="/api/status"&&request.method==="GET"){
+    let discordReady=false;
+    let discordUser:string|null=null;
+    let discordError:string|null=null;
+    try{
+      const bot=await botJson<{id:string;username:string}>(env,"/users/@me");
+      discordReady=true;
+      discordUser=bot.username;
+    }catch(error){
+      discordError=error instanceof Error?error.message:String(error);
+    }
     return json(env,{
-      discordReady:true,
+      discordReady,
+      discordUser,
+      discordError,
       dashboardPasswordConfigured:Boolean(env.DASHBOARD_PASSWORD),
       payPayConfigured:payPayConfigured(env),
       payPayEnvironment:env.PAYPAY_ENV,
@@ -910,7 +922,7 @@ export default {
           :false;
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v5-login",
+          version:"dashboard-auth-v6-discord",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
