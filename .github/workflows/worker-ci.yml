@@ -28,3 +28,6 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm run build --workspace @dsm/worker
+      - name: Bundle Worker with Wrangler
+        working-directory: apps/worker
+        run: npx wrangler deploy --dry-run --outdir ../../.worker-dist
