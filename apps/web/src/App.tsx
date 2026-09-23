@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { API_BASE, api, clearSession, currentSession, login } from "./api";
 import ServerEditor from "./ServerEditor";
+import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
 
 type User = { id: string; username: string; avatar: string | null };
@@ -29,7 +30,14 @@ type Meta = {
     }>;
   }>;
   categories: Array<{ id: string; name: string; position?: number }>;
-  roles: Array<{ id: string; name: string; position: number }>;
+  roles: Array<{
+    id: string;
+    name: string;
+    position: number;
+    color: number;
+    permissions: string;
+    isEveryone: boolean;
+  }>;
 };
 type Settings = {
   securityEnabled: boolean;
@@ -583,6 +591,17 @@ export default function App() {
                     : messageChannels[0]?.id ?? "";
                 setVerificationPanelChannel(keepOrFirst);
                 setTicketPanelChannel(keepOrFirst);
+              }}
+              onNotice={flash}
+              onError={fail}
+            />
+
+            <RoleManager
+              guildId={selectedId!}
+              roles={meta.roles}
+              onRefresh={async () => {
+                const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta`);
+                setMeta(serverMeta);
               }}
               onNotice={flash}
               onError={fail}
