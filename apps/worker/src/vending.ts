@@ -3,10 +3,10 @@ import { botFetch, botJson, canManageGuild, userJson, validAccessToken, type Dis
 import { getSession } from "./db";
 import { json, randomId, sha256Hex } from "./utils";
 import {
-  addStock, attachPaymentLink, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
+  addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
   deleteCoupon, deleteMachine, deleteVmProduct, ensureVendingSchema, finishDelivery, getCoupon,
   getMachine, getOrder, getPayPay, getVmProduct, listCoupons, listMachines, listVmProducts,
-  markPaid, orderStock, releaseStock, reserveOrder, savePayChallenge, savePayPay, stockContents,
+  markPaid, orderStock, releaseStock, reserveOrder, resetDelivery, savePayChallenge, savePayPay, stockContents,
   takePayChallenge, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
@@ -195,16 +195,22 @@ function selectOptions(products:Array<VmProduct&{stock_count:number}>,method:"pa
 
 async function deliver(env:Env,order:VmOrder){
   if(order.delivered_at) return;
-  const vm=await getMachine(env,order.vending_machine_id),product=await getVmProduct(env,order.product_id); if(!vm||!product) throw new Error("ORDER_DATA_MISSING");
-  const items=product.infinite_stock?[product.infinite_content??""]:await orderStock(env,order.id);
-  if(!product.infinite_stock&&items.length<order.quantity) throw new Error("RESERVED_STOCK_MISSING");
-  const dm=await botJson<{id:string}>(env,"/users/@me/channels",{method:"POST",body:JSON.stringify({recipient_id:order.user_id})});
-  await send(env,dm.id,{content:"「"+product.name+"」の購入ありがとうございます。\n\n"+items.join("\n")});
-  if(vm.role_id) await botFetch(env,"/guilds/"+order.guild_id+"/members/"+order.user_id+"/roles/"+vm.role_id,{method:"PUT"}).catch(()=>undefined);
-  const log={embeds:[{title:"購入完了",color:5763719,fields:[{name:"商品",value:product.name,inline:true},{name:"個数",value:String(order.quantity),inline:true},{name:"金額",value:String(order.total_amount)+"円",inline:true},{name:"購入者",value:"<@"+order.user_id+">",inline:true},{name:"決済",value:order.payment_method.toUpperCase(),inline:true}]}]};
-  for(const channelId of [vm.public_log_channel_id,vm.local_log_channel_id]) if(channelId) await send(env,channelId,log).catch(()=>undefined);
-  if(vm.private_log_channel_id) await send(env,vm.private_log_channel_id,{...log,content:"納品内容:\n```\n"+items.join("\n").slice(0,1800)+"\n```"}).catch(()=>undefined);
-  await finishDelivery(env,order);
+  if(!(await claimDelivery(env,order.id))) return;
+  try{
+    const vm=await getMachine(env,order.vending_machine_id),product=await getVmProduct(env,order.product_id); if(!vm||!product) throw new Error("ORDER_DATA_MISSING");
+    const items=product.infinite_stock?[product.infinite_content??""]:await orderStock(env,order.id);
+    if(!product.infinite_stock&&items.length<order.quantity) throw new Error("RESERVED_STOCK_MISSING");
+    const dm=await botJson<{id:string}>(env,"/users/@me/channels",{method:"POST",body:JSON.stringify({recipient_id:order.user_id})});
+    await send(env,dm.id,{content:"「"+product.name+"」の購入ありがとうございます。\n\n"+items.join("\n")});
+    if(vm.role_id) await botFetch(env,"/guilds/"+order.guild_id+"/members/"+order.user_id+"/roles/"+vm.role_id,{method:"PUT"}).catch(()=>undefined);
+    const log={embeds:[{title:"購入完了",color:5763719,fields:[{name:"商品",value:product.name,inline:true},{name:"個数",value:String(order.quantity),inline:true},{name:"金額",value:String(order.total_amount)+"円",inline:true},{name:"購入者",value:"<@"+order.user_id+">",inline:true},{name:"決済",value:order.payment_method.toUpperCase(),inline:true}]}]};
+    for(const channelId of [vm.public_log_channel_id,vm.local_log_channel_id]) if(channelId) await send(env,channelId,log).catch(()=>undefined);
+    if(vm.private_log_channel_id) await send(env,vm.private_log_channel_id,{...log,content:"納品内容:\n```\n"+items.join("\n").slice(0,1800)+"\n```"}).catch(()=>undefined);
+    await finishDelivery(env,order);
+  }catch(error){
+    await resetDelivery(env,order.id);
+    throw error;
+  }
 }
 
 export async function handleVendingInteraction(interaction:any,env:Env,ctx:ExecutionContext):Promise<Response|null>{
