@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2');
+INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '3');
 
 CREATE TABLE IF NOT EXISTS guild_settings (
   guild_id TEXT PRIMARY KEY,
@@ -104,26 +104,14 @@ CREATE TABLE IF NOT EXISTS audit_cursors (
 let schemaReady = false;
 export async function ensureSchema(env: Env): Promise<void> {
   if (schemaReady) return;
-  try {
-    await env.DB.prepare("SELECT value FROM meta WHERE key='schema_version'").first();
-  } catch {
-    await env.DB.exec(schema);
-  }
 
-  // Migration v2: password-based collaborative dashboard sessions.
-  // Existing databases created before this feature already have the meta table,
-  // so the new table must be created explicitly instead of relying on first-run schema setup.
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS dashboard_sessions (
-      token_hash TEXT PRIMARY KEY,
-      expires_at INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    )
-  `).run();
+  // Always apply the idempotent base schema on cold start.
+  // Older D1 databases may already have meta while missing tables added later.
+  await env.DB.exec(schema);
 
   await env.DB.prepare(`
-    INSERT INTO meta(key, value) VALUES ('schema_version', '2')
-    ON CONFLICT(key) DO UPDATE SET value='2'
+    INSERT INTO meta(key, value) VALUES ('schema_version', '3')
+    ON CONFLICT(key) DO UPDATE SET value='3'
   `).run();
 
   schemaReady = true;
