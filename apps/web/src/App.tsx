@@ -182,6 +182,19 @@ export default function App() {
     [meta, ticketPanelChannel]
   );
 
+  const botAuthorizeUrl = useMemo(() => {
+    if (!status?.inviteUrl) return "";
+    if (!selectedId) return status.inviteUrl;
+    const separator = status.inviteUrl.includes("?") ? "&" : "?";
+    return (
+      status.inviteUrl +
+      separator +
+      "guild_id=" +
+      encodeURIComponent(selectedId) +
+      "&disable_guild_select=true"
+    );
+  }, [status?.inviteUrl, selectedId]);
+
   function flash(message: string) {
     setNotice(message);
     setError(null);
@@ -563,7 +576,7 @@ export default function App() {
           </div>
           <div className="status-row">
             {status?.inviteUrl && (
-              <a className="primary" href={status.inviteUrl} target="_blank" rel="noreferrer">
+              <a className="primary" href={botAuthorizeUrl} target="_blank" rel="noreferrer">
                 {selectedGuild ? "BOT権限を更新" : "BOTをサーバーへ追加"}
               </a>
             )}
@@ -875,7 +888,7 @@ export default function App() {
                       selectedVerificationChannel?.botCanPost === false) && (
                       <a
                         className="secondary panel-permission-repair"
-                        href={status.inviteUrl}
+                        href={botAuthorizeUrl}
                         target="_blank"
                         rel="noreferrer"
                       >
@@ -993,7 +1006,7 @@ export default function App() {
                     (!ticketPanelChannel || selectedTicketChannel?.botCanPost === false) && (
                       <a
                         className="secondary panel-permission-repair"
-                        href={status.inviteUrl}
+                        href={botAuthorizeUrl}
                         target="_blank"
                         rel="noreferrer"
                       >
