@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 
 export type ServerEditorMeta = {
@@ -104,6 +104,20 @@ function draftFor(
   };
 }
 
+type TouchDropTarget =
+  | { kind: "channel"; id: string; placement: "before" | "after" }
+  | { kind: "category"; id: string }
+  | { kind: "uncategorized" }
+  | null;
+
+type TouchGesture = {
+  channelId: string;
+  identifier: number;
+  startX: number;
+  startY: number;
+  timer: number;
+};
+
 type Selection =
   | { kind: "channel"; id: string }
   | { kind: "category"; id: string }
@@ -136,6 +150,14 @@ export default function ServerEditor({
   const [dragging, setDragging] = useState<
     { kind: "channel" | "category"; id: string } | null
   >(null);
+  const [pressingChannelId, setPressingChannelId] = useState<string | null>(null);
+  const [touchDraggingId, setTouchDraggingId] = useState<string | null>(null);
+  const [touchDropTarget, setTouchDropTarget] = useState<TouchDropTarget>(null);
+  const touchGestureRef = useRef<TouchGesture | null>(null);
+  const touchDraggingIdRef = useRef<string | null>(null);
+  const touchDropTargetRef = useRef<TouchDropTarget>(null);
+  const suppressClickUntilRef = useRef(0);
+  const channelScrollRef = useRef<HTMLDivElement | null>(null);
   const [permissionTargetId, setPermissionTargetId] = useState(guildId);
   const [permissionDraft, setPermissionDraft] =
     useState<Record<PermissionKey, PermissionMode>>(EMPTY_PERMISSION_DRAFT);
@@ -369,6 +391,216 @@ export default function ServerEditor({
     void reorderItem(dragging.id, first?.position ?? 0, null);
   }
 
+  function clearPendingTouch() {
+    const gesture = touchGestureRef.current;
+    if (gesture) window.clearTimeout(gesture.timer);
+    touchGestureRef.current = null;
+    setPressingChannelId(null);
+  }
+
+  function startChannelLongPress(
+    event: React.TouchEvent<HTMLButtonElement>,
+    channelId: string
+  ) {
+    if (event.touches.length !== 1 || saving) return;
+    clearPendingTouch();
+    const touch = event.touches[0]!;
+    const gesture: TouchGesture = {
+      channelId,
+      identifier: touch.identifier,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      timer: 0
+    };
+    gesture.timer = window.setTimeout(() => {
+      if (touchGestureRef.current !== gesture) return;
+      touchDraggingIdRef.current = channelId;
+      setTouchDraggingId(channelId);
+      setDragging({ kind: "channel", id: channelId });
+      setPressingChannelId(null);
+      suppressClickUntilRef.current = Date.now() + 700;
+    }, 450);
+    touchGestureRef.current = gesture;
+    setPressingChannelId(channelId);
+  }
+
+  function trackPendingLongPress(event: React.TouchEvent<HTMLButtonElement>) {
+    const gesture = touchGestureRef.current;
+    if (!gesture || touchDraggingIdRef.current) return;
+    const touch = Array.from(event.touches).find(
+      (item) => item.identifier === gesture.identifier
+    );
+    if (!touch) return;
+    const distance = Math.hypot(
+      touch.clientX - gesture.startX,
+      touch.clientY - gesture.startY
+    );
+    if (distance > 10) clearPendingTouch();
+  }
+
+  function endPendingLongPress() {
+    if (touchDraggingIdRef.current) return;
+    clearPendingTouch();
+  }
+
+  function updateTouchDropTarget(clientX: number, clientY: number) {
+    const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    if (!element) return;
+
+    const channelElement = element.closest<HTMLElement>("[data-channel-id]");
+    if (channelElement?.dataset.channelId) {
+      const targetId = channelElement.dataset.channelId;
+      if (targetId === touchDraggingIdRef.current) {
+        touchDropTargetRef.current = null;
+        setTouchDropTarget(null);
+        return;
+      }
+      const rect = channelElement.getBoundingClientRect();
+      const next: TouchDropTarget = {
+        kind: "channel",
+        id: targetId,
+        placement: clientY < rect.top + rect.height / 2 ? "before" : "after"
+      };
+      touchDropTargetRef.current = next;
+      setTouchDropTarget(next);
+      return;
+    }
+
+    const uncategorizedElement = element.closest<HTMLElement>(
+      "[data-uncategorized-drop]"
+    );
+    if (uncategorizedElement) {
+      const next: TouchDropTarget = { kind: "uncategorized" };
+      touchDropTargetRef.current = next;
+      setTouchDropTarget(next);
+      return;
+    }
+
+    const categoryElement = element.closest<HTMLElement>("[data-category-id]");
+    if (categoryElement?.dataset.categoryId) {
+      const next: TouchDropTarget = {
+        kind: "category",
+        id: categoryElement.dataset.categoryId
+      };
+      touchDropTargetRef.current = next;
+      setTouchDropTarget(next);
+      return;
+    }
+
+    touchDropTargetRef.current = null;
+    setTouchDropTarget(null);
+  }
+
+  function finishTouchDrag(channelId: string) {
+    const target = touchDropTargetRef.current;
+    const gesture = touchGestureRef.current;
+    if (gesture) window.clearTimeout(gesture.timer);
+
+    touchGestureRef.current = null;
+    touchDraggingIdRef.current = null;
+    touchDropTargetRef.current = null;
+    setPressingChannelId(null);
+    setTouchDraggingId(null);
+    setTouchDropTarget(null);
+    setDragging(null);
+    suppressClickUntilRef.current = Date.now() + 700;
+
+    if (!target) return;
+
+    if (target.kind === "channel") {
+      const targetChannel = meta.channels.find((channel) => channel.id === target.id);
+      if (!targetChannel || targetChannel.id === channelId) return;
+      const position =
+        (targetChannel.position ?? 0) + (target.placement === "after" ? 1 : 0);
+      void reorderItem(channelId, position, targetChannel.parentId ?? null);
+      return;
+    }
+
+    if (target.kind === "category") {
+      const category = meta.categories.find((item) => item.id === target.id);
+      if (!category) return;
+      const firstChild = meta.channels
+        .filter(
+          (channel) =>
+            channel.id !== channelId && channel.parentId === category.id
+        )
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0];
+      void reorderItem(
+        channelId,
+        firstChild?.position ?? (category.position ?? 0) + 1,
+        category.id
+      );
+      return;
+    }
+
+    const first = uncategorized
+      .filter((channel) => channel.id !== channelId)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0];
+    void reorderItem(channelId, first?.position ?? 0, null);
+  }
+
+  useEffect(() => {
+    if (!touchDraggingId) return;
+
+    document.body.classList.add("dsm-touch-reordering");
+
+    const handleMove = (event: TouchEvent) => {
+      const gesture = touchGestureRef.current;
+      if (!gesture) return;
+      const touch = Array.from(event.touches).find(
+        (item) => item.identifier === gesture.identifier
+      );
+      if (!touch) return;
+
+      event.preventDefault();
+
+      const scroller = channelScrollRef.current;
+      if (scroller) {
+        const rect = scroller.getBoundingClientRect();
+        const edge = 54;
+        if (touch.clientY < rect.top + edge) {
+          scroller.scrollTop -= 12;
+        } else if (touch.clientY > rect.bottom - edge) {
+          scroller.scrollTop += 12;
+        }
+      }
+
+      updateTouchDropTarget(touch.clientX, touch.clientY);
+    };
+
+    const handleEnd = (event: TouchEvent) => {
+      const gesture = touchGestureRef.current;
+      if (!gesture) return;
+      const ended = Array.from(event.changedTouches).some(
+        (item) => item.identifier === gesture.identifier
+      );
+      if (!ended) return;
+      event.preventDefault();
+      finishTouchDrag(touchDraggingId);
+    };
+
+    const handleCancel = () => {
+      touchDropTargetRef.current = null;
+      touchDraggingIdRef.current = null;
+      touchGestureRef.current = null;
+      setTouchDropTarget(null);
+      setTouchDraggingId(null);
+      setDragging(null);
+      setPressingChannelId(null);
+    };
+
+    document.addEventListener("touchmove", handleMove, { passive: false });
+    document.addEventListener("touchend", handleEnd, { passive: false });
+    document.addEventListener("touchcancel", handleCancel, { passive: false });
+
+    return () => {
+      document.body.classList.remove("dsm-touch-reordering");
+      document.removeEventListener("touchmove", handleMove);
+      document.removeEventListener("touchend", handleEnd);
+      document.removeEventListener("touchcancel", handleCancel);
+    };
+  }, [touchDraggingId, meta.channels, meta.categories, uncategorized]);
+
   return (
     <section className="card server-editor-card">
       <div className="section-head server-editor-heading">
@@ -376,7 +608,7 @@ export default function ServerEditor({
           <span className="eyebrow">LIVE SERVER EDITOR</span>
           <h2>サーバー構成をプレビュー編集</h2>
           <p className="muted">
-            左のDiscord風プレビューから、そのまま追加・編集・削除できます。
+            左のDiscord風プレビューから追加・編集・削除できます。スマホではチャンネルを長押しして自由に並べ替えできます。
           </p>
         </div>
         <div className="editor-heading-actions">
@@ -401,7 +633,10 @@ export default function ServerEditor({
       <div className="server-editor-layout">
         <div className="discord-preview">
           <div
-            className="discord-preview-server"
+            className={`discord-preview-server ${
+              touchDropTarget?.kind === "uncategorized" ? "touch-drop-target" : ""
+            }`}
+            data-uncategorized-drop="true"
             onDragOver={(event) => event.preventDefault()}
             onDrop={dropUncategorized}
           >
@@ -416,19 +651,38 @@ export default function ServerEditor({
             </button>
           </div>
 
-          <div className="discord-channel-scroll">
+          <div className="discord-channel-scroll" ref={channelScrollRef}>
+            {touchDraggingId && (
+              <div
+                className={`uncategorized-touch-drop ${
+                  touchDropTarget?.kind === "uncategorized" ? "active" : ""
+                }`}
+                data-uncategorized-drop="true"
+              >
+                カテゴリなしへ移動
+              </div>
+            )}
             {uncategorized.length > 0 && (
               <div className="discord-channel-group uncategorized-group">
                 {uncategorized.map((channel) => (
                   <button
                     key={channel.id}
+                    data-channel-id={channel.id}
                     draggable
                     onDragStart={() => setDragging({ kind: "channel", id: channel.id })}
                     onDragEnd={() => setDragging(null)}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => dropOnChannel(channel)}
-                    className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""}`}
-                    onClick={() => openChannel(channel.id)}
+                    onTouchStart={(event) => startChannelLongPress(event, channel.id)}
+                    onTouchMove={trackPendingLongPress}
+                    onTouchEnd={endPendingLongPress}
+                    onTouchCancel={endPendingLongPress}
+                    onContextMenu={(event) => event.preventDefault()}
+                    className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""} ${pressingChannelId === channel.id ? "long-pressing" : ""} ${touchDraggingId === channel.id ? "touch-dragging" : ""} ${touchDropTarget?.kind === "channel" && touchDropTarget.id === channel.id ? `touch-drop-${touchDropTarget.placement}` : ""}`}
+                    onClick={() => {
+                      if (Date.now() < suppressClickUntilRef.current) return;
+                      openChannel(channel.id);
+                    }}
                   >
                     <span className="channel-hash">
                       {channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}
@@ -445,7 +699,16 @@ export default function ServerEditor({
               const children = meta.channels.filter((channel) => channel.parentId === category.id);
               const selected = selection?.kind === "category" && selection.id === category.id;
               return (
-                <div className="discord-channel-group" key={category.id}>
+                <div
+                  className={`discord-channel-group ${
+                    touchDropTarget?.kind === "category" &&
+                    touchDropTarget.id === category.id
+                      ? "touch-category-target"
+                      : ""
+                  }`}
+                  key={category.id}
+                  data-category-id={category.id}
+                >
                   <div
                     className={`discord-category ${selected ? "selected" : ""} ${dragging?.kind === "category" && dragging.id === category.id ? "dragging" : ""}`}
                     draggable
@@ -471,6 +734,7 @@ export default function ServerEditor({
                   {children.map((channel) => (
                     <button
                       key={channel.id}
+                      data-channel-id={channel.id}
                       draggable
                       onDragStart={(event) => {
                         event.stopPropagation();
@@ -485,8 +749,16 @@ export default function ServerEditor({
                         event.stopPropagation();
                         dropOnChannel(channel);
                       }}
-                      className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""}`}
-                      onClick={() => openChannel(channel.id)}
+                      onTouchStart={(event) => startChannelLongPress(event, channel.id)}
+                      onTouchMove={trackPendingLongPress}
+                      onTouchEnd={endPendingLongPress}
+                      onTouchCancel={endPendingLongPress}
+                      onContextMenu={(event) => event.preventDefault()}
+                      className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""} ${pressingChannelId === channel.id ? "long-pressing" : ""} ${touchDraggingId === channel.id ? "touch-dragging" : ""} ${touchDropTarget?.kind === "channel" && touchDropTarget.id === channel.id ? `touch-drop-${touchDropTarget.placement}` : ""}`}
+                      onClick={() => {
+                        if (Date.now() < suppressClickUntilRef.current) return;
+                        openChannel(channel.id);
+                      }}
                     >
                       <span className="channel-hash">
                         {channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}
@@ -516,7 +788,7 @@ export default function ServerEditor({
               <h3>プレビューから編集</h3>
               <p>
                 カテゴリ横の＋でその中にチャンネルを追加。チャンネル名を押すと、
-                名前・トピック・所属カテゴリを変更できます。ドラッグ＆ドロップで移動・並べ替えもできます。
+                名前・トピック・所属カテゴリを変更できます。PCはドラッグ、スマホは長押ししてカテゴリをまたいで移動・並べ替えできます。
               </p>
               <div className="editor-quick-actions">
                 <button className="primary" onClick={() => openCreate(null, "text")}>
