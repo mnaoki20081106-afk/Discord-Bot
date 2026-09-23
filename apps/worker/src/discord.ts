@@ -42,7 +42,7 @@ export async function botFetch(
   init:RequestInit={}
 ):Promise<Response>{
   const headers=new Headers(init.headers);
-  headers.set("Authorization",`Bot ${env.DISCORD_BOT_TOKEN}`);
+  headers.set("Authorization",`Bot ${env.DISCORD_BOT_TOKEN.trim()}`);
   if(init.body&&!headers.has("Content-Type")) headers.set("Content-Type","application/json");
   return fetch(`${API}${path}`,{...init,headers});
 }
