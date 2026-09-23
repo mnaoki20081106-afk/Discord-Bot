@@ -97,7 +97,15 @@ async function requireGuild(
 ):Promise<{session:DashboardActor;guild:{id:string;name:string;icon:string|null}}>{
   const session=await sessionFromRequest(request,env);
   const response=await botFetch(env,`/guilds/${guildId}`);
-  if(!response.ok) throw new HttpError(403,"BOTが参加していないサーバーです");
+  if(!response.ok){
+    const detail=await response.text().catch(()=>"");
+    throw new HttpError(
+      response.status===429?429:403,
+      response.status===429
+        ?"Discord APIのレート制限中です。数秒後に再試行してください"
+        :"BOTがサーバー情報を取得できません: Discord API "+response.status+" "+detail.slice(0,180)
+    );
+  }
   const guild=await response.json() as {id:string;name:string;icon:string|null};
   return {session,guild};
 }
@@ -107,10 +115,23 @@ function bodyObject<T=Record<string,unknown>>(request:Request):Promise<T>{
 }
 
 async function discordMeta(env:Env,guildId:string){
-  const [channels,roles]=await Promise.all([
-    botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`),
-    botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`)
-  ]);
+  let channels:DiscordChannel[];
+  let roles:DiscordRole[];
+
+  try{
+    channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+  }catch(error){
+    const detail=error instanceof Error?error.message:String(error);
+    throw new HttpError(502,"Discordチャンネル一覧の取得に失敗しました: "+detail.slice(0,220));
+  }
+
+  try{
+    roles=await botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
+  }catch(error){
+    const detail=error instanceof Error?error.message:String(error);
+    throw new HttpError(502,"Discordロール一覧の取得に失敗しました: "+detail.slice(0,220));
+  }
+
   return {
     channels:channels
       .filter(c=>[0,2,5,13,15,16].includes(c.type))
@@ -948,7 +969,7 @@ export default {
 
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v11-schema",
+          version:"dashboard-auth-v12-meta",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -984,7 +1005,8 @@ export default {
       if(
         (url.pathname==="/api/status"&&request.method==="GET")||
         (url.pathname==="/api/me"&&request.method==="GET")||
-        (url.pathname==="/api/guilds"&&request.method==="GET")
+        (url.pathname==="/api/guilds"&&request.method==="GET")||
+        (/^\/api\/guilds\/\d+\/meta$/.test(url.pathname)&&request.method==="GET")
       ){
         return await handleApi(request,env,url);
       }
