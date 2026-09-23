@@ -67,7 +67,7 @@ import {
 } from "./utils";
 
 const BOT_PERMISSIONS=(
-  1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n|
+  8n|1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n|
   2n|4n|1099511627776n|128n
 ).toString();
 
@@ -105,9 +105,112 @@ function bodyObject<T=Record<string,unknown>>(request:Request):Promise<T>{
   return request.json() as Promise<T>;
 }
 
+type DiscordGuildMember={
+  roles:string[];
+};
+
+const PANEL_PERMISSION_MASK=1024n|2048n|16384n;
+
+function botBasePermissions(
+  guildId:string,
+  roles:DiscordRole[],
+  member:DiscordGuildMember
+):bigint{
+  let permissions=BigInt(
+    roles.find(role=>role.id===guildId)?.permissions??"0"
+  );
+  for(const roleId of member.roles){
+    const role=roles.find(item=>item.id===roleId);
+    if(role) permissions|=BigInt(role.permissions||"0");
+  }
+  return permissions;
+}
+
+function botChannelPermissions(
+  guildId:string,
+  botId:string,
+  roles:DiscordRole[],
+  member:DiscordGuildMember,
+  channel:DiscordChannel
+):bigint{
+  let permissions=botBasePermissions(guildId,roles,member);
+  if((permissions&8n)===8n) return permissions|PANEL_PERMISSION_MASK;
+
+  const overwrites=channel.permission_overwrites??[];
+  const everyone=overwrites.find(
+    overwrite=>overwrite.id===guildId&&overwrite.type===0
+  );
+  if(everyone){
+    permissions&=~BigInt(everyone.deny||"0");
+    permissions|=BigInt(everyone.allow||"0");
+  }
+
+  let roleAllow=0n;
+  let roleDeny=0n;
+  for(const roleId of member.roles){
+    const overwrite=overwrites.find(
+      item=>item.id===roleId&&item.type===0
+    );
+    if(!overwrite) continue;
+    roleAllow|=BigInt(overwrite.allow||"0");
+    roleDeny|=BigInt(overwrite.deny||"0");
+  }
+  permissions&=~roleDeny;
+  permissions|=roleAllow;
+
+  const memberOverwrite=overwrites.find(
+    overwrite=>overwrite.id===botId&&overwrite.type===1
+  );
+  if(memberOverwrite){
+    permissions&=~BigInt(memberOverwrite.deny||"0");
+    permissions|=BigInt(memberOverwrite.allow||"0");
+  }
+
+  return permissions;
+}
+
+async function protectBotChannelAccess(
+  env:Env,
+  guildId:string,
+  channel:DiscordChannel
+):Promise<void>{
+  const botId=env.DISCORD_APPLICATION_ID.trim();
+  const current=(channel.permission_overwrites??[]).find(
+    overwrite=>overwrite.id===botId&&overwrite.type===1
+  );
+  let allow=BigInt(current?.allow??"0");
+  let deny=BigInt(current?.deny??"0");
+  allow|=PANEL_PERMISSION_MASK;
+  deny&=~PANEL_PERMISSION_MASK;
+
+  try{
+    await botJson<void>(
+      env,
+      `/channels/${channel.id}/permissions/${botId}`,
+      {
+        method:"PUT",
+        body:JSON.stringify({
+          type:1,
+          allow:allow.toString(),
+          deny:deny.toString()
+        })
+      }
+    );
+  }catch(error){
+    if(error instanceof DiscordApiError&&error.status===403){
+      throw new HttpError(
+        409,
+        "この変更を保存するとBOT自身がチャンネルから締め出される可能性があるため停止しました。上部の「BOT権限を更新」からAdministrator権限を反映してください"
+      );
+    }
+    throw error;
+  }
+}
+
 async function discordMeta(env:Env,guildId:string){
   let channels:DiscordChannel[];
   let roles:DiscordRole[];
+  let member:DiscordGuildMember;
 
   try{
     channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
@@ -123,29 +226,54 @@ async function discordMeta(env:Env,guildId:string){
     throw new HttpError(502,"Discordロール一覧の取得に失敗しました: "+detail.slice(0,220));
   }
 
+  try{
+    member=await botJson<DiscordGuildMember>(
+      env,
+      `/guilds/${guildId}/members/${env.DISCORD_APPLICATION_ID.trim()}`
+    );
+  }catch(error){
+    const detail=error instanceof Error?error.message:String(error);
+    throw new HttpError(502,"BOTのサーバー権限取得に失敗しました: "+detail.slice(0,220));
+  }
+
+  const basePermissions=botBasePermissions(guildId,roles,member);
+  const botAdministrator=(basePermissions&8n)===8n;
+  const botId=env.DISCORD_APPLICATION_ID.trim();
+
   return {
+    botAdministrator,
     channels:channels
       .filter(c=>[0,2,5,13,15,16].includes(c.type))
       .sort((a,b)=>(a.position??0)-(b.position??0))
-      .map(c=>({
-        id:c.id,
-        name:c.name,
-        type:
-          c.type===2?"voice":
-          c.type===5?"announcement":
-          c.type===13?"stage":
-          c.type===15?"forum":
-          c.type===16?"media":"text",
-        parentId:c.parent_id??null,
-        topic:c.topic??"",
-        position:c.position??0,
-        permissionOverwrites:(c.permission_overwrites??[]).map(overwrite=>({
-          id:overwrite.id,
-          type:overwrite.type,
-          allow:overwrite.allow,
-          deny:overwrite.deny
-        }))
-      })),
+      .map(c=>{
+        const effective=botChannelPermissions(guildId,botId,roles,member,c);
+        const botCanView=(effective&1024n)===1024n;
+        const botCanPost=
+          botCanView&&
+          (effective&2048n)===2048n&&
+          (effective&16384n)===16384n;
+        return {
+          id:c.id,
+          name:c.name,
+          type:
+            c.type===2?"voice":
+            c.type===5?"announcement":
+            c.type===13?"stage":
+            c.type===15?"forum":
+            c.type===16?"media":"text",
+          parentId:c.parent_id??null,
+          topic:c.topic??"",
+          position:c.position??0,
+          botCanView,
+          botCanPost,
+          permissionOverwrites:(c.permission_overwrites??[]).map(overwrite=>({
+            id:overwrite.id,
+            type:overwrite.type,
+            allow:overwrite.allow,
+            deny:overwrite.deny
+          }))
+        };
+      }),
     categories:channels
       .filter(c=>c.type===4)
       .sort((a,b)=>(a.position??0)-(b.position??0))
@@ -183,83 +311,11 @@ async function sendPanelMessage(
 ):Promise<void>{
   try{
     await sendMessage(env,channelId,payload);
-    return;
-  }catch(error){
-    if(!(error instanceof DiscordApiError)||error.status!==403) throw error;
-  }
-
-  // A channel-level deny can block the bot even when the bot has guild-wide
-  // permissions. Do not call /channels/:id here: that endpoint itself returns
-  // Missing Access when View Channel is denied. The guild channel list lets us
-  // locate the target first and then repair only the bot member overwrite.
-  const channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
-  const channel=channels.find(item=>item.id===channelId);
-  if(!channel){
-    throw new HttpError(
-      404,
-      "設置先チャンネルが見つかりません。チャンネル一覧を再読み込みしてください"
-    );
-  }
-
-  const botId=env.DISCORD_APPLICATION_ID.trim();
-  const existingOverwrites=channel.permission_overwrites??[];
-  const current=existingOverwrites.find(
-    overwrite=>overwrite.id===botId&&overwrite.type===1
-  );
-  const required=1024n|2048n|16384n; // View Channel + Send Messages + Embed Links
-  let allow=BigInt(current?.allow??"0");
-  let deny=BigInt(current?.deny??"0");
-  allow|=required;
-  deny&=~required;
-
-  // Editing a single overwrite can itself return Missing Access when the bot
-  // cannot VIEW_CHANNEL. Modify Channel with the complete overwrite array uses
-  // guild-level Manage Channels + Manage Roles and can recover that lockout.
-  const repairedOverwrites=[
-    ...existingOverwrites
-      .filter(overwrite=>!(overwrite.id===botId&&overwrite.type===1))
-      .map(overwrite=>({
-        id:overwrite.id,
-        type:overwrite.type,
-        allow:overwrite.allow,
-        deny:overwrite.deny
-      })),
-    {
-      id:botId,
-      type:1,
-      allow:allow.toString(),
-      deny:deny.toString()
-    }
-  ];
-
-  try{
-    await botJson<DiscordChannel>(
-      env,
-      `/channels/${channelId}`,
-      {
-        method:"PATCH",
-        body:JSON.stringify({
-          permission_overwrites:repairedOverwrites
-        })
-      }
-    );
   }catch(error){
     if(error instanceof DiscordApiError&&error.status===403){
       throw new HttpError(
         403,
-        "このチャンネルのBOTアクセスを自動復旧できませんでした。BOTに「チャンネルの管理」と「ロールの管理」が必要です。Discord側でBOTロールのこの2権限を確認してください"
-      );
-    }
-    throw error;
-  }
-
-  try{
-    await sendMessage(env,channelId,payload);
-  }catch(error){
-    if(error instanceof DiscordApiError&&error.status===403){
-      throw new HttpError(
-        403,
-        "BOTアクセスを復旧しましたがパネルを投稿できませんでした。設置先チャンネルでBOTの「チャンネルを見る・メッセージを送信・リンクを埋め込む」を確認してください"
+        "BOTがこのチャンネルから締め出されています。通常権限を全てONにしていてもチャンネル側の拒否は優先されます。管理画面上部の「BOT権限を更新」からAdministrator権限を反映すると、このチャンネルにも設置できます"
       );
     }
     throw error;
@@ -1091,6 +1147,19 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       throw new HttpError(400,"別サーバーのチャンネルは編集できません");
     }
 
+    const botId=env.DISCORD_APPLICATION_ID.trim();
+    if(targetId!==botId){
+      const member=await botJson<DiscordGuildMember>(
+        env,
+        `/guilds/${guildId}/members/${botId}`
+      );
+      const targetCanAffectBot=
+        targetId===guildId||member.roles.includes(targetId);
+      if(targetCanAffectBot){
+        await protectBotChannelAccess(env,guildId,channel);
+      }
+    }
+
     const permissionBits={
       view:1024n,
       send:2048n,
@@ -1478,7 +1547,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v21-hidden-channel-repair",
+          version:"dashboard-auth-v22-bot-access-guard",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
