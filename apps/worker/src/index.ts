@@ -362,14 +362,26 @@ async function createTicketFromInteraction(env:Env,interaction:any):Promise<Resp
   const topic=`dsm-ticket:${userId}`;
   const existing=channels.find(c=>c.type===0&&c.topic===topic);
   if(existing) return interactionResponse(ephemeral(`既にチケットがあります: <#${existing.id}>`));
-  const roles=await botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
-  const support=roles.find(r=>r.name==="Support");
+  const [roles,settings]=await Promise.all([
+    botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`),
+    getGuildSettings(env,guildId)
+  ]);
+  const configuredIds=settings.ticketSupportRoleIds??[];
+  const supportRoles=configuredIds.length
+    ?roles.filter(role=>configuredIds.includes(role.id))
+    :roles.filter(role=>role.name==="Support").slice(0,1);
   const safe=username.toLowerCase().replace(/[^a-z0-9_-]/g,"").slice(0,18)||userId.slice(-6);
   const overwrites:Array<Record<string,unknown>>=[
     {id:guildId,type:0,deny:"1024"},
     {id:userId,type:1,allow:(1024n|2048n|65536n|32768n).toString()}
   ];
-  if(support) overwrites.push({id:support.id,type:0,allow:(1024n|2048n|65536n).toString()});
+  for(const role of supportRoles){
+    overwrites.push({
+      id:role.id,
+      type:0,
+      allow:(1024n|2048n|65536n|32768n).toString()
+    });
+  }
   const channel=await botJson<DiscordChannel>(env,`/guilds/${guildId}/channels`,{
     method:"POST",
     body:JSON.stringify({
@@ -380,7 +392,7 @@ async function createTicketFromInteraction(env:Env,interaction:any):Promise<Resp
     })
   });
   await sendMessage(env,channel.id,{
-    content:`<@${userId}> サポート担当者が対応します。`,
+    content:`<@${userId}> サポート担当者が対応します。${supportRoles.length?" 対応者ロール: "+supportRoles.map(role=>"@"+role.name).join(" / "):""}`,
     components:[{
       type:1,
       components:[{type:2,custom_id:"ticket:close",label:"チケットを閉じる",style:4}]
@@ -639,6 +651,13 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       if(safe.mentionLimit!==undefined) safe.mentionLimit=Math.max(2,Math.min(50,Number(safe.mentionLimit)));
       if(safe.nukeActions!==undefined) safe.nukeActions=Math.max(2,Math.min(30,Number(safe.nukeActions)));
       if(safe.nukeWindowSeconds!==undefined) safe.nukeWindowSeconds=Math.max(5,Math.min(300,Number(safe.nukeWindowSeconds)));
+      if(safe.ticketSupportRoleIds!==undefined){
+        safe.ticketSupportRoleIds=[...new Set(
+          safe.ticketSupportRoleIds
+            .map(id=>String(id).trim())
+            .filter(id=>/^\d+$/.test(id))
+        )].slice(0,20);
+      }
       const saved=await saveGuildSettings(env,guildId,safe);
       await syncAutoMod(env,guildId,saved);
       return json(env,saved);
@@ -983,7 +1002,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v14-ticket-panel",
+          version:"dashboard-auth-v15-ticket-roles",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
