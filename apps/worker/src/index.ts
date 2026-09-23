@@ -108,11 +108,22 @@ async function discordMeta(env:Env,guildId:string){
     channels:channels
       .filter(c=>c.type===0||c.type===5)
       .sort((a,b)=>(a.position??0)-(b.position??0))
-      .map(c=>({id:c.id,name:c.name})),
+      .map(c=>({
+        id:c.id,
+        name:c.name,
+        type:c.type===5?"announcement":"text",
+        parentId:c.parent_id??null,
+        topic:c.topic??"",
+        position:c.position??0
+      })),
     categories:channels
       .filter(c=>c.type===4)
       .sort((a,b)=>(a.position??0)-(b.position??0))
-      .map(c=>({id:c.id,name:c.name})),
+      .map(c=>({
+        id:c.id,
+        name:c.name,
+        position:c.position??0
+      })),
     roles:roles
       .filter(r=>!r.managed)
       .sort((a,b)=>b.position-a.position)
@@ -568,6 +579,46 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         :{name,type:0,parent_id:input.parentId||undefined,topic:input.topic||undefined})
     });
     return json(env,{id:created.id,name:created.name,type:input.type});
+  }
+
+  const channelItemMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/channels\/(\d+)$/);
+  if(channelItemMatch){
+    const guildId=channelItemMatch[1]!;
+    const channelId=channelItemMatch[2]!;
+    await requireGuild(request,env,guildId);
+
+    if(request.method==="PATCH"){
+      const input=await bodyObject<{
+        name?:string;
+        topic?:string|null;
+        parentId?:string|null;
+      }>(request);
+      const payload:Record<string,unknown>={};
+      if(input.name!==undefined){
+        const name=input.name.trim();
+        if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
+        payload.name=name;
+      }
+      if(input.topic!==undefined) payload.topic=input.topic===null?null:String(input.topic).slice(0,1024);
+      if(input.parentId!==undefined) payload.parent_id=input.parentId||null;
+      const updated=await botJson<DiscordChannel>(env,`/channels/${channelId}`,{
+        method:"PATCH",
+        body:JSON.stringify(payload)
+      });
+      return json(env,{
+        id:updated.id,
+        name:updated.name,
+        parentId:updated.parent_id??null,
+        topic:updated.topic??"",
+        position:updated.position??0
+      });
+    }
+
+    if(request.method==="DELETE"){
+      const response=await botFetch(env,`/channels/${channelId}`,{method:"DELETE"});
+      if(!response.ok) throw new HttpError(response.status,"チャンネルを削除できませんでした");
+      return json(env,{ok:true});
+    }
   }
 
   const templateMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/templates\/(community|shop|support)$/);
