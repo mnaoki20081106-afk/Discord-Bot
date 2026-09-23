@@ -106,12 +106,17 @@ async function discordMeta(env:Env,guildId:string){
   ]);
   return {
     channels:channels
-      .filter(c=>c.type===0||c.type===5)
+      .filter(c=>[0,2,5,13,15,16].includes(c.type))
       .sort((a,b)=>(a.position??0)-(b.position??0))
       .map(c=>({
         id:c.id,
         name:c.name,
-        type:c.type===5?"announcement":"text",
+        type:
+          c.type===2?"voice":
+          c.type===5?"announcement":
+          c.type===13?"stage":
+          c.type===15?"forum":
+          c.type===16?"media":"text",
         parentId:c.parent_id??null,
         topic:c.topic??"",
         position:c.position??0
@@ -569,14 +574,18 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(channelsMatch&&request.method==="POST"){
     const guildId=channelsMatch[1]!;
     await requireGuild(request,env,guildId);
-    const input=await bodyObject<{name:string;type:"text"|"category";parentId?:string|null;topic?:string}>(request);
+    const input=await bodyObject<{name:string;type:"text"|"voice"|"category";parentId?:string|null;topic?:string}>(request);
     const name=input.name?.trim();
     if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
     const created=await botJson<DiscordChannel>(env,`/guilds/${guildId}/channels`,{
       method:"POST",
-      body:JSON.stringify(input.type==="category"
-        ?{name,type:4}
-        :{name,type:0,parent_id:input.parentId||undefined,topic:input.topic||undefined})
+      body:JSON.stringify(
+        input.type==="category"
+          ?{name,type:4}
+          :input.type==="voice"
+            ?{name,type:2,parent_id:input.parentId||undefined}
+            :{name,type:0,parent_id:input.parentId||undefined,topic:input.topic||undefined}
+      )
     });
     return json(env,{id:created.id,name:created.name,type:input.type});
   }
