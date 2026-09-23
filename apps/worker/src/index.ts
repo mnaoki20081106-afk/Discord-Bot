@@ -1379,6 +1379,7 @@ export default {
         (url.pathname==="/api/me"&&request.method==="GET")||
         (url.pathname==="/api/guilds"&&request.method==="GET")||
         (/^\/api\/guilds\/\d+\/meta$/.test(url.pathname)&&request.method==="GET")||
+        (/^\/api\/guilds\/\d+\/channels\/reorder$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/roles(?:\/\d+)?$/.test(url.pathname)&&["POST","PATCH","DELETE"].includes(request.method))||
         (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")
