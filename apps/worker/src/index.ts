@@ -597,16 +597,18 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   const meta=url.pathname.match(/^\/api\/guilds\/(\d+)\/meta$/);
   if(meta&&request.method==="GET"){
     const guildId=meta[1]!;
-    await requireGuild(request,env,guildId);
-    const guild=await botJson<{id:string;name:string;icon:string|null}>(env,`/guilds/${guildId}`);
+    const {guild}=await requireGuild(request,env,guildId);
     return json(env,{...guild,...await discordMeta(env,guildId)});
   }
 
   const settingsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/settings$/);
   if(settingsMatch){
     const guildId=settingsMatch[1]!;
+    if(request.method==="GET"){
+      await sessionFromRequest(request,env);
+      return json(env,await getGuildSettings(env,guildId));
+    }
     await requireGuild(request,env,guildId);
-    if(request.method==="GET") return json(env,await getGuildSettings(env,guildId));
     if(request.method==="PUT"){
       const patch=await bodyObject<Partial<GuildSettings>>(request);
       const safe:Partial<GuildSettings>={...patch};
@@ -729,8 +731,11 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   const productsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/products$/);
   if(productsMatch){
     const guildId=productsMatch[1]!;
+    if(request.method==="GET"){
+      await sessionFromRequest(request,env);
+      return json(env,await listProducts(env,guildId));
+    }
     await requireGuild(request,env,guildId);
-    if(request.method==="GET") return json(env,await listProducts(env,guildId));
     if(request.method==="POST"){
       const input=await bodyObject<{
         name:string;description?:string;priceYen:number;
@@ -943,7 +948,7 @@ export default {
 
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v10-rate-limit",
+          version:"dashboard-auth-v11-schema",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
