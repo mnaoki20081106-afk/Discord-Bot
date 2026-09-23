@@ -355,7 +355,7 @@ export default function App() {
           <h1>API URLが未設定です</h1>
           <p>
             GitHub repository variable <code>VITE_API_BASE_URL</code> に
-            常駐BOT/APIのURLを設定して再デプロイしてください。
+            Cloudflare WorkerのURLを設定して再デプロイしてください。
           </p>
         </section>
       </main>
@@ -487,7 +487,7 @@ export default function App() {
               <article className="metric card">
                 <span>SECURITY</span>
                 <strong>{settings.securityEnabled ? "ACTIVE" : "OFF"}</strong>
-                <small>Spam / Raid / Nuke protection</small>
+                <small>Discord AutoMod + Audit protection</small>
               </article>
               <article className="metric card">
                 <span>VERIFICATION</span>
@@ -529,7 +529,7 @@ export default function App() {
                     checked={settings.antiSpam}
                     onChange={(value) => setSettings({ ...settings, antiSpam: value })}
                     title="Anti-Spam"
-                    description="短時間の連投を削除し一時タイムアウト"
+                    description="Discord AutoMod側で24時間スパムをブロック"
                   />
                   <Toggle
                     checked={settings.blockInvites}
@@ -538,58 +538,29 @@ export default function App() {
                     description="外部Discord招待リンクをブロック"
                   />
                   <Toggle
-                    checked={settings.antiRaid}
-                    onChange={(value) => setSettings({ ...settings, antiRaid: value })}
-                    title="Anti-Raid"
-                    description="大量参加を検知し新規参加者を一時隔離"
-                  />
-                  <Toggle
                     checked={settings.antiNuke}
                     onChange={(value) => setSettings({ ...settings, antiNuke: value })}
                     title="Anti-Nuke"
-                    description="監査ログから大量破壊・権限昇格を検知"
+                    description="Cloudflare Cronで監査ログを監視し大量破壊を検知"
                   />
                 </div>
 
+                <div className="serverless-note">
+                  <strong>Anti-Raidについて</strong>
+                  <span>
+                    常駐Gatewayを使わない0円構成のため、参加イベント監視はDiscord標準の
+                    Raid Protectionを使用します。Spam・大量メンション・招待リンクはAutoMod、
+                    大量破壊は下のAnti-Nukeで保護します。
+                  </span>
+                </div>
+
                 <div className="form-grid three">
-                  <Field label="Spam件数">
-                    <input
-                      type="number"
-                      value={settings.spamMax}
-                      onChange={(e) => setSettings({ ...settings, spamMax: Number(e.target.value) })}
-                    />
-                  </Field>
-                  <Field label="Spam監視秒">
-                    <input
-                      type="number"
-                      value={settings.spamWindowSeconds}
-                      onChange={(e) =>
-                        setSettings({ ...settings, spamWindowSeconds: Number(e.target.value) })
-                      }
-                    />
-                  </Field>
                   <Field label="メンション上限">
                     <input
                       type="number"
                       value={settings.mentionLimit}
                       onChange={(e) =>
                         setSettings({ ...settings, mentionLimit: Number(e.target.value) })
-                      }
-                    />
-                  </Field>
-                  <Field label="Raid参加人数">
-                    <input
-                      type="number"
-                      value={settings.raidJoins}
-                      onChange={(e) => setSettings({ ...settings, raidJoins: Number(e.target.value) })}
-                    />
-                  </Field>
-                  <Field label="Raid監視秒">
-                    <input
-                      type="number"
-                      value={settings.raidWindowSeconds}
-                      onChange={(e) =>
-                        setSettings({ ...settings, raidWindowSeconds: Number(e.target.value) })
                       }
                     />
                   </Field>
