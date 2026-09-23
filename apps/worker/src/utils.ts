@@ -71,10 +71,38 @@ export async function sha256Hex(value:string):Promise<string> {
   return bytesToHex(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value)));
 }
 
+async function deriveAesKeyBytes(secret:string):Promise<Uint8Array> {
+  const value=secret.trim();
+  if(value.length<32){
+    throw new Error("SESSION_ENCRYPTION_KEY must be at least 32 characters");
+  }
+
+  // Backward compatibility: keep using an existing 32-byte base64 secret as-is.
+  try{
+    if(/^[A-Za-z0-9+/]+={0,2}$/.test(value) && value.length%4===0){
+      const decoded=base64ToBytes(value);
+      if(decoded.length===32) return decoded;
+    }
+  }catch{
+    // Not valid legacy base64; fall through to passphrase derivation.
+  }
+
+  const digest=await crypto.subtle.digest(
+    "SHA-256",
+    toArrayBuffer(new TextEncoder().encode(value))
+  );
+  return new Uint8Array(digest);
+}
+
 async function aesKey(secret:string, usages:KeyUsage[]):Promise<CryptoKey> {
-  const raw=base64ToBytes(secret);
-  if(raw.length!==32) throw new Error("SESSION_ENCRYPTION_KEY must be 32 bytes base64");
-  return crypto.subtle.importKey("raw",toArrayBuffer(raw),{name:"AES-GCM"},false,usages);
+  const raw=await deriveAesKeyBytes(secret);
+  return crypto.subtle.importKey(
+    "raw",
+    toArrayBuffer(raw),
+    {name:"AES-GCM"},
+    false,
+    usages
+  );
 }
 
 export async function encrypt(secret:string,value:string):Promise<string> {
