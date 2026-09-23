@@ -5,13 +5,6 @@ export const API_BASE =
 const SESSION_KEY = "dsm_session";
 
 export function bootstrapSession(): string | null {
-  const match = location.hash.match(/^#session=([^&]+)/);
-  if (match?.[1]) {
-    const token = decodeURIComponent(match[1]);
-    sessionStorage.setItem(SESSION_KEY, token);
-    history.replaceState(null, "", location.pathname + location.search);
-    return token;
-  }
   return sessionStorage.getItem(SESSION_KEY);
 }
 
@@ -23,9 +16,18 @@ export function clearSession(): void {
   sessionStorage.removeItem(SESSION_KEY);
 }
 
-export function login(): void {
+export async function login(password: string): Promise<void> {
   if (!API_BASE) throw new Error("VITE_API_BASE_URL が未設定です");
-  location.href = `${API_BASE}/auth/discord`;
+  const response = await fetch(`${API_BASE}/api/login`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({password})
+  });
+  const payload = await response.json().catch(() => ({})) as {token?: string; message?: string};
+  if (!response.ok || !payload.token) {
+    throw new Error(payload.message || `HTTP ${response.status}`);
+  }
+  sessionStorage.setItem(SESSION_KEY, payload.token);
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
