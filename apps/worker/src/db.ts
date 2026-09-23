@@ -191,11 +191,32 @@ export async function deleteSession(env: Env, tokenHash: string): Promise<void> 
 }
 
 
+async function ensureDashboardSessionTable(env: Env): Promise<void> {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS dashboard_sessions (
+      token_hash TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `).run();
+}
+
+export async function dashboardSessionStorageReady(env: Env): Promise<boolean> {
+  try {
+    await ensureDashboardSessionTable(env);
+    await env.DB.prepare("SELECT token_hash FROM dashboard_sessions LIMIT 1").first();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function createDashboardSession(
   env: Env,
   tokenHash: string,
   expiresAt: number
 ): Promise<void> {
+  await ensureDashboardSessionTable(env);
   await env.DB.prepare(
     "INSERT INTO dashboard_sessions(token_hash,expires_at,created_at) VALUES (?,?,?)"
   ).bind(tokenHash, expiresAt, Date.now()).run();
@@ -205,12 +226,14 @@ export async function getDashboardSession(
   env: Env,
   tokenHash: string
 ): Promise<DashboardSession | null> {
+  await ensureDashboardSessionTable(env);
   return await env.DB.prepare(
     "SELECT token_hash,expires_at,created_at FROM dashboard_sessions WHERE token_hash=? AND expires_at>?"
   ).bind(tokenHash, Date.now()).first<DashboardSession>() ?? null;
 }
 
 export async function deleteDashboardSession(env: Env, tokenHash: string): Promise<void> {
+  await ensureDashboardSessionTable(env);
   await env.DB.prepare("DELETE FROM dashboard_sessions WHERE token_hash=?").bind(tokenHash).run();
 }
 
