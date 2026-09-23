@@ -1161,18 +1161,51 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       >>;
     }>(request);
 
-    const channel=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
-    if(channel.guild_id&&channel.guild_id!==guildId){
-      throw new HttpError(400,"別サーバーのチャンネルは編集できません");
+    // Do not GET /channels/:id here. Discord returns Missing Access for that
+    // endpoint when the bot cannot currently view a private channel, which
+    // previously made it impossible to repair/edit that channel from the
+    // dashboard. The guild channel list still gives us the canonical
+    // permission_overwrites used by the editor.
+    const [channels,roles]=await Promise.all([
+      botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`),
+      botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`)
+    ]);
+    const channel=channels.find(item=>item.id===channelId);
+    if(!channel){
+      throw new HttpError(
+        404,
+        "チャンネルが見つかりません。サーバー構成を再読み込みしてください"
+      );
     }
 
+    const member=await getBotGuildMember(env,guildId,roles);
     const botId=env.DISCORD_APPLICATION_ID.trim();
-    if(targetId!==botId){
-      const roles=await botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
-      const member=await getBotGuildMember(env,guildId,roles);
+    const botAdministrator=(botBasePermissions(guildId,roles,member)&8n)===8n;
+
+    // Only protect bot access when channel overwrites can actually affect the
+    // bot. Administrator bypasses channel overwrites, so no member overwrite is
+    // needed in that case.
+    if(!botAdministrator&&targetId!==botId){
       const targetCanAffectBot=
         targetId===guildId||member.roles.includes(targetId);
       if(targetCanAffectBot){
+        const effective=botChannelPermissions(
+          guildId,
+          botId,
+          roles,
+          member,
+          channel
+        );
+        const botCanManageChannel=
+          (effective&16n)===16n||
+          (botBasePermissions(guildId,roles,member)&16n)===16n;
+
+        if(!botCanManageChannel){
+          throw new HttpError(
+            409,
+            "このチャンネルの権限を変更するとBOT自身が締め出される可能性があります。BOT権限を更新してAdministratorを反映してから再試行してください"
+          );
+        }
         await protectBotChannelAccess(env,guildId,channel);
       }
     }
@@ -1202,34 +1235,44 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       if(mode==="deny") deny|=bit;
     }
 
-    if(allow===0n&&deny===0n){
-      if(current){
-        const response=await botFetch(
+    try{
+      if(allow===0n&&deny===0n){
+        if(current){
+          const response=await botFetch(
+            env,
+            `/channels/${channelId}/permissions/${targetId}`,
+            {method:"DELETE"}
+          );
+          if(!response.ok){
+            const detail=await response.text().catch(()=>"");
+            throw new DiscordApiError(
+              response.status,
+              "Discord API "+response.status+": "+detail.slice(0,300)
+            );
+          }
+        }
+      }else{
+        await botJson(
           env,
           `/channels/${channelId}/permissions/${targetId}`,
-          {method:"DELETE"}
+          {
+            method:"PUT",
+            body:JSON.stringify({
+              type:0,
+              allow:allow.toString(),
+              deny:deny.toString()
+            })
+          }
         );
-        if(!response.ok){
-          const detail=await response.text().catch(()=>"");
-          throw new HttpError(
-            response.status,
-            "チャンネル権限の継承解除に失敗しました: "+detail.slice(0,180)
-          );
-        }
       }
-    }else{
-      await botJson(
-        env,
-        `/channels/${channelId}/permissions/${targetId}`,
-        {
-          method:"PUT",
-          body:JSON.stringify({
-            type:0,
-            allow:allow.toString(),
-            deny:deny.toString()
-          })
-        }
-      );
+    }catch(error){
+      if(error instanceof DiscordApiError&&error.status===403){
+        throw new HttpError(
+          403,
+          "Discordがこのチャンネルの権限変更を拒否しました。BOT権限を更新してAdministratorを反映するか、Discord側でBOTにこのチャンネルへのアクセスを許可してください"
+        );
+      }
+      throw error;
     }
 
     return json(env,{
@@ -1564,7 +1607,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v22-bot-access-guard",
+          version:"dashboard-auth-v24-channel-permission-access",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
