@@ -637,15 +637,32 @@ export default function ServerEditor({
     setPressingChannelId(null);
   }
 
+  function beginTouchDrag(gesture: TouchGesture, touch: React.Touch) {
+    const channel = meta.channels.find((item) => item.id === gesture.channelId);
+    touchDraggingIdRef.current = gesture.channelId;
+    setTouchDraggingId(gesture.channelId);
+    setDragging({ kind: "channel", id: gesture.channelId });
+    setTouchDragGhost({
+      channelId: gesture.channelId,
+      name: channel?.name ?? "channel",
+      type: channel?.type,
+      width: gesture.width,
+      height: gesture.height,
+      x: touch.clientX - gesture.grabOffsetX,
+      y: touch.clientY - gesture.grabOffsetY
+    });
+    setPressingChannelId(null);
+    suppressClickUntilRef.current = Date.now() + 700;
+  }
+
   function startChannelLongPress(
     event: React.TouchEvent<HTMLButtonElement>,
     channelId: string
   ) {
-    if (event.touches.length !== 1 || saving) return;
+    if (event.touches.length !== 1 || saving || bulkMode) return;
     clearPendingTouch();
     const touch = event.touches[0]!;
     const rect = event.currentTarget.getBoundingClientRect();
-    const channel = meta.channels.find((item) => item.id === channelId);
     const gesture: TouchGesture = {
       channelId,
       identifier: touch.identifier,
@@ -655,27 +672,16 @@ export default function ServerEditor({
       grabOffsetY: touch.clientY - rect.top,
       width: rect.width,
       height: rect.height,
-      timer: 0
+      timer: 0,
+      armed: false
     };
     gesture.timer = window.setTimeout(() => {
       if (touchGestureRef.current !== gesture) return;
-      touchDraggingIdRef.current = channelId;
-      setTouchDraggingId(channelId);
-      setDragging({ kind: "channel", id: channelId });
-      setTouchDragGhost({
-        channelId,
-        name: channel?.name ?? "channel",
-        type: channel?.type,
-        width: gesture.width,
-        height: gesture.height,
-        x: gesture.startX - gesture.grabOffsetX,
-        y: gesture.startY - gesture.grabOffsetY
-      });
-      setPressingChannelId(null);
+      gesture.armed = true;
+      setPressingChannelId(channelId);
       suppressClickUntilRef.current = Date.now() + 700;
     }, 450);
     touchGestureRef.current = gesture;
-    setPressingChannelId(channelId);
   }
 
   function trackPendingLongPress(event: React.TouchEvent<HTMLButtonElement>) {
@@ -685,15 +691,33 @@ export default function ServerEditor({
       (item) => item.identifier === gesture.identifier
     );
     if (!touch) return;
+
     const distance = Math.hypot(
       touch.clientX - gesture.startX,
       touch.clientY - gesture.startY
     );
-    if (distance > 10) clearPendingTouch();
+
+    if (!gesture.armed) {
+      if (distance > 10) clearPendingTouch();
+      return;
+    }
+
+    if (distance > 6) {
+      event.preventDefault();
+      beginTouchDrag(gesture, touch);
+    }
   }
 
   function endPendingLongPress() {
     if (touchDraggingIdRef.current) return;
+    const gesture = touchGestureRef.current;
+    if (gesture?.armed) {
+      window.clearTimeout(gesture.timer);
+      touchGestureRef.current = null;
+      setPressingChannelId(null);
+      enterBulkSelection(gesture.channelId);
+      return;
+    }
     clearPendingTouch();
   }
 
