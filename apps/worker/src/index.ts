@@ -903,6 +903,7 @@ export default {
             clientSecret:Boolean(env.DISCORD_CLIENT_SECRET)
           },
           encryptionKey:Boolean(env.SESSION_ENCRYPTION_KEY),
+          dashboardPassword:Boolean(env.DASHBOARD_PASSWORD),
           d1:{
             bound:Boolean(env.DB),
             reachable:d1Reachable,
