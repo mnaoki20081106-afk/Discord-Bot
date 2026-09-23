@@ -709,7 +709,10 @@ export default function ServerEditor({
   }
 
   function endPendingLongPress() {
-    if (touchDraggingIdRef.current) return;
+    if (touchDraggingIdRef.current) {
+      finishTouchDrag(touchDraggingIdRef.current);
+      return;
+    }
     const gesture = touchGestureRef.current;
     if (gesture?.armed) {
       window.clearTimeout(gesture.timer);
