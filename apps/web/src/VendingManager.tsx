@@ -63,7 +63,9 @@ export default function VendingManager({
   const [detail,setDetail]=useState<MachineDetail|null>(null);
   const [newMachineName,setNewMachineName]=useState("");
   const [busy,setBusy]=useState(false);
-  const [panelPreviewMode,setPanelPreviewMode]=useState<"desktop"|"mobile">("desktop");
+  const [panelPreviewMode,setPanelPreviewMode]=useState<"desktop"|"mobile">(
+    ()=>window.matchMedia("(max-width: 700px)").matches?"mobile":"desktop"
+  );
 
   const [machineForm,setMachineForm]=useState({
     name:"",
