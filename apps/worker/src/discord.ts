@@ -1,5 +1,5 @@
 import type { Env, GuildSettings, SessionRow } from "./types";
-import { decrypt, encrypt, hexToBytes } from "./utils";
+import { decrypt, encrypt, hexToBytes, toArrayBuffer } from "./utils";
 import { updateSessionTokens } from "./db";
 
 const API="https://discord.com/api/v10";
@@ -144,7 +144,7 @@ export async function verifyInteraction(
   if(!signature||!timestamp) return false;
   const key=await crypto.subtle.importKey(
     "raw",
-    hexToBytes(env.DISCORD_PUBLIC_KEY),
+    toArrayBuffer(hexToBytes(env.DISCORD_PUBLIC_KEY)),
     {name:"Ed25519"} as AlgorithmIdentifier,
     false,
     ["verify"]
@@ -153,8 +153,8 @@ export async function verifyInteraction(
   return crypto.subtle.verify(
     {name:"Ed25519"} as AlgorithmIdentifier,
     key,
-    hexToBytes(signature),
-    message
+    toArrayBuffer(hexToBytes(signature)),
+    toArrayBuffer(message)
   );
 }
 
