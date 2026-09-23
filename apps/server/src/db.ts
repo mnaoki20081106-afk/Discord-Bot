@@ -231,7 +231,7 @@ export async function saveGuildSettings(
 
 export async function listProducts(guildId: string): Promise<Product[]> {
   const result = await pool.query<Product>(
-    "SELECT * FROM products WHERE guild_id=$1 ORDER BY created_at DESC",
+    "SELECT * FROM products WHERE guild_id=$1 AND active=true ORDER BY created_at DESC",
     [guildId]
   );
   return result.rows;
@@ -257,7 +257,7 @@ export async function createProduct(product: Product): Promise<Product> {
 
 export async function deleteProduct(guildId: string, id: string): Promise<boolean> {
   const result = await pool.query(
-    "DELETE FROM products WHERE guild_id=$1 AND id=$2",
+    "UPDATE products SET active=false WHERE guild_id=$1 AND id=$2 AND active=true",
     [guildId, id]
   );
   return result.rowCount === 1;
