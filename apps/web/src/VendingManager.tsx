@@ -63,6 +63,7 @@ export default function VendingManager({
   const [detail,setDetail]=useState<MachineDetail|null>(null);
   const [newMachineName,setNewMachineName]=useState("");
   const [busy,setBusy]=useState(false);
+  const [panelPreviewMode,setPanelPreviewMode]=useState<"desktop"|"mobile">("desktop");
 
   const [machineForm,setMachineForm]=useState({
     name:"",
@@ -105,6 +106,52 @@ export default function VendingManager({
     ()=>machines.find(machine=>machine.id===selectedId)??null,
     [machines,selectedId]
   );
+
+  const previewProducts = useMemo(()=>{
+    if(!detail) return [] as Product[];
+    return detail.products.map(product=>{
+      if(!editingProduct||editingProduct.id!==product.id) return product;
+      return {
+        ...product,
+        name:productEdit.name,
+        description:productEdit.description,
+        price_paypay:productEdit.pricePayPay,
+        price_kyash:productEdit.priceKyash,
+        emoji:productEdit.emoji||null,
+        infinite_stock:productEdit.infiniteStock?1:0
+      };
+    });
+  },[detail,editingProduct,productEdit]);
+
+  const previewTitle =
+    machineForm.panelTitle.trim() ||
+    machineForm.name.trim() ||
+    detail?.name ||
+    "自販機";
+
+  const previewIntro =
+    machineForm.panelDescription ||
+    "購入したい商品を下のボタンから選択してください。";
+
+  const panelDirty = Boolean(detail) && (
+    machineForm.name!==detail.name ||
+    machineForm.panelTitle!==(detail.panel_title??"") ||
+    machineForm.panelDescription!==(detail.panel_description??"") ||
+    machineForm.panelImageUrl!==(detail.panel_image_url??"")
+  );
+
+  const productDirty = Boolean(editingProduct) && (
+    productEdit.name!==editingProduct!.name ||
+    productEdit.description!==editingProduct!.description ||
+    productEdit.pricePayPay!==editingProduct!.price_paypay ||
+    productEdit.priceKyash!==editingProduct!.price_kyash ||
+    productEdit.emoji!==(editingProduct!.emoji??"") ||
+    productEdit.infiniteStock!==Boolean(editingProduct!.infinite_stock) ||
+    productEdit.infiniteContent!==(editingProduct!.infinite_content??"")
+  );
+
+  const previewChannelName =
+    channels.find(channel=>channel.id===panelChannel)?.name ?? "販売";
 
   async function loadMachines(preferId?:string|null){
     const list=await api<Machine[]>(`/api/guilds/${guildId}/vending`);
@@ -175,23 +222,39 @@ export default function VendingManager({
     finally{setBusy(false);}
   }
 
+  async function persistMachine(){
+    if(!selectedId) return;
+    await api(`/api/guilds/${guildId}/vending/${selectedId}`,{
+      method:"PATCH",
+      body:JSON.stringify({
+        name:machineForm.name,
+        publicLogChannelId:machineForm.publicLogChannelId||null,
+        localLogChannelId:machineForm.localLogChannelId||null,
+        privateLogChannelId:machineForm.privateLogChannelId||null,
+        roleId:machineForm.roleId||null,
+        panelTitle:machineForm.panelTitle||null,
+        panelDescription:machineForm.panelDescription||null,
+        panelImageUrl:machineForm.panelImageUrl||null
+      })
+    });
+  }
+
+  async function persistEditingProduct(){
+    if(!selectedId||!editingProduct||!productDirty) return;
+    await api(
+      `/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}`,
+      {
+        method:"PATCH",
+        body:JSON.stringify(productEdit)
+      }
+    );
+  }
+
   async function saveMachine(){
     if(!selectedId) return;
     setBusy(true);
     try{
-      await api(`/api/guilds/${guildId}/vending/${selectedId}`,{
-        method:"PATCH",
-        body:JSON.stringify({
-          name:machineForm.name,
-          publicLogChannelId:machineForm.publicLogChannelId||null,
-          localLogChannelId:machineForm.localLogChannelId||null,
-          privateLogChannelId:machineForm.privateLogChannelId||null,
-          roleId:machineForm.roleId||null,
-          panelTitle:machineForm.panelTitle||null,
-          panelDescription:machineForm.panelDescription||null,
-          panelImageUrl:machineForm.panelImageUrl||null
-        })
-      });
+      await persistMachine();
       await loadMachines(selectedId);
       onNotice("自販機設定を保存しました");
     }catch(reason){onError(reason);}
@@ -214,11 +277,14 @@ export default function VendingManager({
     if(!selectedId||!panelChannel) return;
     setBusy(true);
     try{
+      await persistEditingProduct();
+      await persistMachine();
       await api(`/api/guilds/${guildId}/vending/${selectedId}/panel`,{
         method:"POST",
         body:JSON.stringify({channelId:panelChannel})
       });
-      onNotice("Discordへ自販機パネルを設置しました");
+      await loadMachines(selectedId);
+      onNotice("プレビュー内容を保存してDiscordへ設置しました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
@@ -227,11 +293,14 @@ export default function VendingManager({
     if(!selectedId||!panelMessageUrl.trim()) return;
     setBusy(true);
     try{
+      await persistEditingProduct();
+      await persistMachine();
       await api(`/api/guilds/${guildId}/vending/${selectedId}/panel/update`,{
         method:"POST",
         body:JSON.stringify({messageUrl:panelMessageUrl.trim()})
       });
-      onNotice("既存の自販機パネルを更新しました");
+      await loadMachines(selectedId);
+      onNotice("プレビュー内容を保存して既存パネルを更新しました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
@@ -591,65 +660,233 @@ export default function VendingManager({
             </div>
           ) : (
             <>
-              <div className="vending-tabs-section">
+              <div className="vending-tabs-section vending-designer-section">
                 <div className="section-head compact">
                   <div>
-                    <span className="eyebrow">SETTINGS</span>
+                    <span className="eyebrow">WYSIWYG PANEL DESIGNER</span>
                     <h3>{detail.name}</h3>
+                    <small className="vending-designer-subtitle">
+                      編集内容は右のDiscordプレビューへ即時反映されます
+                    </small>
                   </div>
                   <div className="button-row">
-                    <button className="primary" onClick={()=>void saveMachine()} disabled={busy}>保存</button>
+                    {(panelDirty||productDirty)&&(
+                      <span className="vending-unsaved">● 未保存</span>
+                    )}
+                    <button className="primary" onClick={()=>void saveMachine()} disabled={busy}>
+                      {busy?"保存中…":"設定を保存"}
+                    </button>
                     <button className="danger" onClick={()=>void removeMachine()} disabled={busy}>削除</button>
                   </div>
                 </div>
 
-                <div className="form-grid two">
-                  <label className="field"><span>自販機名</span><input value={machineForm.name} onChange={e=>setMachineForm({...machineForm,name:e.target.value})}/></label>
-                  <label className="field"><span>購入後ロール</span>
-                    <select value={machineForm.roleId} onChange={e=>setMachineForm({...machineForm,roleId:e.target.value})}>
-                      <option value="">付与なし</option>
-                      {roles.map(role=><option key={role.id} value={role.id}>@{role.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="field"><span>公開販売ログ</span>
-                    <select value={machineForm.publicLogChannelId} onChange={e=>setMachineForm({...machineForm,publicLogChannelId:e.target.value})}>
-                      <option value="">未設定</option>
-                      {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="field"><span>このサーバーの購入ログ</span>
-                    <select value={machineForm.localLogChannelId} onChange={e=>setMachineForm({...machineForm,localLogChannelId:e.target.value})}>
-                      <option value="">未設定</option>
-                      {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="field"><span>非公開ログ</span>
-                    <select value={machineForm.privateLogChannelId} onChange={e=>setMachineForm({...machineForm,privateLogChannelId:e.target.value})}>
-                      <option value="">未設定</option>
-                      {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="field"><span>パネル画像URL</span><input value={machineForm.panelImageUrl} onChange={e=>setMachineForm({...machineForm,panelImageUrl:e.target.value})} placeholder="https://..."/></label>
-                </div>
-                <label className="field"><span>パネルタイトル</span><input value={machineForm.panelTitle} onChange={e=>setMachineForm({...machineForm,panelTitle:e.target.value})}/></label>
-                <label className="field"><span>パネル説明</span><textarea value={machineForm.panelDescription} onChange={e=>setMachineForm({...machineForm,panelDescription:e.target.value})}/></label>
+                <div className="vending-designer-layout">
+                  <div className="vending-designer-controls">
+                    <div className="vending-control-group">
+                      <span className="vending-control-title">基本設定</span>
+                      <label className="field">
+                        <span>自販機名</span>
+                        <input
+                          value={machineForm.name}
+                          onChange={e=>setMachineForm({...machineForm,name:e.target.value})}
+                          maxLength={80}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>購入後ロール</span>
+                        <select
+                          value={machineForm.roleId}
+                          onChange={e=>setMachineForm({...machineForm,roleId:e.target.value})}
+                        >
+                          <option value="">付与なし</option>
+                          {roles.map(role=><option key={role.id} value={role.id}>@{role.name}</option>)}
+                        </select>
+                      </label>
+                    </div>
 
-                <div className="vending-publish-row">
-                  <select value={panelChannel} onChange={e=>setPanelChannel(e.target.value)}>
-                    <option value="">設置先チャンネル</option>
-                    {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                  </select>
-                  <button className="primary" onClick={()=>void publishPanel()} disabled={!panelChannel||busy}>Discordに設置</button>
-                </div>
-                <div className="vending-panel-update">
-                  <input
-                    value={panelMessageUrl}
-                    onChange={e=>setPanelMessageUrl(e.target.value)}
-                    placeholder="既存パネルのDiscordメッセージURL"
-                  />
-                  <button className="secondary" onClick={()=>void updatePanel()} disabled={!panelMessageUrl.trim()||busy}>
-                    既存パネル更新
-                  </button>
+                    <div className="vending-control-group">
+                      <span className="vending-control-title">パネルデザイン</span>
+                      <label className="field">
+                        <span>タイトル</span>
+                        <input
+                          value={machineForm.panelTitle}
+                          onChange={e=>setMachineForm({...machineForm,panelTitle:e.target.value})}
+                          placeholder={machineForm.name||"自販機"}
+                          maxLength={256}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>説明</span>
+                        <textarea
+                          value={machineForm.panelDescription}
+                          onChange={e=>setMachineForm({...machineForm,panelDescription:e.target.value})}
+                          placeholder="購入したい商品を下のボタンから選択してください。"
+                          maxLength={3000}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>画像URL</span>
+                        <input
+                          value={machineForm.panelImageUrl}
+                          onChange={e=>setMachineForm({...machineForm,panelImageUrl:e.target.value})}
+                          placeholder="https://..."
+                          inputMode="url"
+                        />
+                      </label>
+                    </div>
+
+                    <details className="vending-advanced-settings">
+                      <summary>ログ・通知設定</summary>
+                      <div className="form-grid two">
+                        <label className="field"><span>公開販売ログ</span>
+                          <select value={machineForm.publicLogChannelId} onChange={e=>setMachineForm({...machineForm,publicLogChannelId:e.target.value})}>
+                            <option value="">未設定</option>
+                            {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+                          </select>
+                        </label>
+                        <label className="field"><span>このサーバーの購入ログ</span>
+                          <select value={machineForm.localLogChannelId} onChange={e=>setMachineForm({...machineForm,localLogChannelId:e.target.value})}>
+                            <option value="">未設定</option>
+                            {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+                          </select>
+                        </label>
+                        <label className="field"><span>非公開ログ</span>
+                          <select value={machineForm.privateLogChannelId} onChange={e=>setMachineForm({...machineForm,privateLogChannelId:e.target.value})}>
+                            <option value="">未設定</option>
+                            {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                    </details>
+                  </div>
+
+                  <div className="vending-preview-pane">
+                    <div className="vending-preview-toolbar">
+                      <div>
+                        <span className="eyebrow">LIVE PREVIEW</span>
+                        <strong>Discord表示</strong>
+                      </div>
+                      <div className="vending-preview-size">
+                        <button
+                          type="button"
+                          className={panelPreviewMode==="desktop"?"active":""}
+                          onClick={()=>setPanelPreviewMode("desktop")}
+                        >
+                          PC
+                        </button>
+                        <button
+                          type="button"
+                          className={panelPreviewMode==="mobile"?"active":""}
+                          onClick={()=>setPanelPreviewMode("mobile")}
+                        >
+                          MOBILE
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className={`vending-discord-stage ${panelPreviewMode}`}>
+                      <div className="vending-discord-window">
+                        <div className="vending-discord-channelbar">
+                          <span>#</span>
+                          <strong>{previewChannelName}</strong>
+                        </div>
+
+                        <div className="vending-discord-message">
+                          <div className="vending-bot-avatar">D</div>
+                          <div className="vending-message-body">
+                            <div className="vending-message-author">
+                              <strong>CHICKEN🐣BOT</strong>
+                              <span className="vending-bot-tag">BOT</span>
+                              <small>今日 04:14</small>
+                            </div>
+
+                            <div className="vending-discord-embed">
+                              <input
+                                className="vending-wysiwyg-title"
+                                value={machineForm.panelTitle}
+                                onChange={e=>setMachineForm({...machineForm,panelTitle:e.target.value})}
+                                placeholder={machineForm.name||"自販機"}
+                                aria-label="パネルタイトル"
+                              />
+
+                              <textarea
+                                className="vending-wysiwyg-description"
+                                value={machineForm.panelDescription}
+                                onChange={e=>setMachineForm({...machineForm,panelDescription:e.target.value})}
+                                placeholder="購入したい商品を下のボタンから選択してください。"
+                                aria-label="パネル説明"
+                              />
+
+                              <div className="vending-preview-products">
+                                {previewProducts.length ? previewProducts.map(product=>(
+                                  <button
+                                    type="button"
+                                    className={`vending-preview-product ${editingProduct?.id===product.id?"editing":""}`}
+                                    key={product.id}
+                                    onClick={()=>editProduct(detail.products.find(item=>item.id===product.id)??product)}
+                                    title="クリックして商品を編集"
+                                  >
+                                    <strong>{product.emoji?product.emoji+" ":""}{product.name}</strong>
+                                    <span>
+                                      PayPay: {product.price_paypay}円 / Kyash: {product.price_kyash}円 / 在庫: {product.infinite_stock?"∞":product.stock_count} / 販売: {product.sales_count}
+                                    </span>
+                                  </button>
+                                )):(
+                                  <div className="vending-preview-empty-product">
+                                    現在販売中の商品はありません。
+                                  </div>
+                                )}
+                              </div>
+
+                              {machineForm.panelImageUrl&&(
+                                <img
+                                  className="vending-preview-image"
+                                  src={machineForm.panelImageUrl}
+                                  alt="パネル画像プレビュー"
+                                />
+                              )}
+                            </div>
+
+                            <div className="vending-discord-components">
+                              <button type="button" className="discord-component green" tabIndex={-1}>
+                                <span>🛒</span> 購入する
+                              </button>
+                              <button type="button" className="discord-component blue" tabIndex={-1}>
+                                <span>📦</span> 在庫・販売数
+                              </button>
+                            </div>
+
+                            <div className="vending-preview-match">
+                              <span>✓</span>
+                              このプレビューと同じ設定を保存してからDiscordへ投稿します
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="vending-publish-box">
+                      <div className="vending-publish-row">
+                        <select value={panelChannel} onChange={e=>setPanelChannel(e.target.value)}>
+                          <option value="">設置先チャンネル</option>
+                          {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+                        </select>
+                        <button className="primary" onClick={()=>void publishPanel()} disabled={!panelChannel||busy}>
+                          {busy?"反映中…":"この見た目でDiscordに設置"}
+                        </button>
+                      </div>
+                      <div className="vending-panel-update">
+                        <input
+                          value={panelMessageUrl}
+                          onChange={e=>setPanelMessageUrl(e.target.value)}
+                          placeholder="既存パネルのDiscordメッセージURL"
+                        />
+                        <button className="secondary" onClick={()=>void updatePanel()} disabled={!panelMessageUrl.trim()||busy}>
+                          この見た目で既存パネル更新
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
