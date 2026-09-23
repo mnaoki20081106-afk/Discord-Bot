@@ -443,9 +443,10 @@ app.post("/api/guilds/:guildId/products/:productId/panel", async (request) => {
 app.setErrorHandler((error, _request, reply) => {
   const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
   app.log.error(error);
+  const message = error instanceof Error ? error.message : "リクエスト処理に失敗しました";
   reply.status(statusCode).send({
     error: statusCode >= 500 ? "server_error" : "request_error",
-    message: statusCode >= 500 ? "サーバー処理に失敗しました" : error.message
+    message: statusCode >= 500 ? "サーバー処理に失敗しました" : message
   });
 });
 
