@@ -188,12 +188,17 @@ async function sendPanelMessage(
     if(!(error instanceof DiscordApiError)||error.status!==403) throw error;
   }
 
-  // A channel-level deny can block the bot even when the bot has the guild-wide
-  // permissions it was invited with. Repair only the bot member overwrite that
-  // is necessary to post a panel, preserving every unrelated overwrite bit.
-  const channel=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
-  if(channel.guild_id&&channel.guild_id!==guildId){
-    throw new HttpError(400,"別サーバーのチャンネルには設置できません");
+  // A channel-level deny can block the bot even when the bot has guild-wide
+  // permissions. Do not call /channels/:id here: that endpoint itself returns
+  // Missing Access when View Channel is denied. The guild channel list lets us
+  // locate the target first and then repair only the bot member overwrite.
+  const channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+  const channel=channels.find(item=>item.id===channelId);
+  if(!channel){
+    throw new HttpError(
+      404,
+      "設置先チャンネルが見つかりません。チャンネル一覧を再読み込みしてください"
+    );
   }
 
   const botId=env.DISCORD_APPLICATION_ID.trim();
@@ -235,7 +240,7 @@ async function sendPanelMessage(
     if(error instanceof DiscordApiError&&error.status===403){
       throw new HttpError(
         403,
-        "BOTのチャンネル権限を補正しましたが認証パネルを投稿できませんでした。BOTより上位のロールまたはチャンネル権限を確認してください"
+        "BOTのチャンネル権限を補正しましたがパネルを投稿できませんでした。BOTより上位のロールまたはチャンネル権限を確認してください"
       );
     }
     throw error;
@@ -261,8 +266,8 @@ async function publishVerificationPanel(env:Env,guildId:string,channelId:string)
   });
 }
 
-async function publishTicketPanel(env:Env,channelId:string){
-  await sendMessage(env,channelId,{
+async function publishTicketPanel(env:Env,guildId:string,channelId:string){
+  await sendPanelMessage(env,guildId,channelId,{
     embeds:[{
       title:"サポート",
       description:"問い合わせ用チケットを作成します。",
@@ -282,12 +287,30 @@ async function publishTicketPanel(env:Env,channelId:string){
 
 async function requireMessageChannel(env:Env,guildId:string,channelId:string):Promise<void>{
   if(!/^\d+$/.test(channelId)) throw new HttpError(400,"設置先チャンネルが不正です");
-  const channel=await botJson<{id:string;guild_id?:string;type:number}>(env,`/channels/${channelId}`);
-  if(channel.guild_id&&channel.guild_id!==guildId){
-    throw new HttpError(400,"別サーバーのチャンネルには設置できません");
+
+  let channels:DiscordChannel[];
+  try{
+    channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+  }catch(error){
+    const detail=error instanceof Error?error.message:String(error);
+    throw new HttpError(
+      502,
+      "設置先チャンネル一覧の取得に失敗しました: "+detail.slice(0,220)
+    );
+  }
+
+  const channel=channels.find(item=>item.id===channelId);
+  if(!channel){
+    throw new HttpError(
+      404,
+      "設置先チャンネルが見つかりません。チャンネル一覧を再読み込みしてください"
+    );
   }
   if(![0,5].includes(channel.type)){
-    throw new HttpError(400,"Ticketパネルはテキストまたはアナウンスチャンネルに設置してください");
+    throw new HttpError(
+      400,
+      "パネルはテキストまたはアナウンスチャンネルに設置してください"
+    );
   }
 }
 
@@ -1187,7 +1210,23 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const {channelId}=await bodyObject<{channelId?:string}>(request);
     if(!channelId) throw new HttpError(400,"設置先チャンネルを選択してください");
     await requireMessageChannel(env,guildId,channelId);
-    await publishTicketPanel(env,channelId);
+    try{
+      await publishTicketPanel(env,guildId,channelId);
+    }catch(error){
+      if(error instanceof DiscordApiError&&error.status===404){
+        throw new HttpError(
+          404,
+          "設置先チャンネルが見つかりません。チャンネル一覧を再読み込みしてください"
+        );
+      }
+      if(error instanceof DiscordApiError&&error.status===429){
+        throw new HttpError(
+          429,
+          "Discord APIのレート制限中です。少し待ってからもう一度設置してください"
+        );
+      }
+      throw error;
+    }
     return json(env,{ok:true,channelId});
   }
 
@@ -1420,7 +1459,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v19-verification-panel",
+          version:"dashboard-auth-v20-panel-access-repair",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
