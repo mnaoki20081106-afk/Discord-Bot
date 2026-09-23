@@ -111,6 +111,33 @@ type DiscordGuildMember={
 
 const PANEL_PERMISSION_MASK=1024n|2048n|16384n;
 
+function fallbackBotMember(
+  botId:string,
+  roles:DiscordRole[]
+):DiscordGuildMember{
+  return {
+    roles:roles
+      .filter(role=>role.tags?.bot_id===botId)
+      .map(role=>role.id)
+  };
+}
+
+async function getBotGuildMember(
+  env:Env,
+  guildId:string,
+  roles:DiscordRole[]
+):Promise<DiscordGuildMember>{
+  const botId=env.DISCORD_APPLICATION_ID.trim();
+  try{
+    return await botJson<DiscordGuildMember>(
+      env,
+      `/guilds/${guildId}/members/${botId}`
+    );
+  }catch{
+    return fallbackBotMember(botId,roles);
+  }
+}
+
 function botBasePermissions(
   guildId:string,
   roles:DiscordRole[],
@@ -226,15 +253,7 @@ async function discordMeta(env:Env,guildId:string){
     throw new HttpError(502,"Discordロール一覧の取得に失敗しました: "+detail.slice(0,220));
   }
 
-  try{
-    member=await botJson<DiscordGuildMember>(
-      env,
-      `/guilds/${guildId}/members/${env.DISCORD_APPLICATION_ID.trim()}`
-    );
-  }catch(error){
-    const detail=error instanceof Error?error.message:String(error);
-    throw new HttpError(502,"BOTのサーバー権限取得に失敗しました: "+detail.slice(0,220));
-  }
+  member=await getBotGuildMember(env,guildId,roles);
 
   const basePermissions=botBasePermissions(guildId,roles,member);
   const botAdministrator=(basePermissions&8n)===8n;
@@ -1149,10 +1168,8 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
     const botId=env.DISCORD_APPLICATION_ID.trim();
     if(targetId!==botId){
-      const member=await botJson<DiscordGuildMember>(
-        env,
-        `/guilds/${guildId}/members/${botId}`
-      );
+      const roles=await botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
+      const member=await getBotGuildMember(env,guildId,roles);
       const targetCanAffectBot=
         targetId===guildId||member.roles.includes(targetId);
       if(targetCanAffectBot){
