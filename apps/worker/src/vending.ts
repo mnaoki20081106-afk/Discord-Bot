@@ -4,7 +4,7 @@ import { getSession } from "./db";
 import { json, randomId, sha256Hex } from "./utils";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
-  deleteCoupon, deleteMachine, deleteVmProduct, ensureVendingSchema, finishDelivery, getCoupon,
+  deleteCoupon, deleteMachine, deleteStockNotify, deleteVmProduct, ensureVendingSchema, finishDelivery, getCoupon,
   getMachine, getOrder, getPayPay, getStockNotify, getVmProduct, listCoupons, listMachines, listVmProducts,
   markPaid, orderStock, releaseStock, removePayPay, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, stockContents,
   takePayChallenge, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmOrder, type VmProduct
@@ -195,6 +195,10 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
       const b=await input<{channelId:string;roleId:string}>(request);
       if(!b.channelId||!b.roleId) throw new VendingHttpError(400,"チャンネルとロールを選択してください");
       await saveStockNotify(env,vmId,guildId,b.channelId,b.roleId);
+      return json(env,{ok:true});
+    }
+    if(request.method==="DELETE"){
+      await deleteStockNotify(env,vmId);
       return json(env,{ok:true});
     }
   }
