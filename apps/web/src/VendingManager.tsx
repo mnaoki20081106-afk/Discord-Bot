@@ -702,6 +702,22 @@ export default function VendingManager({
                       <div className="vending-stock-editor">
                         <span className="eyebrow">FINITE STOCK</span>
                         <textarea value={stockText} onChange={e=>setStockText(e.target.value)} placeholder={"1行＝在庫1件\nコードA\nコードB\nコードC"}/>
+                        <div className="vending-stock-file-row">
+                          <label className="secondary vending-file-button">
+                            TXTを読み込む
+                            <input
+                              type="file"
+                              accept=".txt,text/plain"
+                              onChange={(event)=>{
+                                const file=event.target.files?.[0];
+                                if(!file) return;
+                                void file.text().then(text=>setStockText(text)).catch(onError);
+                                event.currentTarget.value="";
+                              }}
+                            />
+                          </label>
+                          <small>{stockText ? stockText.split(/\r?\n/).filter(Boolean).length+"行を読込済み" : "1行＝在庫1件"}</small>
+                        </div>
                         <div className="button-row">
                           <button className="secondary" onClick={()=>void addStock()} disabled={!stockText.trim()||busy}>在庫追加</button>
                           <button className="secondary" onClick={()=>void viewStock()}>在庫内容確認</button>
