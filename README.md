@@ -4,21 +4,23 @@ Discordサーバーの **セキュリティ / 認証 / Ticket / チャンネル�
 Webダッシュボードからまとめて管理するモノレポです。
 
 - Dashboard: React + Vite → **GitHub Pages**
-- Bot/API: Node.js + TypeScript + discord.js + Fastify
-- Database: PostgreSQL
-- Payments: PayPay Open Payment API (Dynamic QR)
+- Dashboard: React + Vite → **GitHub Pages**
+- Backend: **Cloudflare Workers Free**
+- Database: **Cloudflare D1 Free**
+- Discord: REST API + HTTP Interactions + AutoMod
+- Payments: PayPay Open Payment API (Dynamic QR + Webhook)
 - Authentication: Discord OAuth2
-- Deployment: DashboardはGitHub Actions、Bot/APIはDocker対応
+- Cost target: **月額0円（無料枠内）**
 
 ## Features
 
 ### Security
 
-- Anti-Spam
-- Discord招待リンクのブロック
-- 大量メンション保護
-- Join burstベースのAnti-Raid
-- Audit LogベースのAnti-Nuke
+- Discord AutoModによるAnti-Spam
+- Discord AutoModによる招待リンクのブロック
+- Discord AutoModによる大量メンション保護
+- Discord標準Raid Protectionを利用
+- Cloudflare Cron + Audit LogベースのAnti-Nuke
   - 大量チャンネル削除
   - 大量ロール削除
   - 大量BAN
@@ -72,21 +74,27 @@ PayPay部分は公式Open Payment APIを利用します。実運用にはPayPay�
 GitHub Pages
   React Dashboard
         |
-        | HTTPS / Discord OAuth session
+        | HTTPS
         v
-Persistent Node.js server
-  Fastify API + discord.js Bot
+Cloudflare Workers
+  OAuth / Discord Interactions / REST API / PayPay Webhook
         |
-        +---- Discord API / Gateway
-        |
+        +---- Discord REST API + AutoMod
         +---- PayPay Open Payment API
         |
         v
-    PostgreSQL
+Cloudflare D1
 ```
 
-GitHub Pagesは静的ホスティングなので、Bot Token / Discord Client Secret /
-PayPay API Secretは絶対にPages側へ置きません。
+常時起動サーバーはありません。Render / Koyeb / Railway / keepalive は不要です。
+
+DiscordのMessage/Member Gatewayイベントはサーバーレスでは常時受信しません。
+その代わり、Spam・招待リンク・大量メンションはDiscord AutoMod、
+大量破壊はCloudflare CronによるAudit Log監視で保護します。
+参加イベント依存のAnti-RaidはDiscord標準Raid Protectionを使用します。
+
+Cloudflare Workers Free/D1 Freeの利用上限を超えた場合はその日の処理が制限される
+可能性がありますが、時間経過だけで30日後にDBが失効する構成ではありません。
 
 ## 1. Discord Application
 
@@ -147,75 +155,84 @@ PAYPAY_MERCHANT_ID=
 
 `PAYPAY_MERCHANT_ID` は必要な契約/構成の場合のみ設定します。
 
-## 3. Local development
+## 3. Zero-cost Cloudflare deployment
 
-Node.js 20+ とPostgreSQLが必要です。
+推奨バックエンドは `apps/worker` です。
 
-```bash
-npm install
-docker compose up -d postgres
-npm run dev:server
-```
+Cloudflare Workers & PagesでGitHubリポジトリをImportし、
+Root directoryを `apps/worker` に設定します。
 
-別ターミナル:
+Wrangler設定ではD1 bindingをIDなしで宣言しているため、対応するWranglerでは
+初回deploy時にD1を自動プロビジョニングできます。
 
-```bash
-npm run dev:web
-```
-
-Local dashboard:
+Worker Secrets:
 
 ```text
-http://localhost:5173
+DISCORD_APPLICATION_ID
+DISCORD_PUBLIC_KEY
+DISCORD_BOT_TOKEN
+DISCORD_CLIENT_SECRET
+SESSION_ENCRYPTION_KEY
+PAYPAY_API_KEY          # PayPay利用時のみ
+PAYPAY_API_SECRET       # PayPay利用時のみ
+PAYPAY_MERCHANT_ID      # 必要な場合のみ
 ```
 
-Local API:
+`SESSION_ENCRYPTION_KEY` は32 bytesをbase64化した値にします。
+
+Cloudflare Workerの公開URLが例えば
 
 ```text
-http://localhost:8787
+https://discord-server-manager.<account>.workers.dev
 ```
 
-## 4. Backend deployment
-
-Bot/APIはDiscord Gatewayへ常時接続するため、常駐できるNode.jsホストが必要です。
-
-Dockerイメージ用の `apps/server/Dockerfile` と
-PostgreSQL込みの `docker-compose.yml` を用意しています。
-
-本番環境では必ずHTTPSを使い、`.env` をGitHubへcommitしないでください。
-
-## 5. GitHub Pages
-
-このrepositoryには `.github/workflows/pages.yml` が入っています。
-
-Repository Settings → Pages でGitHub Actionsを利用できる状態にし、
-Repository Variablesに次を追加します。
+なら、Discord Developer PortalのInteractions Endpoint URLを
 
 ```text
-VITE_API_BASE_URL=https://YOUR-BACKEND.example.com
+https://discord-server-manager.<account>.workers.dev/interactions
 ```
 
-Pages URL:
+OAuth2 Redirect URLを
+
+```text
+https://discord-server-manager.<account>.workers.dev/auth/discord/callback
+```
+
+に設定します。
+
+PayPay Webhook URL:
+
+```text
+https://discord-server-manager.<account>.workers.dev/paypay/webhook
+```
+
+PayPay Webhook受信後もPayPay APIへ決済状態を再照会し、
+`COMPLETED` を確認してから納品します。
+
+## 4. GitHub Pages
+
+Repository Settings → Pages でSourceを **GitHub Actions** にします。
+
+Repository Variable:
+
+```text
+VITE_API_BASE_URL=https://discord-server-manager.<account>.workers.dev
+```
+
+Dashboard:
 
 ```text
 https://mnaoki20081106-afk.github.io/Discord-Bot/
-```
-
-Backend側では、CORS用Originと実際のPages URLを分けます。
-
-```env
-WEB_ORIGIN=https://mnaoki20081106-afk.github.io
-WEB_PUBLIC_URL=https://mnaoki20081106-afk.github.io/Discord-Bot/
 ```
 
 ## Slash Commands
 
 - `/dashboard`
 - `/security-status`
-- `/verify-panel`
-- `/ticket-panel`
+Web管理画面から認証/Ticket/販売パネルを設置できます。
 
-Webだけでも主要設定を行えます。
+Global commandはWorker APIから登録でき、現在は
+`/dashboard` と `/security-status` を用意しています。
 
 ## Security design
 
