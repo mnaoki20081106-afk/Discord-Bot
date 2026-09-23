@@ -592,7 +592,7 @@ async function onInteraction(interaction: Interaction): Promise<void> {
     if (interaction.commandName === "dashboard") {
       await interaction.reply({
         ephemeral: true,
-        content: `管理画面: ${env.WEB_ORIGIN}`
+        content: `管理画面: ${env.WEB_PUBLIC_URL}`
       });
       return;
     }
