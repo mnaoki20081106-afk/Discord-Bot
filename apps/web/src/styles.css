@@ -799,3 +799,18 @@ textarea { min-height: 92px; resize: vertical; }
     min-height: 390px;
   }
 }
+
+.discord-channel.dragging,
+.discord-category.dragging {
+  opacity: .45;
+}
+
+.discord-channel[draggable="true"],
+.discord-category[draggable="true"] {
+  user-select: none;
+}
+
+.discord-preview.drag-active,
+.discord-channel-scroll.drag-active {
+  cursor: grabbing;
+}
