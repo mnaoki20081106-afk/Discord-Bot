@@ -4,6 +4,8 @@ import { Miniflare } from 'miniflare';
 
 const guildId = '123456789012345678';
 const botId = '223456789012345678';
+const targetRoleId = '523456789012345678';
+const chatChannelId = '423456789012345678';
 const guild = { id: guildId, name: 'Regression server', icon: null };
 
 async function runtime(t) {
@@ -33,9 +35,31 @@ async function runtime(t) {
       }
       if (url.pathname.endsWith('/channels')) return Response.json([
         {id:'323456789012345678',name:'General',type:4,position:0},
-        {id:'423456789012345678',name:'chat',type:0,parent_id:'323456789012345678',position:1}
+        {
+          id:chatChannelId,
+          name:'chat',
+          type:0,
+          parent_id:'323456789012345678',
+          position:1,
+          permission_overwrites:[]
+        }
       ]);
-      if (url.pathname.endsWith('/roles')) return Response.json([{id:guildId,name:'@everyone',position:0,managed:false,permissions:'0'}]);
+      if (url.pathname.endsWith('/roles')) return Response.json([
+        {id:guildId,name:'@everyone',position:0,managed:false,permissions:'0'},
+        {id:targetRoleId,name:'Customer',position:1,managed:false,permissions:'0'},
+        {
+          id:'623456789012345678',
+          name:'Test bot',
+          position:2,
+          managed:true,
+          permissions:'8',
+          tags:{bot_id:botId}
+        }
+      ]);
+      if (
+        request.method === 'PUT' &&
+        url.pathname === `/api/v10/channels/${chatChannelId}/permissions/${targetRoleId}`
+      ) return new Response(null,{status:204});
       return Response.json({message:'Missing Access'}, {status:403});
     }
   });
@@ -99,4 +123,43 @@ for (const legacy of [false, true]) {
 test('D1 rejects multiline exec but migration uses complete prepared statements', async t => {
   const {db} = await runtime(t);
   await assert.rejects(db.exec('CREATE TABLE broken (\n id TEXT PRIMARY KEY\n);'), /incomplete input/);
+});
+
+
+test('channel permission edit does not require direct channel access', async t => {
+  const {mf, calls} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const token = login.body.token;
+
+  const result = await request(
+    mf,
+    `/api/guilds/${guildId}/channels/${chatChannelId}/permissions/${targetRoleId}`,
+    token,
+    'PATCH',
+    {
+      targetType:'role',
+      permissions:{send:'deny'}
+    }
+  );
+
+  assert.equal(result.status,200,JSON.stringify(result.body));
+  assert.equal(result.body.targetId,targetRoleId);
+  assert.equal(result.body.deny,'2048');
+  assert.equal(
+    calls.some(call=>call.path===`/api/v10/channels/${chatChannelId}`),
+    false,
+    'permission editing must not GET the inaccessible channel directly'
+  );
+  assert.equal(
+    calls.some(
+      call=>
+        call.method==='PUT' &&
+        call.path===`/api/v10/channels/${chatChannelId}/permissions/${targetRoleId}`
+    ),
+    true,
+    'permission overwrite should still be written'
+  );
 });
