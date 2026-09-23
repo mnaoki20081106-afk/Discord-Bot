@@ -141,6 +141,13 @@ const productSchema = z.object({
 
 const channelSchema = z.object({ channelId: z.string().min(1) });
 
+const createChannelSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  type: z.enum(["text", "category"]),
+  parentId: z.string().nullable().optional(),
+  topic: z.string().trim().max(1024).optional()
+});
+
 const botPermissionBits = new PermissionsBitField([
   PermissionsBitField.Flags.ViewChannel,
   PermissionsBitField.Flags.SendMessages,
@@ -269,6 +276,38 @@ app.get("/api/guilds/:guildId/meta", async (request) => {
       .sort((a, b) => b.position - a.position)
       .map((role) => ({ id: role.id, name: role.name, position: role.position }))
   };
+});
+
+app.post("/api/guilds/:guildId/channels", async (request) => {
+  const { guildId } = z.object({ guildId: z.string() }).parse(request.params);
+  await requireGuildAccess(request, guildId);
+  const input = createChannelSchema.parse(request.body);
+  const guild = client.guilds.cache.get(guildId)!;
+
+  if (input.type === "category") {
+    const channel = await guild.channels.create({
+      name: input.name,
+      type: ChannelType.GuildCategory,
+      reason: "Created from Discord Server Manager"
+    });
+    return { id: channel.id, name: channel.name, type: "category" };
+  }
+
+  if (input.parentId) {
+    const parent = guild.channels.cache.get(input.parentId);
+    if (!parent || parent.type !== ChannelType.GuildCategory) {
+      throw httpError(400, "親カテゴリが見つかりません");
+    }
+  }
+
+  const channel = await guild.channels.create({
+    name: input.name,
+    type: ChannelType.GuildText,
+    parent: input.parentId || undefined,
+    topic: input.topic || undefined,
+    reason: "Created from Discord Server Manager"
+  });
+  return { id: channel.id, name: channel.name, type: "text" };
 });
 
 app.get("/api/guilds/:guildId/settings", async (request) => {
