@@ -12,7 +12,7 @@
     "dev:web": "npm run dev --workspace @dsm/web",
     "build": "npm run build --workspaces",
     "start": "npm run start --workspace @dsm/server",
-    "deploy:worker": "npm exec --workspace @dsm/worker -- wrangler deploy"
+    "deploy:worker": "cd apps/worker && npx wrangler deploy"
   },
   "engines": {
     "node": ">=20"
