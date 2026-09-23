@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
+INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2');
 
 CREATE TABLE IF NOT EXISTS guild_settings (
   guild_id TEXT PRIMARY KEY,
@@ -109,6 +109,23 @@ export async function ensureSchema(env: Env): Promise<void> {
   } catch {
     await env.DB.exec(schema);
   }
+
+  // Migration v2: password-based collaborative dashboard sessions.
+  // Existing databases created before this feature already have the meta table,
+  // so the new table must be created explicitly instead of relying on first-run schema setup.
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS dashboard_sessions (
+      token_hash TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `).run();
+
+  await env.DB.prepare(`
+    INSERT INTO meta(key, value) VALUES ('schema_version', '2')
+    ON CONFLICT(key) DO UPDATE SET value='2'
+  `).run();
+
   schemaReady = true;
 }
 
