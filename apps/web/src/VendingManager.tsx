@@ -377,6 +377,17 @@ export default function VendingManager({
     finally{setBusy(false);}
   }
 
+  async function disconnectPayPay(){
+    if(!window.confirm("保存されているPayPay接続情報を削除しますか？")) return;
+    setBusy(true);
+    try{
+      await api("/api/vending/paypay/logout",{method:"POST"});
+      await loadPaymentStatus();
+      onNotice("PayPayアカウントを切断しました");
+    }catch(reason){onError(reason);}
+    finally{setBusy(false);}
+  }
+
   async function startPayPay(event:FormEvent){
     event.preventDefault();
     setBusy(true);
@@ -480,6 +491,11 @@ export default function VendingManager({
 
           <div className="payment-connect">
             <strong>決済アカウント</strong>
+            {paymentStatus.paypay&&(
+              <button className="danger vending-disconnect" onClick={()=>void disconnectPayPay()} disabled={busy}>
+                PayPay切断
+              </button>
+            )}
             {!paymentStatus.paypay&&(
               payPayForm.challengeId ? (
                 <form onSubmit={(event)=>void verifyPayPay(event)}>
