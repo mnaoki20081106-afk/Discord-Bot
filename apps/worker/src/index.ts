@@ -175,8 +175,75 @@ async function sendMessage(env:Env,channelId:string,payload:unknown):Promise<voi
   });
 }
 
+async function sendPanelMessage(
+  env:Env,
+  guildId:string,
+  channelId:string,
+  payload:unknown
+):Promise<void>{
+  try{
+    await sendMessage(env,channelId,payload);
+    return;
+  }catch(error){
+    if(!(error instanceof DiscordApiError)||error.status!==403) throw error;
+  }
+
+  // A channel-level deny can block the bot even when the bot has the guild-wide
+  // permissions it was invited with. Repair only the bot member overwrite that
+  // is necessary to post a panel, preserving every unrelated overwrite bit.
+  const channel=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
+  if(channel.guild_id&&channel.guild_id!==guildId){
+    throw new HttpError(400,"別サーバーのチャンネルには設置できません");
+  }
+
+  const botId=env.DISCORD_APPLICATION_ID.trim();
+  const current=(channel.permission_overwrites??[]).find(
+    overwrite=>overwrite.id===botId&&overwrite.type===1
+  );
+  const required=1024n|2048n|16384n; // View Channel + Send Messages + Embed Links
+  let allow=BigInt(current?.allow??"0");
+  let deny=BigInt(current?.deny??"0");
+  allow|=required;
+  deny&=~required;
+
+  try{
+    await botJson<void>(
+      env,
+      `/channels/${channelId}/permissions/${botId}`,
+      {
+        method:"PUT",
+        body:JSON.stringify({
+          type:1,
+          allow:allow.toString(),
+          deny:deny.toString()
+        })
+      }
+    );
+  }catch(error){
+    if(error instanceof DiscordApiError&&error.status===403){
+      throw new HttpError(
+        403,
+        "このチャンネルへ投稿できません。BOTに「チャンネルの管理」権限を付けるか、BOTのチャンネル権限で「チャンネルを見る・メッセージを送信・リンクを埋め込む」を許可してください"
+      );
+    }
+    throw error;
+  }
+
+  try{
+    await sendMessage(env,channelId,payload);
+  }catch(error){
+    if(error instanceof DiscordApiError&&error.status===403){
+      throw new HttpError(
+        403,
+        "BOTのチャンネル権限を補正しましたが認証パネルを投稿できませんでした。BOTより上位のロールまたはチャンネル権限を確認してください"
+      );
+    }
+    throw error;
+  }
+}
+
 async function publishVerificationPanel(env:Env,guildId:string,channelId:string){
-  await sendMessage(env,channelId,{
+  await sendPanelMessage(env,guildId,channelId,{
     embeds:[{
       title:"サーバー認証",
       description:"下のボタンから認証を完了してください。",
@@ -1094,10 +1161,23 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   const verifyPanel=url.pathname.match(/^\/api\/guilds\/(\d+)\/verification\/panel$/);
   if(verifyPanel&&request.method==="POST"){
-    await requireGuild(request,env,verifyPanel[1]!);
-    const {channelId}=await bodyObject<{channelId:string}>(request);
-    await publishVerificationPanel(env,verifyPanel[1]!,channelId);
-    return json(env,{ok:true});
+    const guildId=verifyPanel[1]!;
+    await requireGuild(request,env,guildId);
+    const {channelId}=await bodyObject<{channelId?:string}>(request);
+    if(!channelId) throw new HttpError(400,"設置先チャンネルを選択してください");
+    await requireMessageChannel(env,guildId,channelId);
+    try{
+      await publishVerificationPanel(env,guildId,channelId);
+    }catch(error){
+      if(error instanceof DiscordApiError&&error.status===404){
+        throw new HttpError(404,"設置先チャンネルが見つかりません。チャンネル一覧を再読み込みしてください");
+      }
+      if(error instanceof DiscordApiError&&error.status===429){
+        throw new HttpError(429,"Discord APIのレート制限中です。少し待ってからもう一度設置してください");
+      }
+      throw error;
+    }
+    return json(env,{ok:true,channelId});
   }
 
   const ticketPanel=url.pathname.match(/^\/api\/guilds\/(\d+)\/tickets\/panel$/);
@@ -1340,7 +1420,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v18-reorder",
+          version:"dashboard-auth-v19-verification-panel",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
