@@ -350,6 +350,57 @@ textarea { min-height: 92px; resize: vertical; }
   background: #241014;
 }
 
+.role-picker {
+  display: grid;
+  gap: 7px;
+  max-height: 210px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #222c43;
+  border-radius: 11px;
+  background: #0a1020;
+}
+.role-choice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #a9b5ce;
+  background: #10182a;
+  cursor: pointer;
+  user-select: none;
+}
+.role-choice:hover {
+  color: #e8eeff;
+  border-color: #303d5d;
+}
+.role-choice.selected {
+  color: #dfe5ff;
+  border-color: #4e5ed3;
+  background: #171f3d;
+}
+.role-choice input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: #6473f6;
+}
+.role-choice span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.role-picker-empty {
+  padding: 9px;
+  color: #68768f;
+  font-size: 10px;
+}
+
 .template-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
