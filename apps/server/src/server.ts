@@ -271,6 +271,10 @@ app.get("/api/guilds/:guildId/meta", async (request) => {
       )
       .sort((a, b) => a.rawPosition - b.rawPosition)
       .map((channel) => ({ id: channel.id, name: channel.name })),
+    categories: guild.channels.cache
+      .filter((channel) => channel.type === ChannelType.GuildCategory)
+      .sort((a, b) => a.rawPosition - b.rawPosition)
+      .map((channel) => ({ id: channel.id, name: channel.name })),
     roles: guild.roles.cache
       .filter((role) => role.id !== guild.id && !role.managed)
       .sort((a, b) => b.position - a.position)
