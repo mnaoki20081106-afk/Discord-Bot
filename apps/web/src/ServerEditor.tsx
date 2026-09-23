@@ -104,8 +104,11 @@ export default function ServerEditor({
           ? { name: name.trim() }
           : {
               name: name.trim(),
-              topic,
-              parentId: parentId || null
+              parentId: parentId || null,
+              ...(selectedChannel &&
+              ["text", "announcement", "forum", "media"].includes(selectedChannel.type ?? "text")
+                ? { topic }
+                : {})
             };
 
       await api(`/api/guilds/${guildId}/channels/${selection.id}`, {
@@ -206,7 +209,7 @@ export default function ServerEditor({
                     onClick={() => openChannel(channel.id)}
                   >
                     <span className="channel-hash">
-                      {channel.type === "voice" || channel.type === "stage" ? "◖))" : "#"}
+                      {channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}
                     </span>
                     <span>{channel.name}</span>
                     <span className="channel-edit">›</span>
@@ -242,7 +245,7 @@ export default function ServerEditor({
                       onClick={() => openChannel(channel.id)}
                     >
                       <span className="channel-hash">
-                        {channel.type === "voice" || channel.type === "stage" ? "◖))" : "#"}
+                        {channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}
                       </span>
                       <span>{channel.name}</span>
                       <span className="channel-edit">›</span>
