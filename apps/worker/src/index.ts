@@ -460,7 +460,8 @@ async function ensureText(
   if(options?.privateRoleId){
     overwrites.push(
       {id:guildId,type:0,deny:"1024"},
-      {id:options.privateRoleId,type:0,allow:(1024n|2048n|65536n).toString()}
+      {id:options.privateRoleId,type:0,allow:(1024n|2048n|65536n).toString()},
+      {id:env.DISCORD_APPLICATION_ID.trim(),type:1,allow:PANEL_PERMISSION_MASK.toString()}
     );
   }
   await botJson(env,`/guilds/${guildId}/channels`,{
@@ -570,7 +571,8 @@ async function createTicketFromInteraction(env:Env,interaction:any):Promise<Resp
   const safe=username.toLowerCase().replace(/[^a-z0-9_-]/g,"").slice(0,18)||userId.slice(-6);
   const overwrites:Array<Record<string,unknown>>=[
     {id:guildId,type:0,deny:"1024"},
-    {id:userId,type:1,allow:(1024n|2048n|65536n|32768n).toString()}
+    {id:userId,type:1,allow:(1024n|2048n|65536n|32768n).toString()},
+    {id:env.DISCORD_APPLICATION_ID.trim(),type:1,allow:PANEL_PERMISSION_MASK.toString()}
   ];
   for(const role of supportRoles){
     overwrites.push({
@@ -1675,12 +1677,18 @@ export default {
       const status=
         error instanceof HttpError?error.status:
         error instanceof VendingHttpError?error.status:
-        error instanceof DiscordApiError?(error.status===429?429:502):
+        error instanceof DiscordApiError?(error.status===429?429:error.status===403?403:502):
         500;
       const message=
-        error instanceof HttpError||error instanceof VendingHttpError||error instanceof DiscordApiError
-          ?error.message
-          :"サーバー処理に失敗しました";
+        error instanceof DiscordApiError&&error.status===403
+          ?error.message.includes('"code":50001')||error.message.includes('"code": 50001')
+            ?"BOTが対象にアクセスできません。BOTのサーバーロールにAdministratorを付けているか確認し、管理画面の「BOT権限を更新」で再認証してください。プライベートチャンネルではBOT個別の閲覧許可も確認してください"
+            :error.message.includes('"code":50013')||error.message.includes('"code": 50013')
+              ?"BOTにこの操作の権限がありません。BOTのサーバーロールとロールの並び順、チャンネル個別の権限を確認してください"
+              :"DiscordがBOTの操作を拒否しました。BOTのサーバーロールと対象チャンネルの権限を確認してください"
+          :error instanceof HttpError||error instanceof VendingHttpError||error instanceof DiscordApiError
+            ?error.message
+            :"サーバー処理に失敗しました";
       return json(env,{error:status>=500?"server_error":"request_error",message},status);
     }
   },
