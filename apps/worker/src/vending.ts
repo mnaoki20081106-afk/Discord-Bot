@@ -133,10 +133,12 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     const guildId=stock[1]!,vmId=stock[2]!,productId=stock[3]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id); await productOwned(env,productId,vm);
     if(request.method==="GET") return json(env,await stockContents(env,productId));
     if(request.method==="POST"){
-      const b=await input<{text?:string;lines?:string[]}>(request); const lines=Array.isArray(b.lines)?b.lines:String(b.text??"").split(/\r?\n/);
+      const b=await input<{text?:string;lines?:string[];notify?:boolean}>(request);
+      const lines=Array.isArray(b.lines)?b.lines:String(b.text??"").split(/\r?\n/);
+      if(lines.filter(Boolean).length>500) throw new VendingHttpError(413,"在庫は1回500件まで追加できます");
       const count=await addStock(env,productId,lines);
       const notification=await getStockNotify(env,vmId);
-      if(count>0&&notification){
+      if(count>0&&b.notify!==false&&notification){
         const productInfo=await getVmProduct(env,productId);
         if(productInfo){
           await send(env,notification.channel_id,{
