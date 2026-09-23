@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "discord-server-manager",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "WEB_ORIGIN": "https://mnaoki20081106-afk.github.io",
+    "WEB_PUBLIC_URL": "https://mnaoki20081106-afk.github.io/Discord-Bot/",
+    "PAYPAY_ENV": "sandbox"
+  }
+}
