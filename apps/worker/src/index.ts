@@ -202,7 +202,8 @@ async function sendPanelMessage(
   }
 
   const botId=env.DISCORD_APPLICATION_ID.trim();
-  const current=(channel.permission_overwrites??[]).find(
+  const existingOverwrites=channel.permission_overwrites??[];
+  const current=existingOverwrites.find(
     overwrite=>overwrite.id===botId&&overwrite.type===1
   );
   const required=1024n|2048n|16384n; // View Channel + Send Messages + Embed Links
@@ -211,16 +212,34 @@ async function sendPanelMessage(
   allow|=required;
   deny&=~required;
 
+  // Editing a single overwrite can itself return Missing Access when the bot
+  // cannot VIEW_CHANNEL. Modify Channel with the complete overwrite array uses
+  // guild-level Manage Channels + Manage Roles and can recover that lockout.
+  const repairedOverwrites=[
+    ...existingOverwrites
+      .filter(overwrite=>!(overwrite.id===botId&&overwrite.type===1))
+      .map(overwrite=>({
+        id:overwrite.id,
+        type:overwrite.type,
+        allow:overwrite.allow,
+        deny:overwrite.deny
+      })),
+    {
+      id:botId,
+      type:1,
+      allow:allow.toString(),
+      deny:deny.toString()
+    }
+  ];
+
   try{
-    await botJson<void>(
+    await botJson<DiscordChannel>(
       env,
-      `/channels/${channelId}/permissions/${botId}`,
+      `/channels/${channelId}`,
       {
-        method:"PUT",
+        method:"PATCH",
         body:JSON.stringify({
-          type:1,
-          allow:allow.toString(),
-          deny:deny.toString()
+          permission_overwrites:repairedOverwrites
         })
       }
     );
@@ -228,7 +247,7 @@ async function sendPanelMessage(
     if(error instanceof DiscordApiError&&error.status===403){
       throw new HttpError(
         403,
-        "このチャンネルへ投稿できません。BOTに「チャンネルの管理」権限を付けるか、BOTのチャンネル権限で「チャンネルを見る・メッセージを送信・リンクを埋め込む」を許可してください"
+        "このチャンネルのBOTアクセスを自動復旧できませんでした。BOTに「チャンネルの管理」と「ロールの管理」が必要です。Discord側でBOTロールのこの2権限を確認してください"
       );
     }
     throw error;
@@ -240,7 +259,7 @@ async function sendPanelMessage(
     if(error instanceof DiscordApiError&&error.status===403){
       throw new HttpError(
         403,
-        "BOTのチャンネル権限を補正しましたがパネルを投稿できませんでした。BOTより上位のロールまたはチャンネル権限を確認してください"
+        "BOTアクセスを復旧しましたがパネルを投稿できませんでした。設置先チャンネルでBOTの「チャンネルを見る・メッセージを送信・リンクを埋め込む」を確認してください"
       );
     }
     throw error;
@@ -1459,7 +1478,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v20-panel-access-repair",
+          version:"dashboard-auth-v21-hidden-channel-repair",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
