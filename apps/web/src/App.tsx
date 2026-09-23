@@ -19,7 +19,7 @@ type Meta = {
   channels: Array<{
     id: string;
     name: string;
-    type?: "text" | "announcement";
+    type?: "text" | "voice" | "announcement" | "stage" | "forum" | "media";
     parentId?: string | null;
     topic?: string;
     position?: number;
@@ -426,8 +426,8 @@ export default function App() {
             <span className={`status-pill ${status?.discordReady ? "good" : "bad"}`}>
               <i /> BOT {status?.discordReady ? "Online" : "Offline"}
             </span>
-            <span className={`status-pill ${status?.payPayConfigured ? "good" : "warn"}`}>
-              <i /> PayPay {status?.payPayConfigured ? "Ready" : "未設定"}
+            <span className="status-pill good">
+              <i /> API Serverless
             </span>
           </div>
         </header>
@@ -487,14 +487,14 @@ export default function App() {
                 <small>Challenge + account age</small>
               </article>
               <article className="metric card">
-                <span>PRODUCTS</span>
-                <strong>{products.length}</strong>
-                <small>PayPay vending items</small>
+                <span>CHANNELS</span>
+                <strong>{meta.channels.length}</strong>
+                <small>Text / Voice / Forum</small>
               </article>
               <article className="metric card">
-                <span>PAYMENT</span>
-                <strong>{status?.payPayConfigured ? "PAYPAY" : "OFFLINE"}</strong>
-                <small>{status?.payPayEnvironment ?? "-"}</small>
+                <span>CATEGORIES</span>
+                <strong>{meta.categories.length}</strong>
+                <small>Live server structure</small>
               </article>
             </section>
 
