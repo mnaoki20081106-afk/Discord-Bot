@@ -904,7 +904,7 @@ export default {
           :false;
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v3",
+          version:"dashboard-auth-v4-routing",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
