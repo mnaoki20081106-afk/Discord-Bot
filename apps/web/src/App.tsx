@@ -170,7 +170,9 @@ export default function App() {
         await selectGuild(firstGuild.id);
       }
     } catch (reason) {
-      fail(reason);
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setError("ログインは成功しましたが、管理データの取得に失敗しました: " + message);
+      setNotice(null);
     } finally {
       setBusy(false);
     }
@@ -359,7 +361,8 @@ export default function App() {
                 setPassword("");
                 setAuthenticated(true);
               } catch (reason) {
-                fail(reason);
+                const message = reason instanceof Error ? reason.message : String(reason);
+                setError("ログインに失敗しました: " + message);
               } finally {
                 setBusy(false);
               }
