@@ -536,10 +536,13 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     let discordReady=false;
     let discordUser:string|null=null;
     let discordError:string|null=null;
+    let guildCount:number|null=null;
     try{
       const bot=await botJson<{id:string;username:string}>(env,"/users/@me");
       discordReady=true;
       discordUser=bot.username;
+      const guilds=await botJson<Array<{id:string}>>(env,"/users/@me/guilds?limit=200");
+      guildCount=guilds.length;
     }catch(error){
       discordError=error instanceof Error?error.message:String(error);
     }
@@ -547,6 +550,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       discordReady,
       discordUser,
       discordError,
+      guildCount,
       dashboardPasswordConfigured:Boolean(env.DASHBOARD_PASSWORD),
       payPayConfigured:payPayConfigured(env),
       payPayEnvironment:env.PAYPAY_ENV,
@@ -922,7 +926,7 @@ export default {
           :false;
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v6-discord",
+          version:"dashboard-auth-v7-cors",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
