@@ -316,7 +316,10 @@ export default function VendingManager({
       for(let offset=0;offset<lines.length;offset+=400){
         const result=await api<{added:number}>(
           `/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}/stock`,
-          {method:"POST",body:JSON.stringify({lines:lines.slice(offset,offset+400)})}
+          {method:"POST",body:JSON.stringify({
+            lines:lines.slice(offset,offset+400),
+            notify:offset+400>=lines.length
+          })}
         );
         added+=result.added;
       }
