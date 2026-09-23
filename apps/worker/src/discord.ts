@@ -42,6 +42,11 @@ export type DiscordRole={
   position:number;
   managed:boolean;
   color:number;
+  tags?:{
+    bot_id?:string;
+    integration_id?:string;
+    premium_subscriber?:null;
+  };
 };
 
 export class DiscordApiError extends Error {
