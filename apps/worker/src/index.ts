@@ -138,7 +138,13 @@ async function discordMeta(env:Env,guildId:string){
           c.type===16?"media":"text",
         parentId:c.parent_id??null,
         topic:c.topic??"",
-        position:c.position??0
+        position:c.position??0,
+        permissionOverwrites:(c.permission_overwrites??[]).map(overwrite=>({
+          id:overwrite.id,
+          type:overwrite.type,
+          allow:overwrite.allow,
+          deny:overwrite.deny
+        }))
       })),
     categories:channels
       .filter(c=>c.type===4)
@@ -707,6 +713,91 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     return json(env,{ok:true});
   }
 
+  const channelPermissionMatch=url.pathname.match(
+    /^\/api\/guilds\/(\d+)\/channels\/(\d+)\/permissions\/(\d+)$/
+  );
+  if(channelPermissionMatch&&request.method==="PATCH"){
+    const guildId=channelPermissionMatch[1]!;
+    const channelId=channelPermissionMatch[2]!;
+    const targetId=channelPermissionMatch[3]!;
+    await requireGuild(request,env,guildId);
+
+    const input=await bodyObject<{
+      targetType?:"role";
+      permissions?:Partial<Record<
+        "view"|"send"|"react"|"files"|"threads"|"connect"|"speak",
+        "inherit"|"allow"|"deny"
+      >>;
+    }>(request);
+
+    const channel=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
+    if(channel.guild_id&&channel.guild_id!==guildId){
+      throw new HttpError(400,"別サーバーのチャンネルは編集できません");
+    }
+
+    const permissionBits={
+      view:1024n,
+      send:2048n,
+      react:64n,
+      files:32768n,
+      threads:34359738368n,
+      connect:1048576n,
+      speak:2097152n
+    } as const;
+
+    const current=(channel.permission_overwrites??[]).find(
+      overwrite=>overwrite.id===targetId&&overwrite.type===0
+    );
+    let allow=BigInt(current?.allow??"0");
+    let deny=BigInt(current?.deny??"0");
+
+    for(const [key,mode] of Object.entries(input.permissions??{})){
+      if(!(key in permissionBits)) continue;
+      const bit=permissionBits[key as keyof typeof permissionBits];
+      allow&=~bit;
+      deny&=~bit;
+      if(mode==="allow") allow|=bit;
+      if(mode==="deny") deny|=bit;
+    }
+
+    if(allow===0n&&deny===0n){
+      if(current){
+        const response=await botFetch(
+          env,
+          `/channels/${channelId}/permissions/${targetId}`,
+          {method:"DELETE"}
+        );
+        if(!response.ok){
+          const detail=await response.text().catch(()=>"");
+          throw new HttpError(
+            response.status,
+            "チャンネル権限の継承解除に失敗しました: "+detail.slice(0,180)
+          );
+        }
+      }
+    }else{
+      await botJson(
+        env,
+        `/channels/${channelId}/permissions/${targetId}`,
+        {
+          method:"PUT",
+          body:JSON.stringify({
+            type:0,
+            allow:allow.toString(),
+            deny:deny.toString()
+          })
+        }
+      );
+    }
+
+    return json(env,{
+      ok:true,
+      targetId,
+      allow:allow.toString(),
+      deny:deny.toString()
+    });
+  }
+
   const channelItemMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/channels\/(\d+)$/);
   if(channelItemMatch){
     const guildId=channelItemMatch[1]!;
@@ -1002,7 +1093,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v15-ticket-roles",
+          version:"dashboard-auth-v16-channel-permissions",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -1041,6 +1132,7 @@ export default {
         (url.pathname==="/api/me"&&request.method==="GET")||
         (url.pathname==="/api/guilds"&&request.method==="GET")||
         (/^\/api\/guilds\/\d+\/meta$/.test(url.pathname)&&request.method==="GET")||
+        (/^\/api\/guilds\/\d+\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")
       ){
         return await handleApi(request,env,url);
