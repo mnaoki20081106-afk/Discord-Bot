@@ -5,8 +5,8 @@ import { json, randomId, sha256Hex } from "./utils";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
   deleteCoupon, deleteMachine, deleteVmProduct, ensureVendingSchema, finishDelivery, getCoupon,
-  getMachine, getOrder, getPayPay, getVmProduct, listCoupons, listMachines, listVmProducts,
-  markPaid, orderStock, releaseStock, reserveOrder, resetDelivery, savePayChallenge, savePayPay, stockContents,
+  getMachine, getOrder, getPayPay, getStockNotify, getVmProduct, listCoupons, listMachines, listVmProducts,
+  markPaid, orderStock, releaseStock, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, stockContents,
   takePayChallenge, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
@@ -148,6 +148,19 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     return json(env,{ok:await deleteCoupon(env,vmId,session.user_id,code)});
   }
 
+  const stockNotify=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/stock-notification$/);
+  if(stockNotify){
+    const guildId=stockNotify[1]!,vmId=stockNotify[2]!,session=await requireGuild(request,env,guildId);
+    await machineOwned(env,vmId,session.user_id);
+    if(request.method==="GET") return json(env,await getStockNotify(env,vmId));
+    if(request.method==="POST"){
+      const b=await input<{channelId:string;roleId:string}>(request);
+      if(!b.channelId||!b.roleId) throw new VendingHttpError(400,"チャンネルとロールを選択してください");
+      await saveStockNotify(env,vmId,guildId,b.channelId,b.roleId);
+      return json(env,{ok:true});
+    }
+  }
+
   const panel=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/panel$/);
   if(panel&&request.method==="POST"){
     const guildId=panel[1]!,vmId=panel[2]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id),b=await input<{channelId:string}>(request),products=await listVmProducts(env,vmId);
@@ -155,6 +168,13 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     return json(env,{ok:true});
   }
 
+  if(url.pathname==="/api/vending/payments/status"&&request.method==="GET"){
+    const s=await sessionFromRequest(request,env);
+    return json(env,{
+      paypay:Boolean(await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY)),
+      kyash:Boolean(await getKyashAccount(env,s.user_id))
+    });
+  }
   if(url.pathname==="/api/vending/paypay/status"&&request.method==="GET"){
     const s=await sessionFromRequest(request,env); return json(env,{registered:Boolean(await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY))});
   }
