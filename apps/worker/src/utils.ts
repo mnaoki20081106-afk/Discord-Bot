@@ -39,6 +39,12 @@ export function hexToBytes(hex:string): Uint8Array {
   return out;
 }
 
+export function toArrayBuffer(bytes:Uint8Array):ArrayBuffer {
+  const copy=new Uint8Array(bytes.length);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 export function bytesToHex(bytes:ArrayBuffer|Uint8Array): string {
   const view=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);
   return [...view].map(v=>v.toString(16).padStart(2,"0")).join("");
@@ -68,7 +74,7 @@ export async function sha256Hex(value:string):Promise<string> {
 async function aesKey(secret:string, usages:KeyUsage[]):Promise<CryptoKey> {
   const raw=base64ToBytes(secret);
   if(raw.length!==32) throw new Error("SESSION_ENCRYPTION_KEY must be 32 bytes base64");
-  return crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,usages);
+  return crypto.subtle.importKey("raw",toArrayBuffer(raw),{name:"AES-GCM"},false,usages);
 }
 
 export async function encrypt(secret:string,value:string):Promise<string> {
@@ -76,9 +82,9 @@ export async function encrypt(secret:string,value:string):Promise<string> {
   crypto.getRandomValues(iv);
   const key=await aesKey(secret,["encrypt"]);
   const encrypted=await crypto.subtle.encrypt(
-    {name:"AES-GCM",iv},
+    {name:"AES-GCM",iv:toArrayBuffer(iv)},
     key,
-    new TextEncoder().encode(value)
+    toArrayBuffer(new TextEncoder().encode(value))
   );
   return `${bytesToBase64Url(iv)}.${bytesToBase64Url(new Uint8Array(encrypted))}`;
 }
@@ -89,9 +95,9 @@ export async function decrypt(secret:string,value:string):Promise<string> {
   const decodeUrl=(v:string)=>base64ToBytes(v.replace(/-/g,"+").replace(/_/g,"/").padEnd(Math.ceil(v.length/4)*4,"="));
   const key=await aesKey(secret,["decrypt"]);
   const plain=await crypto.subtle.decrypt(
-    {name:"AES-GCM",iv:decodeUrl(ivRaw)},
+    {name:"AES-GCM",iv:toArrayBuffer(decodeUrl(ivRaw))},
     key,
-    decodeUrl(cipherRaw)
+    toArrayBuffer(decodeUrl(cipherRaw))
   );
   return new TextDecoder().decode(plain);
 }
