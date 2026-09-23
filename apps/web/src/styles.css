@@ -1945,6 +1945,14 @@ body.dsm-touch-reordering .discord-category {
 }
 
 @media (max-width: 1050px) {
+  .vending-designer-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .vending-preview-pane {
+    position: static;
+  }
+
   .vending-layout {
     grid-template-columns: 1fr;
   }
@@ -1971,6 +1979,22 @@ body.dsm-touch-reordering .discord-category {
 
 @media (max-width: 700px) {
   .vending-manager { padding: 16px; }
+  .vending-designer-section { padding: 12px; }
+  .vending-discord-stage { padding: 8px; }
+  .vending-discord-stage.desktop .vending-discord-window,
+  .vending-discord-stage.mobile .vending-discord-window {
+    width: 100%;
+  }
+  .vending-discord-message {
+    grid-template-columns: 32px minmax(0,1fr);
+    gap: 8px;
+    padding: 13px 10px 15px;
+  }
+  .vending-bot-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 12px;
+  }
   .vending-main { padding: 12px; }
   .vending-machine-list,
   .payment-connect,
@@ -1987,6 +2011,393 @@ body.dsm-touch-reordering .discord-category {
   .vending-publish-row {
     grid-template-columns: 1fr;
   }
+}
+
+.vending-designer-section {
+  overflow: hidden;
+}
+
+.vending-designer-subtitle {
+  display: block;
+  margin-top: 5px;
+  color: #687791;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.vending-unsaved {
+  align-self: center;
+  color: #efc37d;
+  font-size: 9px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.vending-designer-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, .82fr) minmax(360px, 1.18fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.vending-designer-controls {
+  display: grid;
+  gap: 12px;
+}
+
+.vending-control-group {
+  padding: 14px;
+  border: 1px solid #202b41;
+  border-radius: 12px;
+  background: #0a111d;
+}
+
+.vending-control-title {
+  display: block;
+  margin-bottom: 12px;
+  color: #8795ae;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+}
+
+.vending-advanced-settings {
+  padding: 12px 14px;
+  border: 1px solid #202b41;
+  border-radius: 12px;
+  background: #0a111d;
+}
+
+.vending-advanced-settings summary {
+  color: #9aa8c0;
+  font-size: 10px;
+  font-weight: 900;
+  cursor: pointer;
+  user-select: none;
+}
+
+.vending-advanced-settings[open] summary {
+  margin-bottom: 12px;
+}
+
+.vending-preview-pane {
+  position: sticky;
+  top: 18px;
+  min-width: 0;
+}
+
+.vending-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.vending-preview-toolbar strong {
+  display: block;
+  margin-top: 3px;
+  color: #d8e1f2;
+  font-size: 11px;
+}
+
+.vending-preview-size {
+  display: inline-grid;
+  grid-template-columns: repeat(2,auto);
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid #253049;
+  border-radius: 9px;
+  background: #0b111d;
+}
+
+.vending-preview-size button {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: #70809c;
+  background: transparent;
+  font-size: 8px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.vending-preview-size button.active {
+  color: #fff;
+  background: #33405e;
+}
+
+.vending-discord-stage {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+  border: 1px solid #20283a;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 50% -20%, rgba(88,101,242,.13), transparent 40%),
+    #111214;
+  overflow: auto;
+}
+
+.vending-discord-stage.desktop .vending-discord-window {
+  width: min(100%, 620px);
+}
+
+.vending-discord-stage.mobile .vending-discord-window {
+  width: min(100%, 355px);
+}
+
+.vending-discord-window {
+  overflow: hidden;
+  border: 1px solid #1f2023;
+  border-radius: 9px;
+  background: #313338;
+  box-shadow: 0 16px 36px rgba(0,0,0,.32);
+  transition: width .18s ease;
+}
+
+.vending-discord-channelbar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-bottom: 1px solid #242529;
+  color: #dbdee1;
+  background: #2b2d31;
+}
+
+.vending-discord-channelbar > span {
+  color: #80848e;
+  font-size: 20px;
+}
+
+.vending-discord-channelbar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.vending-discord-message {
+  display: grid;
+  grid-template-columns: 38px minmax(0,1fr);
+  gap: 10px;
+  padding: 16px 14px 18px;
+  background: #313338;
+}
+
+.vending-bot-avatar {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(145deg,#5865f2,#3942ad);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.vending-message-body {
+  min-width: 0;
+}
+
+.vending-message-author {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 18px;
+  margin-bottom: 5px;
+}
+
+.vending-message-author strong {
+  color: #f2f3f5;
+  font-size: 12px;
+}
+
+.vending-message-author small {
+  color: #949ba4;
+  font-size: 8px;
+}
+
+.vending-bot-tag {
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #fff;
+  background: #5865f2;
+  font-size: 7px;
+  font-weight: 900;
+}
+
+.vending-discord-embed {
+  position: relative;
+  margin-top: 4px;
+  padding: 12px 12px 12px 15px;
+  border-radius: 4px;
+  background: #2b2d31;
+  overflow: hidden;
+}
+
+.vending-discord-embed::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: #57f287;
+}
+
+.vending-wysiwyg-title,
+.vending-wysiwyg-description {
+  width: 100%;
+  display: block;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.vending-wysiwyg-title {
+  min-height: 22px;
+  color: #f2f3f5;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.vending-wysiwyg-title::placeholder {
+  color: #f2f3f5;
+  opacity: .72;
+}
+
+.vending-wysiwyg-description {
+  min-height: 48px;
+  margin-top: 4px;
+  resize: vertical;
+  color: #dbdee1;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.48;
+}
+
+.vending-wysiwyg-description::placeholder {
+  color: #dbdee1;
+  opacity: .72;
+}
+
+.vending-wysiwyg-title:focus,
+.vending-wysiwyg-description:focus {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgba(88,101,242,.45);
+}
+
+.vending-preview-products {
+  display: grid;
+  gap: 7px;
+  margin-top: 7px;
+}
+
+.vending-preview-product {
+  width: 100%;
+  display: block;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: #dbdee1;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vending-preview-product:hover,
+.vending-preview-product.editing {
+  border-color: rgba(88,101,242,.48);
+  background: rgba(88,101,242,.09);
+}
+
+.vending-preview-product strong,
+.vending-preview-product span {
+  display: block;
+}
+
+.vending-preview-product strong {
+  color: #f2f3f5;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.vending-preview-product span {
+  margin-top: 2px;
+  color: #dbdee1;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.vending-preview-empty-product {
+  padding: 5px 6px;
+  color: #b5bac1;
+  font-size: 9px;
+}
+
+.vending-preview-image {
+  width: 100%;
+  max-height: 260px;
+  display: block;
+  margin-top: 10px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #1e1f22;
+}
+
+.vending-discord-components {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.discord-component {
+  min-height: 32px;
+  padding: 0 11px;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: default;
+  pointer-events: none;
+}
+
+.discord-component.green {
+  background: #248046;
+}
+
+.discord-component.blue {
+  background: #5865f2;
+}
+
+.vending-preview-match {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 9px;
+  color: #949ba4;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.vending-preview-match > span {
+  color: #57f287;
+  font-weight: 900;
+}
+
+.vending-publish-box {
+  margin-top: 10px;
+  padding: 11px;
+  border: 1px solid #202b41;
+  border-radius: 12px;
+  background: #0a111d;
 }
 
 .vending-panel-update {
