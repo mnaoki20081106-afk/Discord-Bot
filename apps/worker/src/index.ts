@@ -932,8 +932,13 @@ export default {
         return handlePayPayWebhook(request,env,ctx);
       }
       if(url.pathname.startsWith("/api/")){
-        const vendingResponse=await handleVendingApi(request,env,url);
-        if(vendingResponse) return vendingResponse;
+        const isVendingRoute=
+          url.pathname.startsWith("/api/vending/")||
+          /^\/api\/guilds\/\d+\/vending(?:\/|$)/.test(url.pathname);
+        if(isVendingRoute){
+          const vendingResponse=await handleVendingApi(request,env,url);
+          if(vendingResponse) return vendingResponse;
+        }
         return await handleApi(request,env,url);
       }
       throw new HttpError(404,"Not found");
