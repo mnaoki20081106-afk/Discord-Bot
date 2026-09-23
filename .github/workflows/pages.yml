@@ -32,8 +32,6 @@ jobs:
         env:
           VITE_API_BASE_URL: https://discord-bot.c53gftun651-tiktok.workers.dev
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v4
         with:
           path: apps/web/dist
