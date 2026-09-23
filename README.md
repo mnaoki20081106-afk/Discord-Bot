@@ -7,7 +7,7 @@ Webダッシュボードからまとめて管理するモノレポです。
 - Backend: **Cloudflare Workers Free**
 - Database: **Cloudflare D1 Free**
 - Discord: REST API + HTTP Interactions + AutoMod
-- Payments: PayPay Open Payment API (Dynamic QR + Webhook)
+- Payments: PayPay / Kyash vending adapters (payment-link flow)
 - Authentication: Discord OAuth2
 - Cost target: **月額0円（無料枠内）**
 
@@ -77,19 +77,6 @@ panel updates and Web management.
 
 See [docs/VENDING.md](./docs/VENDING.md) for the full feature map and design.
 
-### PayPay Vending
-
-- Webから商品作成
-- Discordへ商品パネル設置
-- PayPay Dynamic QR発行
-- merchantPaymentIdごとの支払い状態確認
-- COMPLETEDを確認した後だけ納品
-- Discord Role自動付与
-- または購入者へDMテキスト自動納品
-
-PayPay部分は公式Open Payment APIを利用します。実運用にはPayPay加盟店/API Credentialが必要です。
-まずSandboxで動作確認してください。
-
 ## Architecture
 
 ```text
@@ -99,10 +86,10 @@ GitHub Pages
         | HTTPS
         v
 Cloudflare Workers
-  OAuth / Discord Interactions / REST API / PayPay Webhook
+  OAuth / Discord Interactions / REST API / Vending
         |
         +---- Discord REST API + AutoMod
-        +---- PayPay Open Payment API
+        +---- PayPay / Kyash payment adapters
         |
         v
 Cloudflare D1
