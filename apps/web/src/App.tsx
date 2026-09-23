@@ -194,17 +194,36 @@ export default function App() {
     setSettings(null);
     setProducts([]);
     setBusy(true);
+    setError(null);
     try {
-      const [serverMeta, serverSettings, serverProducts] = await Promise.all([
-        api<Meta>(`/api/guilds/${guildId}/meta`),
-        api<Settings>(`/api/guilds/${guildId}/settings`),
-        api<Product[]>(`/api/guilds/${guildId}/products`)
-      ]);
+      let serverMeta: Meta;
+      try {
+        serverMeta = await api<Meta>(`/api/guilds/${guildId}/meta`);
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        throw new Error("サーバー構造の取得に失敗しました: " + message);
+      }
+
+      let serverSettings: Settings;
+      try {
+        serverSettings = await api<Settings>(`/api/guilds/${guildId}/settings`);
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        throw new Error("サーバー設定の取得に失敗しました: " + message);
+      }
+
       setMeta(serverMeta);
       setSettings(serverSettings);
-      setProducts(serverProducts);
       setPanelChannel(serverMeta.channels[0]?.id ?? "");
       setProductPanelChannel(serverMeta.channels[0]?.id ?? "");
+
+      try {
+        setProducts(await api<Product[]>(`/api/guilds/${guildId}/products`));
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setProducts([]);
+        setError("販売データの取得に失敗しました: " + message);
+      }
     } catch (reason) {
       fail(reason);
     } finally {
