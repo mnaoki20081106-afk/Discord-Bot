@@ -330,6 +330,28 @@ app.post("/api/guilds/:guildId/channels", async (request) => {
   return { id: channel.id, name: channel.name, type: input.type };
 });
 
+app.patch("/api/guilds/:guildId/channels/reorder", async (request) => {
+  const { guildId } = z.object({ guildId: z.string() }).parse(request.params);
+  await requireGuildAccess(request, guildId);
+  const input = z.object({
+    id: z.string(),
+    position: z.number().int().min(0),
+    parentId: z.string().nullable().optional()
+  }).parse(request.body);
+
+  const channel = client.guilds.cache.get(guildId)!.channels.cache.get(input.id);
+  if (!channel) throw httpError(404, "チャンネルが見つかりません");
+
+  if ("setParent" in channel && input.parentId !== undefined) {
+    await channel.setParent(input.parentId || null, { lockPermissions: false });
+  }
+  if ("setPosition" in channel) {
+    await channel.setPosition(input.position, { reason: "Reordered from Discord Server Manager" });
+  }
+
+  return { ok: true };
+});
+
 app.patch("/api/guilds/:guildId/channels/:channelId", async (request) => {
   const { guildId, channelId } = z.object({
     guildId: z.string(),
