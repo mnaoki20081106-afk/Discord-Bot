@@ -141,13 +141,8 @@ DISCORD_CLIENT_SECRET
 SESSION_ENCRYPTION_KEY
 ```
 
-PayPayを使う場合のみ:
-
-```text
-PAYPAY_API_KEY
-PAYPAY_API_SECRET
-PAYPAY_MERCHANT_ID
-```
+PayPay / Kyashのアカウント接続は、デプロイ後にWeb管理画面からOTP認証します。
+決済アカウント情報をGitHub Secretsへ直接書く必要はありません。
 
 ## 3. Zero-cost Cloudflare deployment
 
@@ -167,9 +162,6 @@ DISCORD_PUBLIC_KEY
 DISCORD_BOT_TOKEN
 DISCORD_CLIENT_SECRET
 SESSION_ENCRYPTION_KEY
-PAYPAY_API_KEY          # PayPay利用時のみ
-PAYPAY_API_SECRET       # PayPay利用時のみ
-PAYPAY_MERCHANT_ID      # 必要な場合のみ
 ```
 
 `SESSION_ENCRYPTION_KEY` は32 bytesをbase64化した値にします。
@@ -193,15 +185,6 @@ https://discord-server-manager.<account>.workers.dev/auth/discord/callback
 ```
 
 に設定します。
-
-PayPay Webhook URL:
-
-```text
-https://discord-server-manager.<account>.workers.dev/paypay/webhook
-```
-
-PayPay Webhook受信後もPayPay APIへ決済状態を再照会し、
-`COMPLETED` を確認してから納品します。
 
 ## 4. GitHub Pages
 
@@ -237,7 +220,6 @@ Global commandはWorker APIから登録でき、現在は
 - OAuth stateをワンタイム検証
 - APIはDiscordのowner / Administrator / Manage Guild権限を毎回確認
 - CORSをDashboard originへ限定
-- API Rate Limit
 - Bot Token / Client Secret / PayPay SecretはBackendのみ
 - 管理BOT自体はAdministratorを要求しない
 
