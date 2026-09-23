@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { API_BASE, api, clearSession, currentSession, login } from "./api";
+import ServerEditor from "./ServerEditor";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -15,8 +16,15 @@ type Meta = {
   id: string;
   name: string;
   icon: string | null;
-  channels: Array<{ id: string; name: string }>;
-  categories: Array<{ id: string; name: string }>;
+  channels: Array<{
+    id: string;
+    name: string;
+    type?: "text" | "announcement";
+    parentId?: string | null;
+    topic?: string;
+    position?: number;
+  }>;
+  categories: Array<{ id: string; name: string; position?: number }>;
   roles: Array<{ id: string; name: string; position: number }>;
 };
 type Settings = {
@@ -123,12 +131,6 @@ export default function App() {
   const [panelChannel, setPanelChannel] = useState("");
   const [productPanelChannel, setProductPanelChannel] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
-  const [channelForm, setChannelForm] = useState({
-    name: "",
-    type: "text" as "text" | "category",
-    parentId: "",
-    topic: ""
-  });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -226,33 +228,6 @@ export default function App() {
         method: "POST"
       });
       flash("テンプレートを適用しました");
-      await selectGuild(selectedId);
-    } catch (reason) {
-      fail(reason);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createCustomChannel(event: FormEvent) {
-    event.preventDefault();
-    if (!selectedId || !channelForm.name.trim()) return;
-    setBusy(true);
-    try {
-      await api(`/api/guilds/${selectedId}/channels`, {
-        method: "POST",
-        body: JSON.stringify({
-          name: channelForm.name,
-          type: channelForm.type,
-          parentId:
-            channelForm.type === "text" && channelForm.parentId
-              ? channelForm.parentId
-              : null,
-          topic: channelForm.type === "text" ? channelForm.topic : undefined
-        })
-      });
-      setChannelForm({ name: "", type: "text", parentId: "", topic: "" });
-      flash("チャンネルを作成しました");
       await selectGuild(selectedId);
     } catch (reason) {
       fail(reason);
@@ -483,6 +458,23 @@ export default function App() {
 
         {selectedGuild?.botInstalled && meta && settings && (
           <>
+            <ServerEditor
+              guildId={selectedId!}
+              guildName={meta.name}
+              meta={meta}
+              onRefresh={async () => {
+                const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta`);
+                setMeta(serverMeta);
+                setPanelChannel((current) =>
+                  serverMeta.channels.some((channel) => channel.id === current)
+                    ? current
+                    : serverMeta.channels[0]?.id ?? ""
+                );
+              }}
+              onNotice={flash}
+              onError={fail}
+            />
+
             <section className="metric-grid">
               <article className="metric card">
                 <span>SECURITY</span>
@@ -673,9 +665,9 @@ export default function App() {
                 </article>
 
                 <article className="card">
-                  <span className="eyebrow">SERVER BUILDER</span>
-                  <h2>チャンネル一括作成</h2>
-                  <p className="muted">既存チャンネルを壊さず、不足分だけ作成します。</p>
+                  <span className="eyebrow">QUICK TEMPLATES</span>
+                  <h2>一括テンプレート</h2>
+                  <p className="muted">必要な時だけ、基本構成を一気に追加できます。</p>
                   <div className="template-grid">
                     <button onClick={() => void applyTemplate("community")}>
                       <strong>Community</strong>
@@ -690,68 +682,6 @@ export default function App() {
                       <small>FAQ / Ticket / Staff</small>
                     </button>
                   </div>
-
-                  <form className="channel-builder" onSubmit={(e) => void createCustomChannel(e)}>
-                    <div className="form-grid two">
-                      <Field label="作成する種類">
-                        <select
-                          value={channelForm.type}
-                          onChange={(e) =>
-                            setChannelForm({
-                              ...channelForm,
-                              type: e.target.value as "text" | "category"
-                            })
-                          }
-                        >
-                          <option value="text">テキストチャンネル</option>
-                          <option value="category">カテゴリ</option>
-                        </select>
-                      </Field>
-                      <Field label="名前">
-                        <input
-                          required
-                          value={channelForm.name}
-                          onChange={(e) =>
-                            setChannelForm({ ...channelForm, name: e.target.value })
-                          }
-                          placeholder={channelForm.type === "category" ? "INFORMATION" : "general"}
-                        />
-                      </Field>
-                    </div>
-
-                    {channelForm.type === "text" && (
-                      <>
-                        <Field label="親カテゴリ">
-                          <select
-                            value={channelForm.parentId}
-                            onChange={(e) =>
-                              setChannelForm({ ...channelForm, parentId: e.target.value })
-                            }
-                          >
-                            <option value="">カテゴリなし</option>
-                            {meta.categories.map((category) => (
-                              <option key={category.id} value={category.id}>
-                                {category.name}
-                              </option>
-                            ))}
-                          </select>
-                        </Field>
-                        <Field label="トピック">
-                          <input
-                            value={channelForm.topic}
-                            onChange={(e) =>
-                              setChannelForm({ ...channelForm, topic: e.target.value })
-                            }
-                            placeholder="任意"
-                          />
-                        </Field>
-                      </>
-                    )}
-
-                    <button className="secondary" type="submit">
-                      個別に作成
-                    </button>
-                  </form>
                 </article>
               </div>
             </section>
