@@ -156,22 +156,29 @@ export default function App() {
 
   async function loadBase() {
     setBusy(true);
+    setError(null);
     try {
-      const [user, serverList, service] = await Promise.all([
-        api<User>("/api/me"),
-        api<Guild[]>("/api/guilds"),
-        api<ServiceStatus>("/api/status")
-      ]);
-      setMe(user);
-      setGuilds(serverList);
+      const service = await api<ServiceStatus>("/api/status");
       setStatus(service);
-      const firstGuild = serverList[0];
-      if (!selectedId && firstGuild) {
-        await selectGuild(firstGuild.id);
+
+      const user = await api<User>("/api/me");
+      setMe(user);
+
+      try {
+        const serverList = await api<Guild[]>("/api/guilds");
+        setGuilds(serverList);
+        const firstGuild = serverList[0];
+        if (!selectedId && firstGuild) {
+          await selectGuild(firstGuild.id);
+        }
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setGuilds([]);
+        setError("BOT参加サーバー一覧の取得に失敗しました: " + message);
       }
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
-      setError("ログインは成功しましたが、管理データの取得に失敗しました: " + message);
+      setError("管理画面の初期化に失敗しました: " + message);
       setNotice(null);
     } finally {
       setBusy(false);
