@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { API_BASE, api, clearSession, currentSession, login } from "./api";
 import ServerEditor from "./ServerEditor";
+import VendingManager from "./VendingManager";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -685,6 +686,14 @@ export default function App() {
                 </article>
               </div>
             </section>
+
+            <VendingManager
+              guildId={selectedId!}
+              channels={meta.channels}
+              roles={meta.roles}
+              onNotice={flash}
+              onError={fail}
+            />
 
           </>
         )}
