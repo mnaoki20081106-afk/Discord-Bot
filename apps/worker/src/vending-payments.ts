@@ -14,7 +14,7 @@ function payHeaders(extra?:Record<string,string>){
 }
 
 function payCode(link:string){
-  return link.trim().replace(/^https:\/\/pay\.paypay\.ne\.jp\//,"").split(/[?#]/)[0];
+  return link.trim().replace(/^https:\/\/pay\.paypay\.ne\.jp\//,"").split(/[?#]/)[0] ?? "";
 }
 
 export async function payPayLoginStart(phone:string,password:string,uuid:string){
