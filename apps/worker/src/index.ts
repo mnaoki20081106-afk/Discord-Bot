@@ -200,6 +200,17 @@ async function publishTicketPanel(env:Env,channelId:string){
   });
 }
 
+async function requireMessageChannel(env:Env,guildId:string,channelId:string):Promise<void>{
+  if(!/^\d+$/.test(channelId)) throw new HttpError(400,"設置先チャンネルが不正です");
+  const channel=await botJson<{id:string;guild_id?:string;type:number}>(env,`/channels/${channelId}`);
+  if(channel.guild_id&&channel.guild_id!==guildId){
+    throw new HttpError(400,"別サーバーのチャンネルには設置できません");
+  }
+  if(![0,5].includes(channel.type)){
+    throw new HttpError(400,"Ticketパネルはテキストまたはアナウンスチャンネルに設置してください");
+  }
+}
+
 async function publishProductPanel(env:Env,channelId:string,product:ProductRow){
   await sendMessage(env,channelId,{
     embeds:[{
@@ -734,10 +745,13 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   const ticketPanel=url.pathname.match(/^\/api\/guilds\/(\d+)\/tickets\/panel$/);
   if(ticketPanel&&request.method==="POST"){
-    await requireGuild(request,env,ticketPanel[1]!);
-    const {channelId}=await bodyObject<{channelId:string}>(request);
+    const guildId=ticketPanel[1]!;
+    await requireGuild(request,env,guildId);
+    const {channelId}=await bodyObject<{channelId?:string}>(request);
+    if(!channelId) throw new HttpError(400,"設置先チャンネルを選択してください");
+    await requireMessageChannel(env,guildId,channelId);
     await publishTicketPanel(env,channelId);
-    return json(env,{ok:true});
+    return json(env,{ok:true,channelId});
   }
 
   const productsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/products$/);
@@ -969,7 +983,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v13-d1-batch",
+          version:"dashboard-auth-v14-ticket-panel",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -1007,7 +1021,8 @@ export default {
         (url.pathname==="/api/status"&&request.method==="GET")||
         (url.pathname==="/api/me"&&request.method==="GET")||
         (url.pathname==="/api/guilds"&&request.method==="GET")||
-        (/^\/api\/guilds\/\d+\/meta$/.test(url.pathname)&&request.method==="GET")
+        (/^\/api\/guilds\/\d+\/meta$/.test(url.pathname)&&request.method==="GET")||
+        (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")
       ){
         return await handleApi(request,env,url);
       }
