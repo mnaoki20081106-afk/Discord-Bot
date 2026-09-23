@@ -426,3 +426,13 @@ textarea { min-height: 92px; resize: vertical; }
   .button-row { flex-direction: column; }
   .login-card { padding: 30px 24px; }
 }
+
+.channel-builder {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #1b2437;
+}
+.channel-builder > .secondary {
+  margin-top: 14px;
+  width: 100%;
+}
