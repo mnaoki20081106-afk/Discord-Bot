@@ -4,16 +4,70 @@ export const API_BASE =
 
 const SESSION_KEY = "dsm_session";
 
+function readStoredSession(): string | null {
+  let persistent: string | null = null;
+  try {
+    persistent = localStorage.getItem(SESSION_KEY);
+  } catch {
+    // Some privacy modes can deny persistent storage.
+  }
+  if (persistent) return persistent;
+
+  // Migrate sessions created by older dashboard versions that used
+  // sessionStorage, so an already logged-in browser becomes persistent
+  // without asking for the password again.
+  let legacy: string | null = null;
+  try {
+    legacy = sessionStorage.getItem(SESSION_KEY);
+  } catch {
+    // Ignore unavailable session storage.
+  }
+  if (!legacy) return null;
+
+  try {
+    localStorage.setItem(SESSION_KEY, legacy);
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Fall back to the current tab session when persistent storage is blocked.
+  }
+  return legacy;
+}
+
+function storeSession(token: string): void {
+  try {
+    localStorage.setItem(SESSION_KEY, token);
+    try {
+      sessionStorage.removeItem(SESSION_KEY);
+    } catch {
+      // Nothing to migrate.
+    }
+    return;
+  } catch {
+    // Fall back for strict/private browser modes.
+  }
+
+  sessionStorage.setItem(SESSION_KEY, token);
+}
+
 export function bootstrapSession(): string | null {
-  return sessionStorage.getItem(SESSION_KEY);
+  return readStoredSession();
 }
 
 export function currentSession(): string | null {
-  return sessionStorage.getItem(SESSION_KEY);
+  return readStoredSession();
 }
 
 export function clearSession(): void {
-  sessionStorage.removeItem(SESSION_KEY);
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Ignore unavailable persistent storage.
+  }
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Ignore unavailable session storage.
+  }
 }
 
 export async function login(password: string): Promise<void> {
@@ -27,7 +81,7 @@ export async function login(password: string): Promise<void> {
   if (!response.ok || !payload.token) {
     throw new Error(payload.message || `HTTP ${response.status}`);
   }
-  sessionStorage.setItem(SESSION_KEY, payload.token);
+  storeSession(payload.token);
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
