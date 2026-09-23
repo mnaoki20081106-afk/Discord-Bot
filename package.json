@@ -11,7 +11,8 @@
     "dev:server": "npm run dev --workspace @dsm/server",
     "dev:web": "npm run dev --workspace @dsm/web",
     "build": "npm run build --workspaces",
-    "start": "npm run start --workspace @dsm/server"
+    "start": "npm run start --workspace @dsm/server",
+    "deploy:worker": "npm exec --workspace @dsm/worker -- wrangler deploy"
   },
   "engines": {
     "node": ">=20"
