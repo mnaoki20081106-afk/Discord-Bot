@@ -56,7 +56,31 @@ export async function botFetch(
   const headers=new Headers(init.headers);
   headers.set("Authorization",`Bot ${env.DISCORD_BOT_TOKEN.trim()}`);
   if(init.body&&!headers.has("Content-Type")) headers.set("Content-Type","application/json");
-  return fetch(`${API}${path}`,{...init,headers});
+
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(),12_000);
+  const externalSignal=init.signal;
+  const abortFromExternal=()=>controller.abort();
+  externalSignal?.addEventListener("abort",abortFromExternal,{once:true});
+
+  try{
+    return await fetch(`${API}${path}`,{
+      ...init,
+      headers,
+      signal:controller.signal
+    });
+  }catch(error){
+    if(controller.signal.aborted&&!externalSignal?.aborted){
+      throw new DiscordApiError(
+        504,
+        "Discord APIの応答がタイムアウトしました。少し待って再試行してください"
+      );
+    }
+    throw error;
+  }finally{
+    clearTimeout(timeoutId);
+    externalSignal?.removeEventListener("abort",abortFromExternal);
+  }
 }
 
 export async function botJson<T>(
