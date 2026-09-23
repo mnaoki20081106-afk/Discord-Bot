@@ -1,0 +1,26 @@
+name: Render Health Probe
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe Render health endpoint
+        env:
+          HEALTH_URL: ${{ vars.RENDER_HEALTH_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "RENDER_HEALTH_URL repository variable is not configured; skipping."
+            exit 0
+          fi
+
+          echo "Probing $HEALTH_URL"
+          curl             --fail             --silent             --show-error             --location             --max-time 60             --retry 2             --retry-delay 5             "$HEALTH_URL"
+          echo
