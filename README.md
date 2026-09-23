@@ -68,6 +68,15 @@ Webからテンプレートを1クリックで適用できます。
 
 既存チャンネルを消さず、不足しているRole / Category / Channelだけを追加します。
 
+### Vending machine
+
+The supplied multi-function vending implementation has been ported to the
+Cloudflare Worker/D1 architecture. It supports PayPay/Kyash, multiple vending
+machines, finite/infinite stock, coupons, logs, role grants, stock alerts,
+panel updates and Web management.
+
+See [docs/VENDING.md](./docs/VENDING.md) for the full feature map and design.
+
 ### PayPay Vending
 
 - Webから商品作成
