@@ -945,7 +945,7 @@ export default {
 
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v8-diagnostics",
+          version:"dashboard-auth-v9-bootstrap",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -974,6 +974,16 @@ export default {
       }
       if(url.pathname==="/api/login"&&request.method==="POST"){
         return handleDashboardLogin(request,env);
+      }
+
+      // Read-only dashboard bootstrap routes must not depend on the full historical schema.
+      // Their only DB dependency is dashboard_sessions, which self-heals in sessionFromRequest().
+      if(
+        (url.pathname==="/api/status"&&request.method==="GET")||
+        (url.pathname==="/api/me"&&request.method==="GET")||
+        (url.pathname==="/api/guilds"&&request.method==="GET")
+      ){
+        return await handleApi(request,env,url);
       }
 
       await ensureSchema(env);
