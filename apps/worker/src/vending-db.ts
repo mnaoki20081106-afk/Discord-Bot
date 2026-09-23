@@ -129,7 +129,12 @@ export async function reserveOrder(env:Env,input:{vmId:string;product:VmProduct;
     }
   }
   const method=total===0?"free":input.method,status=total===0?"paid":"awaiting_payment";
-  await env.DB.prepare("INSERT INTO vending_orders(id,vending_machine_id,product_id,guild_id,user_id,payment_method,quantity,unit_price,discount_each,total_amount,status,reserved_until,created_at,updated_at,paid_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(orderId,input.vmId,input.product.id,input.guildId,input.userId,method,q,unit,input.discount,total,status,input.product.infinite_stock?null:until,now,now,total===0?now:null).run();
+  try{
+    await env.DB.prepare("INSERT INTO vending_orders(id,vending_machine_id,product_id,guild_id,user_id,payment_method,quantity,unit_price,discount_each,total_amount,status,reserved_until,created_at,updated_at,paid_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(orderId,input.vmId,input.product.id,input.guildId,input.userId,method,q,unit,input.discount,total,status,input.product.infinite_stock?null:until,now,now,total===0?now:null).run();
+  }catch(error){
+    await releaseStock(env,orderId);
+    throw error;
+  }
   return await getOrder(env,orderId);
 }
 export async function getOrder(env:Env,id:string){ return await env.DB.prepare("SELECT * FROM vending_orders WHERE id=?").bind(id).first<VmOrder>()??null; }
@@ -146,11 +151,22 @@ export async function markPaid(env:Env,orderId:string,provider:string,hash:strin
   if(hash) await env.DB.prepare("INSERT INTO vending_used_payment_links(link_hash,provider,order_id,used_at) VALUES (?,?,?,?)").bind(hash,provider,orderId,now).run();
   await env.DB.prepare("UPDATE vending_orders SET status='paid',paid_at=?,updated_at=? WHERE id=?").bind(now,now,orderId).run();
 }
+export async function claimDelivery(env:Env,orderId:string):Promise<boolean>{
+  const result=await env.DB.prepare(
+    "UPDATE vending_orders SET status='delivering',updated_at=? WHERE id=? AND status='paid' AND delivered_at IS NULL"
+  ).bind(Date.now(),orderId).run();
+  return (result.meta.changes??0)===1;
+}
+export async function resetDelivery(env:Env,orderId:string):Promise<void>{
+  await env.DB.prepare(
+    "UPDATE vending_orders SET status='paid',updated_at=? WHERE id=? AND status='delivering' AND delivered_at IS NULL"
+  ).bind(Date.now(),orderId).run();
+}
 export async function finishDelivery(env:Env,order:VmOrder){
   const now=Date.now();
   await env.DB.batch([
     env.DB.prepare("UPDATE vending_stock SET state='sold',sold_at=?,reserved_until=NULL WHERE order_id=? AND state='reserved'").bind(now,order.id),
-    env.DB.prepare("UPDATE vending_orders SET status='delivered',delivered_at=?,updated_at=? WHERE id=?").bind(now,now,order.id),
+    env.DB.prepare("UPDATE vending_orders SET status='delivered',delivered_at=?,updated_at=? WHERE id=? AND status='delivering'").bind(now,now,order.id),
     env.DB.prepare("UPDATE vending_products SET sales_count=sales_count+?,updated_at=? WHERE id=?").bind(order.quantity,now,order.product_id)
   ]);
 }
