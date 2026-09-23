@@ -436,3 +436,25 @@ textarea { min-height: 92px; resize: vertical; }
   margin-top: 14px;
   width: 100%;
 }
+
+.serverless-note {
+  margin-top: 16px;
+  padding: 13px 14px;
+  border: 1px solid #24304b;
+  border-radius: 12px;
+  background: #0b1324;
+}
+.serverless-note strong,
+.serverless-note span {
+  display: block;
+}
+.serverless-note strong {
+  color: #aab6ff;
+  font-size: 11px;
+}
+.serverless-note span {
+  margin-top: 5px;
+  color: #71819d;
+  font-size: 10px;
+  line-height: 1.55;
+}
