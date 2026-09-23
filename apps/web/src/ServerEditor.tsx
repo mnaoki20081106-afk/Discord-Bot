@@ -115,6 +115,10 @@ type TouchGesture = {
   identifier: number;
   startX: number;
   startY: number;
+  grabOffsetX: number;
+  grabOffsetY: number;
+  width: number;
+  height: number;
   timer: number;
 };
 
@@ -153,7 +157,17 @@ export default function ServerEditor({
   const [pressingChannelId, setPressingChannelId] = useState<string | null>(null);
   const [touchDraggingId, setTouchDraggingId] = useState<string | null>(null);
   const [touchDropTarget, setTouchDropTarget] = useState<TouchDropTarget>(null);
+  const [touchDragGhost, setTouchDragGhost] = useState<{
+    channelId: string;
+    name: string;
+    type?: ServerEditorMeta["channels"][number]["type"];
+    width: number;
+    height: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const touchGestureRef = useRef<TouchGesture | null>(null);
+  const touchGhostRef = useRef<HTMLDivElement | null>(null);
   const touchDraggingIdRef = useRef<string | null>(null);
   const touchDropTargetRef = useRef<TouchDropTarget>(null);
   const suppressClickUntilRef = useRef(0);
@@ -405,11 +419,17 @@ export default function ServerEditor({
     if (event.touches.length !== 1 || saving) return;
     clearPendingTouch();
     const touch = event.touches[0]!;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const channel = meta.channels.find((item) => item.id === channelId);
     const gesture: TouchGesture = {
       channelId,
       identifier: touch.identifier,
       startX: touch.clientX,
       startY: touch.clientY,
+      grabOffsetX: touch.clientX - rect.left,
+      grabOffsetY: touch.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
       timer: 0
     };
     gesture.timer = window.setTimeout(() => {
@@ -417,6 +437,15 @@ export default function ServerEditor({
       touchDraggingIdRef.current = channelId;
       setTouchDraggingId(channelId);
       setDragging({ kind: "channel", id: channelId });
+      setTouchDragGhost({
+        channelId,
+        name: channel?.name ?? "channel",
+        type: channel?.type,
+        width: gesture.width,
+        height: gesture.height,
+        x: gesture.startX - gesture.grabOffsetX,
+        y: gesture.startY - gesture.grabOffsetY
+      });
       setPressingChannelId(null);
       suppressClickUntilRef.current = Date.now() + 700;
     }, 450);
@@ -502,6 +531,7 @@ export default function ServerEditor({
     setPressingChannelId(null);
     setTouchDraggingId(null);
     setTouchDropTarget(null);
+    setTouchDragGhost(null);
     setDragging(null);
     suppressClickUntilRef.current = Date.now() + 700;
 
@@ -540,6 +570,13 @@ export default function ServerEditor({
   }
 
   useEffect(() => {
+    return () => {
+      const gesture = touchGestureRef.current;
+      if (gesture) window.clearTimeout(gesture.timer);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!touchDraggingId) return;
 
     document.body.classList.add("dsm-touch-reordering");
@@ -553,6 +590,13 @@ export default function ServerEditor({
       if (!touch) return;
 
       event.preventDefault();
+
+      const ghost = touchGhostRef.current;
+      if (ghost) {
+        const x = touch.clientX - gesture.grabOffsetX;
+        const y = touch.clientY - gesture.grabOffsetY;
+        ghost.style.transform = `translate3d(${x}px, ${y}px, 0) scale(1.025)`;
+      }
 
       const scroller = channelScrollRef.current;
       if (scroller) {
@@ -585,6 +629,7 @@ export default function ServerEditor({
       touchGestureRef.current = null;
       setTouchDropTarget(null);
       setTouchDraggingId(null);
+      setTouchDragGhost(null);
       setDragging(null);
       setPressingChannelId(null);
     };
@@ -603,6 +648,24 @@ export default function ServerEditor({
 
   return (
     <section className="card server-editor-card">
+      {touchDragGhost && (
+        <div
+          ref={touchGhostRef}
+          className="touch-channel-ghost"
+          style={{
+            width: touchDragGhost.width,
+            height: touchDragGhost.height,
+            transform: `translate3d(${touchDragGhost.x}px, ${touchDragGhost.y}px, 0) scale(1.025)`
+          }}
+          aria-hidden="true"
+        >
+          <span className="channel-hash">
+            {touchDragGhost.type === "voice" || touchDragGhost.type === "stage" ? "🔊" : "#"}
+          </span>
+          <span className="channel-name">{touchDragGhost.name}</span>
+          <span className="touch-ghost-grip">⋮⋮</span>
+        </div>
+      )}
       <div className="section-head server-editor-heading">
         <div>
           <span className="eyebrow">LIVE SERVER EDITOR</span>
