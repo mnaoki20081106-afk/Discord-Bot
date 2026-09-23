@@ -7,10 +7,26 @@ import {
 } from "node:crypto";
 import { env } from "./config.js";
 
-const key = Buffer.from(env.SESSION_ENCRYPTION_KEY, "base64");
-if (key.length !== 32) {
-  throw new Error("SESSION_ENCRYPTION_KEY must be exactly 32 bytes encoded as base64");
+function deriveEncryptionKey(secret: string): Buffer {
+  const value = secret.trim();
+  if (value.length < 32) {
+    throw new Error("SESSION_ENCRYPTION_KEY must be at least 32 characters");
+  }
+
+  // Backward compatibility for the old 32-byte base64 format.
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(value) && value.length % 4 === 0) {
+    try {
+      const decoded = Buffer.from(value, "base64");
+      if (decoded.length === 32) return decoded;
+    } catch {
+      // Fall through to SHA-256 derivation.
+    }
+  }
+
+  return createHash("sha256").update(value, "utf8").digest();
 }
+
+const key = deriveEncryptionKey(env.SESSION_ENCRYPTION_KEY);
 
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");
