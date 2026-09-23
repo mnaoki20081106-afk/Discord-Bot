@@ -41,6 +41,7 @@ export type DiscordRole={
   permissions:string;
   position:number;
   managed:boolean;
+  color:number;
 };
 
 export class DiscordApiError extends Error {
