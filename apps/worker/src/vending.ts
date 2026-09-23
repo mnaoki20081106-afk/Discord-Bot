@@ -277,8 +277,17 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
   return null;
 }
 
+function componentEmoji(raw:string|null){
+  if(!raw) return undefined;
+  const custom=raw.match(/^<(a?):([A-Za-z0-9_]+):(\d+)>$/);
+  if(custom){
+    return {id:custom[3]!,name:custom[2]!,animated:custom[1]==="a"};
+  }
+  return {name:raw};
+}
+
 function selectOptions(products:Array<VmProduct&{stock_count:number}>,method:"paypay"|"kyash"){
-  return products.slice(0,25).map(p=>({label:p.name.slice(0,100),value:p.id,description:(method==="paypay"?p.price_paypay:p.price_kyash)+"円 | 在庫 "+(p.infinite_stock?"∞":p.stock_count)+" | 販売 "+p.sales_count,...(p.emoji?{emoji:{name:p.emoji}}:{})}));
+  return products.slice(0,25).map(p=>({label:p.name.slice(0,100),value:p.id,description:(method==="paypay"?p.price_paypay:p.price_kyash)+"円 | 在庫 "+(p.infinite_stock?"∞":p.stock_count)+" | 販売 "+p.sales_count,...(p.emoji?{emoji:componentEmoji(p.emoji)}:{})}));
 }
 
 async function deliver(env:Env,order:VmOrder){
