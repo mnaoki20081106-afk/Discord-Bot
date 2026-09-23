@@ -561,6 +561,45 @@ textarea { min-height: 92px; resize: vertical; }
   justify-content: flex-end;
 }
 
+.permission-preview-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.permission-preview-role-select {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 5px 3px 9px;
+  border: 1px solid #263149;
+  border-radius: 10px;
+  color: #7888a5;
+  background: #11192a;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.permission-preview-role-select > span {
+  flex: 0 0 auto;
+}
+
+.permission-preview-role-select select {
+  width: auto;
+  min-width: 112px;
+  max-width: 180px;
+  height: 27px;
+  padding: 0 24px 0 7px;
+  border: 0;
+  border-radius: 7px;
+  color: #dce4f5;
+  background-color: #182238;
+  font-size: 9px;
+  font-weight: 800;
+}
+
 .permission-preview-toggle {
   display: inline-flex;
   align-items: center;
@@ -620,6 +659,34 @@ textarea { min-height: 92px; resize: vertical; }
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 15px;
+}
+
+.permission-preview-context {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid #232428;
+  color: #949ba4;
+  background: #25272b;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.permission-preview-context-icon {
+  color: #7d89ff;
+  font-size: 9px;
+}
+
+.permission-preview-context strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d7dbff;
+  font-size: 9px;
+  font-weight: 900;
 }
 
 .discord-plus {
@@ -954,13 +1021,30 @@ body.dsm-touch-reordering .discord-category {
 }
 
 .permission-badge {
+  max-width: 150px;
   justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 6px;
   border-radius: 999px;
   font-size: 8px;
   font-weight: 900;
   letter-spacing: .01em;
   white-space: nowrap;
+  overflow: hidden;
+}
+
+.permission-badge-role {
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: .78;
+}
+
+.permission-badge-state {
+  flex: 0 0 auto;
 }
 
 .permission-badge.allow {
@@ -1578,10 +1662,40 @@ body.dsm-touch-reordering .discord-category {
     justify-content: stretch;
   }
 
-  .permission-preview-toggle,
-  .editor-heading-actions .editor-add-category {
-    flex: 1;
+  .permission-preview-controls {
+    width: 100%;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .permission-preview-toggle {
     justify-content: center;
+  }
+
+  .permission-preview-role-select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .permission-preview-role-select select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .editor-heading-actions .editor-add-category {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .permission-badge {
+    max-width: 118px;
+    gap: 3px;
+    padding-inline: 5px;
+  }
+
+  .permission-badge-role {
+    max-width: 52px;
   }
 
   .permission-row {
@@ -2871,4 +2985,34 @@ body.dsm-touch-reordering .discord-category {
   .vending-preview-product span { font-size: 12px; line-height: 1.6; }
   .vending-publish-box { margin-top: 16px; }
   .vending-product-editor .form-grid { grid-template-columns: minmax(0,1fr); }
+}
+
+
+@media (max-width: 430px) {
+  .permission-preview-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .permission-preview-role-select {
+    justify-content: space-between;
+  }
+
+  .discord-channel {
+    grid-template-columns: 22px minmax(0, 1fr) auto 16px;
+    gap: 2px;
+    padding-inline: 6px;
+  }
+
+  .permission-badge {
+    max-width: 104px;
+    font-size: 7px;
+  }
+
+  .permission-badge-role {
+    max-width: 44px;
+  }
+
+  .permission-preview-context {
+    padding-inline: 8px;
+  }
 }
