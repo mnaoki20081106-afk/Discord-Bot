@@ -590,6 +590,29 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     return json(env,{id:created.id,name:created.name,type:input.type});
   }
 
+  const channelReorderMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/channels\/reorder$/);
+  if(channelReorderMatch&&request.method==="PATCH"){
+    const guildId=channelReorderMatch[1]!;
+    await requireGuild(request,env,guildId);
+    const input=await bodyObject<{
+      id:string;
+      position:number;
+      parentId?:string|null;
+    }>(request);
+    if(!input.id||!Number.isInteger(input.position)) throw new HttpError(400,"並び替え情報が不正です");
+    await botJson(env,`/guilds/${guildId}/channels`,{
+      method:"PATCH",
+      body:JSON.stringify([{
+        id:input.id,
+        position:input.position,
+        ...(input.parentId!==undefined
+          ?{parent_id:input.parentId||null,lock_permissions:false}
+          :{})
+      }])
+    });
+    return json(env,{ok:true});
+  }
+
   const channelItemMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/channels\/(\d+)$/);
   if(channelItemMatch){
     const guildId=channelItemMatch[1]!;
