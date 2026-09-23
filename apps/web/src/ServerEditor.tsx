@@ -72,6 +72,18 @@ const EMPTY_PERMISSION_DRAFT: Record<PermissionKey, PermissionMode> = {
   speak: "inherit"
 };
 
+type BulkPermissionMode = PermissionMode | "keep";
+
+const EMPTY_BULK_PERMISSION_DRAFT: Record<PermissionKey, BulkPermissionMode> = {
+  view: "keep",
+  send: "keep",
+  react: "keep",
+  files: "keep",
+  threads: "keep",
+  connect: "keep",
+  speak: "keep"
+};
+
 function permissionMode(
   channel: ServerEditorMeta["channels"][number],
   targetId: string,
@@ -120,6 +132,7 @@ type TouchGesture = {
   width: number;
   height: number;
   timer: number;
+  armed: boolean;
 };
 
 type Selection =
@@ -179,6 +192,13 @@ export default function ServerEditor({
   const [permissionTargetId, setPermissionTargetId] = useState(guildId);
   const [permissionDraft, setPermissionDraft] =
     useState<Record<PermissionKey, PermissionMode>>(EMPTY_PERMISSION_DRAFT);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
+  const [bulkPermissionDraft, setBulkPermissionDraft] =
+    useState<Record<PermissionKey, BulkPermissionMode>>(EMPTY_BULK_PERMISSION_DRAFT);
+  const [bulkSavingProgress, setBulkSavingProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [showPermissionBadges, setShowPermissionBadges] = useState(
     () => localStorage.getItem("dsm_show_permission_badges") !== "0"
   );
@@ -223,14 +243,41 @@ export default function ServerEditor({
         ? `@${permissionPreviewRole.name}`
         : "@everyone";
 
+  const bulkMode = bulkSelectedIds.length > 0;
+
+  const bulkSelectedChannels = useMemo(
+    () => meta.channels.filter((channel) => bulkSelectedIds.includes(channel.id)),
+    [meta.channels, bulkSelectedIds]
+  );
+
+  const bulkPermissionRows = useMemo(() => {
+    const hasText = bulkSelectedChannels.some(
+      (channel) => channel.type !== "voice" && channel.type !== "stage"
+    );
+    const hasVoice = bulkSelectedChannels.some(
+      (channel) => channel.type === "voice" || channel.type === "stage"
+    );
+    if (hasText && hasVoice) {
+      const seen = new Set<PermissionKey>();
+      return [...TEXT_PERMISSION_ROWS, ...VOICE_PERMISSION_ROWS].filter((row) => {
+        if (seen.has(row.key)) return false;
+        seen.add(row.key);
+        return true;
+      });
+    }
+    return hasVoice ? VOICE_PERMISSION_ROWS : TEXT_PERMISSION_ROWS;
+  }, [bulkSelectedChannels]);
+
   useEffect(() => {
     const valid =
       permissionPreviewRoleId === guildId ||
       meta.roles.some((role) => role.id === permissionPreviewRoleId);
     if (valid) return;
     setPermissionPreviewRoleId(guildId);
+    setPermissionTargetId(guildId);
+    if (selectedChannel) setPermissionDraft(draftFor(selectedChannel, guildId));
     localStorage.setItem(`dsm_permission_preview_role_${guildId}`, guildId);
-  }, [permissionPreviewRoleId, guildId, meta.roles]);
+  }, [permissionPreviewRoleId, guildId, meta.roles, selectedChannel]);
 
   function openChannel(id: string) {
     const channel = meta.channels.find((item) => item.id === id);
@@ -239,8 +286,8 @@ export default function ServerEditor({
     setName(channel.name);
     setTopic(channel.topic ?? "");
     setParentId(channel.parentId ?? "");
-    setPermissionTargetId(guildId);
-    setPermissionDraft(draftFor(channel, guildId));
+    setPermissionTargetId(permissionPreviewRoleId);
+    setPermissionDraft(draftFor(channel, permissionPreviewRoleId));
   }
 
   function openCategory(id: string) {
@@ -258,6 +305,100 @@ export default function ServerEditor({
     setName("");
     setTopic("");
     setParentId(parent ?? "");
+  }
+
+  function enterBulkSelection(channelId: string) {
+    const channel = meta.channels.find((item) => item.id === channelId);
+    if (!channel) return;
+    setSelection(null);
+    setBulkSelectedIds([channelId]);
+    setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
+    setPermissionTargetId(permissionPreviewRoleId);
+    setPressingChannelId(null);
+    suppressClickUntilRef.current = Date.now() + 700;
+  }
+
+  function exitBulkSelection() {
+    setBulkSelectedIds([]);
+    setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
+    setBulkSavingProgress(null);
+  }
+
+  function toggleBulkChannel(channelId: string) {
+    setBulkSelectedIds((current) => {
+      if (current.includes(channelId)) {
+        const next = current.filter((id) => id !== channelId);
+        if (next.length === 0) {
+          setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
+          setBulkSavingProgress(null);
+        }
+        return next;
+      }
+      return [...current, channelId];
+    });
+  }
+
+  async function saveBulkPermissions() {
+    if (!bulkSelectedChannels.length) return;
+
+    const hasChange = Object.values(bulkPermissionDraft).some(
+      (mode) => mode !== "keep"
+    );
+    if (!hasChange) {
+      onNotice("変更する権限を選択してください");
+      return;
+    }
+
+    setSaving(true);
+    setBulkSavingProgress({ done: 0, total: bulkSelectedChannels.length });
+    try {
+      let completed = 0;
+      for (const channel of bulkSelectedChannels) {
+        const relevantKeys = new Set<PermissionKey>(
+          (channel.type === "voice" || channel.type === "stage"
+            ? VOICE_PERMISSION_ROWS
+            : TEXT_PERMISSION_ROWS
+          ).map((row) => row.key)
+        );
+
+        const permissions: Partial<Record<PermissionKey, PermissionMode>> = {};
+        for (const [rawKey, mode] of Object.entries(bulkPermissionDraft)) {
+          const key = rawKey as PermissionKey;
+          if (mode === "keep" || !relevantKeys.has(key)) continue;
+          permissions[key] = mode;
+        }
+
+        if (Object.keys(permissions).length > 0) {
+          await api(
+            `/api/guilds/${guildId}/channels/${channel.id}/permissions/${permissionPreviewRoleId}`,
+            {
+              method: "PATCH",
+              body: JSON.stringify({
+                targetType: "role",
+                permissions
+              })
+            }
+          );
+        }
+
+        completed += 1;
+        setBulkSavingProgress({
+          done: completed,
+          total: bulkSelectedChannels.length
+        });
+      }
+
+      await onRefresh();
+      setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
+      onNotice(
+        `${bulkSelectedChannels.length}チャンネルの${permissionPreviewRoleName}権限を更新しました`
+      );
+    } catch (reason) {
+      onError(reason);
+    } finally {
+      setSaving(false);
+      setBulkSavingProgress(null);
+    }
   }
 
   async function savePermissions() {
