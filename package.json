@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "workspaces": [
     "apps/server",
-    "apps/web"
+    "apps/web",
+    "apps/worker"
   ],
   "scripts": {
     "dev:server": "npm run dev --workspace @dsm/server",
