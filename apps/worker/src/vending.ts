@@ -6,7 +6,7 @@ import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
   deleteCoupon, deleteMachine, deleteVmProduct, ensureVendingSchema, finishDelivery, getCoupon,
   getMachine, getOrder, getPayPay, getStockNotify, getVmProduct, listCoupons, listMachines, listVmProducts,
-  markPaid, orderStock, releaseStock, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, stockContents,
+  markPaid, orderStock, releaseStock, removePayPay, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, stockContents,
   takePayChallenge, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
@@ -217,6 +217,11 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
   }
   if(url.pathname==="/api/vending/paypay/status"&&request.method==="GET"){
     const s=await sessionFromRequest(request,env); return json(env,{registered:Boolean(await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY))});
+  }
+  if(url.pathname==="/api/vending/paypay/logout"&&request.method==="POST"){
+    const s=await sessionFromRequest(request,env);
+    await removePayPay(env,s.user_id);
+    return json(env,{ok:true});
   }
   if(url.pathname==="/api/vending/paypay/login/start"&&request.method==="POST"){
     const s=await sessionFromRequest(request,env),b=await input<{phone:string;password:string}>(request),uuid=randomId(),result:any=await payPayLoginStart(b.phone,b.password,uuid);
