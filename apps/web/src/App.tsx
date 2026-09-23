@@ -57,6 +57,9 @@ type Product = {
 };
 type ServiceStatus = {
   discordReady: boolean;
+  discordUser?: string | null;
+  discordError?: string | null;
+  guildCount?: number | null;
   dashboardPasswordConfigured: boolean;
   payPayConfigured: boolean;
   payPayEnvironment: string;
@@ -453,8 +456,14 @@ export default function App() {
                 BOTをサーバーへ追加
               </a>
             )}
-            <span className={`status-pill ${status?.discordReady ? "good" : "bad"}`}>
+            <span
+              className={`status-pill ${status?.discordReady ? "good" : "bad"}`}
+              title={status?.discordError ?? undefined}
+            >
               <i /> BOT {status?.discordReady ? "Online" : "Offline"}
+              {status?.discordReady && typeof status.guildCount === "number"
+                ? ` · ${status.guildCount} server${status.guildCount === 1 ? "" : "s"}`
+                : ""}
             </span>
             <span className="status-pill good">
               <i /> API Serverless
@@ -470,6 +479,14 @@ export default function App() {
           <section className="empty-state card">
             <h2>管理するサーバーを選んでください</h2>
             <p>BOTを追加すると、参加済みサーバーがここに自動表示されます。</p>
+            {status?.discordError && (
+              <div className="alert error">
+                Discord API: {status.discordError}
+              </div>
+            )}
+            <button className="primary" onClick={() => void loadBase()} disabled={busy}>
+              サーバー一覧を再読み込み
+            </button>
           </section>
         )}
 
