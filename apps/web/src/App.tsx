@@ -41,6 +41,7 @@ type Settings = {
   logChannelId: string | null;
   verifiedRoleId: string | null;
   minAccountAgeDays: number;
+  ticketSupportRoleIds: string[];
   trustedUserIds: string[];
   trustedRoleIds: string[];
 };
@@ -132,14 +133,19 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [status, setStatus] = useState<ServiceStatus | null>(null);
-  const [panelChannel, setPanelChannel] = useState("");
+  const [verificationPanelChannel, setVerificationPanelChannel] = useState("");
+  const [ticketPanelChannel, setTicketPanelChannel] = useState("");
   const [productPanelChannel, setProductPanelChannel] = useState("");
   const [productForm, setProductForm] = useState(emptyProduct);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [panelAction, setPanelAction] = useState<"verification" | "tickets" | null>(null);
-  const [panelFeedback, setPanelFeedback] = useState<{
+  const [verificationPanelFeedback, setVerificationPanelFeedback] = useState<{
+    kind: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
+  const [ticketPanelFeedback, setTicketPanelFeedback] = useState<{
     kind: "success" | "error" | "info";
     message: string;
   } | null>(null);
@@ -198,7 +204,8 @@ export default function App() {
     setMeta(null);
     setSettings(null);
     setProducts([]);
-    setPanelFeedback(null);
+    setVerificationPanelFeedback(null);
+    setTicketPanelFeedback(null);
     setPanelAction(null);
     setBusy(true);
     setError(null);
@@ -225,7 +232,8 @@ export default function App() {
         serverMeta.channels.find((channel) =>
           channel.type === "text" || channel.type === "announcement"
         )?.id ?? "";
-      setPanelChannel(firstMessageChannel);
+      setVerificationPanelChannel(firstMessageChannel);
+      setTicketPanelChannel(firstMessageChannel);
       setProductPanelChannel(firstMessageChannel);
 
       try {
@@ -246,7 +254,7 @@ export default function App() {
     if (authenticated) void loadBase();
   }, [authenticated]);
 
-  async function saveSettings() {
+  async function saveSettings(successMessage = "サーバー設定を保存しました") {
     if (!selectedId || !settings) return;
     setBusy(true);
     try {
@@ -255,7 +263,7 @@ export default function App() {
         body: JSON.stringify(settings)
       });
       setSettings(saved);
-      flash("セキュリティ設定を保存しました");
+      flash(successMessage);
     } catch (reason) {
       fail(reason);
     } finally {
@@ -281,12 +289,17 @@ export default function App() {
 
   async function postPanel(kind: "verification" | "tickets") {
     const label = kind === "verification" ? "認証パネル" : "Ticketパネル";
+    const channelId =
+      kind === "verification" ? verificationPanelChannel : ticketPanelChannel;
+    const setFeedback =
+      kind === "verification" ? setVerificationPanelFeedback : setTicketPanelFeedback;
+
     if (!selectedId) {
-      setPanelFeedback({ kind: "error", message: "サーバーを選択してください" });
+      setFeedback({ kind: "error", message: "サーバーを選択してください" });
       return;
     }
-    if (!panelChannel) {
-      setPanelFeedback({
+    if (!channelId) {
+      setFeedback({
         kind: "error",
         message: "パネルを設置できるテキストチャンネルがありません"
       });
@@ -295,23 +308,23 @@ export default function App() {
 
     setBusy(true);
     setPanelAction(kind);
-    setPanelFeedback({ kind: "info", message: label + "をDiscordへ送信中..." });
+    setFeedback({ kind: "info", message: label + "をDiscordへ送信中..." });
     setError(null);
     try {
       await api(`/api/guilds/${selectedId}/${kind}/panel`, {
         method: "POST",
-        body: JSON.stringify({ channelId: panelChannel })
+        body: JSON.stringify({ channelId })
       });
       const channelName =
-        meta?.channels.find((channel) => channel.id === panelChannel)?.name ?? panelChannel;
-      setPanelFeedback({
+        meta?.channels.find((channel) => channel.id === channelId)?.name ?? channelId;
+      setFeedback({
         kind: "success",
         message: label + "を #" + channelName + " に設置しました"
       });
       flash(label + "を設置しました");
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
-      setPanelFeedback({
+      setFeedback({
         kind: "error",
         message: label + "の設置に失敗しました: " + message
       });
@@ -555,14 +568,15 @@ export default function App() {
               onRefresh={async () => {
                 const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta`);
                 setMeta(serverMeta);
-                setPanelChannel((current) => {
-                  const messageChannels = serverMeta.channels.filter((channel) =>
-                    channel.type === "text" || channel.type === "announcement"
-                  );
-                  return messageChannels.some((channel) => channel.id === current)
+                const messageChannels = serverMeta.channels.filter((channel) =>
+                  channel.type === "text" || channel.type === "announcement"
+                );
+                const keepOrFirst = (current: string) =>
+                  messageChannels.some((channel) => channel.id === current)
                     ? current
                     : messageChannels[0]?.id ?? "";
-                });
+                setVerificationPanelChannel(keepOrFirst);
+                setTicketPanelChannel(keepOrFirst);
               }}
               onNotice={flash}
               onError={fail}
@@ -715,6 +729,14 @@ export default function App() {
                       <span className="eyebrow">VERIFICATION</span>
                       <h2>認証</h2>
                     </div>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void saveSettings("認証設定を保存しました")}
+                      disabled={busy}
+                    >
+                      認証設定を保存
+                    </button>
                   </div>
                   <div className="form-grid two">
                     <Field label="認証後ロール">
@@ -741,10 +763,13 @@ export default function App() {
                     </Field>
                   </div>
                   <Field
-                    label="パネル設置チャンネル"
+                    label="認証パネル設置チャンネル"
                     hint="テキスト / アナウンスチャンネルに設置できます"
                   >
-                    <select value={panelChannel} onChange={(e) => setPanelChannel(e.target.value)}>
+                    <select
+                      value={verificationPanelChannel}
+                      onChange={(e) => setVerificationPanelChannel(e.target.value)}
+                    >
                       {meta.channels
                         .filter((channel) =>
                           channel.type === "text" || channel.type === "announcement"
@@ -763,28 +788,117 @@ export default function App() {
                     >
                       {panelAction === "verification" ? "設置中..." : "認証パネルを設置"}
                     </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={panelAction !== null}
-                      onClick={() => void postPanel("tickets")}
-                    >
-                      {panelAction === "tickets" ? "設置中..." : "Ticketパネルを設置"}
-                    </button>
                   </div>
-                  {panelFeedback && (
+                  {verificationPanelFeedback && (
                     <div
                       className={
-                        panelFeedback.kind === "success"
+                        verificationPanelFeedback.kind === "success"
                           ? "panel-feedback success"
-                          : panelFeedback.kind === "error"
+                          : verificationPanelFeedback.kind === "error"
                             ? "panel-feedback error"
                             : "panel-feedback info"
                       }
                       role="status"
                       aria-live="polite"
                     >
-                      {panelFeedback.message}
+                      {verificationPanelFeedback.message}
+                    </div>
+                  )}
+                </article>
+
+                <article className="card">
+                  <div className="section-head">
+                    <div>
+                      <span className="eyebrow">TICKETS</span>
+                      <h2>Ticket</h2>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void saveSettings("Ticket設定を保存しました")}
+                      disabled={busy}
+                    >
+                      Ticket設定を保存
+                    </button>
+                  </div>
+
+                  <Field
+                    label="Ticket対応者ロール"
+                    hint="複数選択可能。選んだロール全員が作成されたTicketを閲覧・返信できます"
+                  >
+                    <div className="role-picker">
+                      {meta.roles.length === 0 ? (
+                        <span className="role-picker-empty">選択できるロールがありません</span>
+                      ) : (
+                        meta.roles.map((role) => {
+                          const checked = settings.ticketSupportRoleIds.includes(role.id);
+                          return (
+                            <label
+                              key={role.id}
+                              className={`role-choice ${checked ? "selected" : ""}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  const next = event.target.checked
+                                    ? [...settings.ticketSupportRoleIds, role.id]
+                                    : settings.ticketSupportRoleIds.filter((id) => id !== role.id);
+                                  setSettings({
+                                    ...settings,
+                                    ticketSupportRoleIds: [...new Set(next)]
+                                  });
+                                }}
+                              />
+                              <span>@{role.name}</span>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  </Field>
+
+                  <Field
+                    label="Ticketパネル設置チャンネル"
+                    hint="認証パネルとは別のチャンネルを選べます"
+                  >
+                    <select
+                      value={ticketPanelChannel}
+                      onChange={(e) => setTicketPanelChannel(e.target.value)}
+                    >
+                      {meta.channels
+                        .filter((channel) =>
+                          channel.type === "text" || channel.type === "announcement"
+                        )
+                        .map((channel) => (
+                          <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                        ))}
+                    </select>
+                  </Field>
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={panelAction !== null}
+                      onClick={() => void postPanel("tickets")}
+                    >
+                      {panelAction === "tickets" ? "設置中..." : "Ticketパネルを設置"}
+                    </button>
+                  </div>
+                  {ticketPanelFeedback && (
+                    <div
+                      className={
+                        ticketPanelFeedback.kind === "success"
+                          ? "panel-feedback success"
+                          : ticketPanelFeedback.kind === "error"
+                            ? "panel-feedback error"
+                            : "panel-feedback info"
+                      }
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {ticketPanelFeedback.message}
                     </div>
                   )}
                 </article>
