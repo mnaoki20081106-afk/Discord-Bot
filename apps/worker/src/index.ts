@@ -1,6 +1,7 @@
 import type { Env, GuildSettings, PaymentRow, ProductRow, SessionRow } from "./types";
 import {
   DEFAULT_SETTINGS,
+  dashboardSessionStorageReady,
   cleanExpired,
   consumeChallenge,
   consumeOAuthState,
@@ -535,7 +536,12 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     if(actual!==expected) throw new HttpError(401,"パスワードが違います");
     const rawSession=randomToken(32);
     const expiresAt=Date.now()+30*24*60*60_000;
-    await createDashboardSession(env,await sha256Hex(rawSession),expiresAt);
+    try{
+      await createDashboardSession(env,await sha256Hex(rawSession),expiresAt);
+    }catch(error){
+      console.error("dashboard session creation failed",error);
+      throw new HttpError(500,"管理セッションの保存に失敗しました");
+    }
     return json(env,{token:rawSession,expiresAt});
   }
 
@@ -893,8 +899,12 @@ export default {
             d1Error=error instanceof Error?error.message:String(error);
           }
         }
+        const dashboardSessionStorage=env.DB
+          ?await dashboardSessionStorageReady(env)
+          :false;
         return json(env,{
           ok:true,
+          version:"dashboard-auth-v3",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -904,6 +914,7 @@ export default {
           },
           encryptionKey:Boolean(env.SESSION_ENCRYPTION_KEY),
           dashboardPassword:Boolean(env.DASHBOARD_PASSWORD),
+          dashboardSessionStorage,
           d1:{
             bound:Boolean(env.DB),
             reachable:d1Reachable,
