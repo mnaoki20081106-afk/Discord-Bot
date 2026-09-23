@@ -867,7 +867,17 @@ export default {
       if(request.method==="OPTIONS"){
         return new Response(null,{status:204,headers:corsHeaders(env)});
       }
-      if(url.pathname==="/health"){
+      if(url.pathname==="/"||url.pathname==="/health"){
+        let d1Reachable=false;
+        let d1Error:string|null=null;
+        if(env.DB){
+          try{
+            await env.DB.prepare("SELECT 1 AS ok").first();
+            d1Reachable=true;
+          }catch(error){
+            d1Error=error instanceof Error?error.message:String(error);
+          }
+        }
         return json(env,{
           ok:true,
           runtime:"cloudflare-workers",
@@ -878,7 +888,11 @@ export default {
             clientSecret:Boolean(env.DISCORD_CLIENT_SECRET)
           },
           encryptionKey:Boolean(env.SESSION_ENCRYPTION_KEY),
-          d1Bound:Boolean(env.DB)
+          d1:{
+            bound:Boolean(env.DB),
+            reachable:d1Reachable,
+            error:d1Error
+          }
         });
       }
       if(url.pathname==="/interactions"&&request.method==="POST"){
