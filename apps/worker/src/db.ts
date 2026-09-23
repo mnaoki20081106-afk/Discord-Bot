@@ -1,4 +1,4 @@
-import type { Env, GuildSettings, PaymentRow, ProductRow, SessionRow } from "./types";
+import type { DashboardSession, Env, GuildSettings, PaymentRow, ProductRow, SessionRow } from "./types";
 
 export const DEFAULT_SETTINGS: GuildSettings = {
   securityEnabled: true,
@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS web_sessions (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS web_sessions_user_idx ON web_sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS dashboard_sessions (
+  token_hash TEXT PRIMARY KEY,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
@@ -111,6 +117,7 @@ export async function cleanExpired(env: Env): Promise<void> {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM oauth_states WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM web_sessions WHERE expires_at < ?").bind(now),
+    env.DB.prepare("DELETE FROM dashboard_sessions WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM verification_challenges WHERE expires_at < ?").bind(now)
   ]);
 }
@@ -164,6 +171,30 @@ export async function updateSessionTokens(
 
 export async function deleteSession(env: Env, tokenHash: string): Promise<void> {
   await env.DB.prepare("DELETE FROM web_sessions WHERE token_hash=?").bind(tokenHash).run();
+}
+
+
+export async function createDashboardSession(
+  env: Env,
+  tokenHash: string,
+  expiresAt: number
+): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO dashboard_sessions(token_hash,expires_at,created_at) VALUES (?,?,?)"
+  ).bind(tokenHash, expiresAt, Date.now()).run();
+}
+
+export async function getDashboardSession(
+  env: Env,
+  tokenHash: string
+): Promise<DashboardSession | null> {
+  return await env.DB.prepare(
+    "SELECT token_hash,expires_at,created_at FROM dashboard_sessions WHERE token_hash=? AND expires_at>?"
+  ).bind(tokenHash, Date.now()).first<DashboardSession>() ?? null;
+}
+
+export async function deleteDashboardSession(env: Env, tokenHash: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM dashboard_sessions WHERE token_hash=?").bind(tokenHash).run();
 }
 
 export async function getGuildSettings(env: Env, guildId: string): Promise<GuildSettings> {
