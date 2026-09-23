@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: discord-server-manager
+    runtime: docker
+    plan: free
+    dockerfilePath: ./apps/server/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: API_PUBLIC_URL
+        sync: false
+      - key: WEB_ORIGIN
+        value: https://mnaoki20081106-afk.github.io
+      - key: WEB_PUBLIC_URL
+        value: https://mnaoki20081106-afk.github.io/Discord-Bot/
+      - key: DATABASE_URL
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: SESSION_ENCRYPTION_KEY
+        generateValue: true
+      - key: PAYPAY_ENV
+        value: sandbox
+      - key: PAYPAY_API_KEY
+        sync: false
+      - key: PAYPAY_API_SECRET
+        sync: false
+      - key: PAYPAY_MERCHANT_ID
+        sync: false
