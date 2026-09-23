@@ -230,6 +230,7 @@ async function handleMessage(message: Message): Promise<void> {
   if (!message.guild || message.author.bot || !message.member) return;
   const settings = await cachedSettings(message.guild.id);
   if (!settings.securityEnabled) return;
+  if (isTrusted(message.member, settings)) return;
 
   let violation: string | null = null;
   const content = message.content;
@@ -401,8 +402,17 @@ async function completeVerification(interaction: Interaction): Promise<void> {
     return;
   }
 
+  const role = interaction.guild.roles.cache.get(settings.verifiedRoleId);
+  if (!role || !role.editable) {
+    await interaction.reply({
+      ephemeral: true,
+      content: "認証ロールが見つからないか、BOTより上位にあるため付与できません。"
+    });
+    return;
+  }
+
   const member = await interaction.guild.members.fetch(interaction.user.id);
-  await member.roles.add(settings.verifiedRoleId, "Discord Server Manager verification");
+  await member.roles.add(role, "Discord Server Manager verification");
   await interaction.reply({ ephemeral: true, content: "認証が完了しました。" });
 }
 
@@ -553,20 +563,27 @@ async function deliverPayment(payment: Payment): Promise<void> {
   await markDelivered(payment.id);
 }
 
+let paymentPollRunning = false;
+
 async function paymentPoll(): Promise<void> {
-  if (!payPayConfigured) return;
-  const payments = await listUndeliveredPayments();
-  for (const payment of payments) {
-    try {
-      let status = payment.status;
-      if (status !== "COMPLETED") {
-        status = await getPayPayPaymentStatus(payment.merchant_payment_id);
-        await setPaymentStatus(payment.id, status);
+  if (!payPayConfigured || paymentPollRunning) return;
+  paymentPollRunning = true;
+  try {
+    const payments = await listUndeliveredPayments();
+    for (const payment of payments) {
+      try {
+        let status = payment.status;
+        if (status !== "COMPLETED") {
+          status = await getPayPayPaymentStatus(payment.merchant_payment_id);
+          await setPaymentStatus(payment.id, status);
+        }
+        if (status === "COMPLETED") await deliverPayment(payment);
+      } catch (error) {
+        console.error("payment poll failed", payment.id, error);
       }
-      if (status === "COMPLETED") await deliverPayment(payment);
-    } catch (error) {
-      console.error("payment poll failed", payment.id, error);
     }
+  } finally {
+    paymentPollRunning = false;
   }
 }
 
