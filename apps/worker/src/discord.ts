@@ -52,13 +52,39 @@ export async function botJson<T>(
   path:string,
   init:RequestInit={}
 ):Promise<T>{
-  const response=await botFetch(env,path,init);
-  if(!response.ok){
-    const text=await response.text().catch(()=>"");
-    throw new Error(`Discord API ${response.status}: ${text.slice(0,300)}`);
+  for(let attempt=0;attempt<3;attempt++){
+    const response=await botFetch(env,path,init);
+
+    if(response.status===429){
+      const raw=await response.text().catch(()=>"");
+      let retryAfterMs=1000;
+      try{
+        const payload=JSON.parse(raw) as {retry_after?:number};
+        if(typeof payload.retry_after==="number"&&Number.isFinite(payload.retry_after)){
+          retryAfterMs=Math.max(100,Math.ceil(payload.retry_after*1000));
+        }
+      }catch{
+        const header=response.headers.get("Retry-After");
+        const seconds=header?Number(header):NaN;
+        if(Number.isFinite(seconds)) retryAfterMs=Math.max(100,Math.ceil(seconds*1000));
+      }
+
+      if(attempt<2){
+        await new Promise(resolve=>setTimeout(resolve,retryAfterMs+50));
+        continue;
+      }
+      throw new Error(`Discord API 429: ${raw.slice(0,300)}`);
+    }
+
+    if(!response.ok){
+      const text=await response.text().catch(()=>"");
+      throw new Error(`Discord API ${response.status}: ${text.slice(0,300)}`);
+    }
+    if(response.status===204) return undefined as T;
+    return response.json() as Promise<T>;
   }
-  if(response.status===204) return undefined as T;
-  return response.json() as Promise<T>;
+
+  throw new Error("Discord API request failed");
 }
 
 export async function userJson<T>(path:string,accessToken:string):Promise<T>{
