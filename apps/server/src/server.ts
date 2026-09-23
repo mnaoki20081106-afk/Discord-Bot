@@ -143,7 +143,7 @@ const channelSchema = z.object({ channelId: z.string().min(1) });
 
 const createChannelSchema = z.object({
   name: z.string().trim().min(1).max(100),
-  type: z.enum(["text", "category"]),
+  type: z.enum(["text", "voice", "category"]),
   parentId: z.string().nullable().optional(),
   topic: z.string().trim().max(1024).optional()
 });
@@ -267,10 +267,26 @@ app.get("/api/guilds/:guildId/meta", async (request) => {
       .filter(
         (channel) =>
           channel.type === ChannelType.GuildText ||
-          channel.type === ChannelType.GuildAnnouncement
+          channel.type === ChannelType.GuildAnnouncement ||
+          channel.type === ChannelType.GuildVoice ||
+          channel.type === ChannelType.GuildStageVoice ||
+          channel.type === ChannelType.GuildForum ||
+          channel.type === ChannelType.GuildMedia
       )
       .sort((a, b) => a.rawPosition - b.rawPosition)
-      .map((channel) => ({ id: channel.id, name: channel.name })),
+      .map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        type:
+          channel.type === ChannelType.GuildVoice ? "voice" :
+          channel.type === ChannelType.GuildAnnouncement ? "announcement" :
+          channel.type === ChannelType.GuildStageVoice ? "stage" :
+          channel.type === ChannelType.GuildForum ? "forum" :
+          channel.type === ChannelType.GuildMedia ? "media" : "text",
+        parentId: channel.parentId,
+        topic: "topic" in channel ? channel.topic ?? "" : "",
+        position: channel.rawPosition
+      })),
     categories: guild.channels.cache
       .filter((channel) => channel.type === ChannelType.GuildCategory)
       .sort((a, b) => a.rawPosition - b.rawPosition)
@@ -306,12 +322,63 @@ app.post("/api/guilds/:guildId/channels", async (request) => {
 
   const channel = await guild.channels.create({
     name: input.name,
-    type: ChannelType.GuildText,
+    type: input.type === "voice" ? ChannelType.GuildVoice : ChannelType.GuildText,
     parent: input.parentId || undefined,
-    topic: input.topic || undefined,
+    ...(input.type === "text" ? { topic: input.topic || undefined } : {}),
     reason: "Created from Discord Server Manager"
   });
-  return { id: channel.id, name: channel.name, type: "text" };
+  return { id: channel.id, name: channel.name, type: input.type };
+});
+
+app.patch("/api/guilds/:guildId/channels/:channelId", async (request) => {
+  const { guildId, channelId } = z.object({
+    guildId: z.string(),
+    channelId: z.string()
+  }).parse(request.params);
+  await requireGuildAccess(request, guildId);
+  const input = z.object({
+    name: z.string().trim().min(1).max(100).optional(),
+    topic: z.string().max(1024).nullable().optional(),
+    parentId: z.string().nullable().optional()
+  }).parse(request.body);
+
+  const channel = client.guilds.cache.get(guildId)!.channels.cache.get(channelId);
+  if (!channel || channel.type === ChannelType.GuildCategory && input.topic !== undefined) {
+    if (!channel) throw httpError(404, "チャンネルが見つかりません");
+  }
+
+  if (input.name !== undefined) await channel.setName(input.name, "Edited from Discord Server Manager");
+
+  if ("setParent" in channel && input.parentId !== undefined) {
+    await channel.setParent(input.parentId || null, { lockPermissions: false });
+  }
+
+  if (
+    "setTopic" in channel &&
+    input.topic !== undefined &&
+    (
+      channel.type === ChannelType.GuildText ||
+      channel.type === ChannelType.GuildAnnouncement ||
+      channel.type === ChannelType.GuildForum ||
+      channel.type === ChannelType.GuildMedia
+    )
+  ) {
+    await channel.setTopic(input.topic);
+  }
+
+  return { ok: true };
+});
+
+app.delete("/api/guilds/:guildId/channels/:channelId", async (request) => {
+  const { guildId, channelId } = z.object({
+    guildId: z.string(),
+    channelId: z.string()
+  }).parse(request.params);
+  await requireGuildAccess(request, guildId);
+  const channel = client.guilds.cache.get(guildId)!.channels.cache.get(channelId);
+  if (!channel) throw httpError(404, "チャンネルが見つかりません");
+  await channel.delete("Deleted from Discord Server Manager");
+  return { ok: true };
 });
 
 app.get("/api/guilds/:guildId/settings", async (request) => {
