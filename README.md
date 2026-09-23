@@ -4,7 +4,6 @@ Discordサーバーの **セキュリティ / 認証 / Ticket / チャンネル�
 Webダッシュボードからまとめて管理するモノレポです。
 
 - Dashboard: React + Vite → **GitHub Pages**
-- Dashboard: React + Vite → **GitHub Pages**
 - Backend: **Cloudflare Workers Free**
 - Database: **Cloudflare D1 Free**
 - Discord: REST API + HTTP Interactions + AutoMod
@@ -100,60 +99,45 @@ Cloudflare Workers Free/D1 Freeの利用上限を超えた場合はその日の�
 
 Discord Developer PortalでApplication/Botを作成します。
 
-Botで次のPrivileged Gateway Intentsを有効にしてください。
+Cloudflare版はGatewayへ常時接続しないので、
+Server Members Intent / Message Content Intentを必須にはしていません。
 
-- Server Members Intent
-- Message Content Intent
+初回Cloudflare deploy後、Workerの `workers.dev` URLを使って設定します。
+
+Interactions Endpoint URL:
+
+```text
+https://YOUR-WORKER.workers.dev/interactions
+```
 
 OAuth2 Redirect URL:
 
 ```text
-https://YOUR-BACKEND.example.com/auth/discord/callback
+https://YOUR-WORKER.workers.dev/auth/discord/callback
 ```
 
-このURLは `API_PUBLIC_URL` と一致させます。
+BOTの招待URLは管理画面が生成します。
+Administrator権限は要求せず、現在の機能に必要な権限のみ要求します。
 
-BOTの招待URLは管理画面から生成します。
-Administrator権限は要求せず、現在実装している機能に必要な権限だけを指定しています。
+## 2. Secrets
 
-## 2. Environment
+秘密情報はGitHub Pagesやリポジトリへ置かず、Cloudflare Worker Secretsへ保存します。
 
-```bash
-cp .env.example .env
+```text
+DISCORD_APPLICATION_ID
+DISCORD_PUBLIC_KEY
+DISCORD_BOT_TOKEN
+DISCORD_CLIENT_SECRET
+SESSION_ENCRYPTION_KEY
 ```
 
-最低限:
+PayPayを使う場合のみ:
 
-```env
-PORT=8787
-API_PUBLIC_URL=https://YOUR-BACKEND.example.com
-WEB_ORIGIN=https://mnaoki20081106-afk.github.io
-WEB_PUBLIC_URL=https://mnaoki20081106-afk.github.io/Discord-Bot/
-DATABASE_URL=postgres://...
-
-DISCORD_CLIENT_ID=...
-DISCORD_CLIENT_SECRET=...
-DISCORD_TOKEN=...
-
-SESSION_ENCRYPTION_KEY=...
+```text
+PAYPAY_API_KEY
+PAYPAY_API_SECRET
+PAYPAY_MERCHANT_ID
 ```
-
-32-byteのSession Encryption Keyを作る例:
-
-```bash
-openssl rand -base64 32
-```
-
-PayPayを使う場合:
-
-```env
-PAYPAY_ENV=sandbox
-PAYPAY_API_KEY=...
-PAYPAY_API_SECRET=...
-PAYPAY_MERCHANT_ID=
-```
-
-`PAYPAY_MERCHANT_ID` は必要な契約/構成の場合のみ設定します。
 
 ## 3. Zero-cost Cloudflare deployment
 
