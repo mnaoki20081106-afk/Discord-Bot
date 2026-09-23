@@ -36,6 +36,23 @@ function input<T>(r:Request){ return r.json() as Promise<T>; }
 function ires(data:unknown){ return new Response(JSON.stringify(data),{headers:{"Content-Type":"application/json"}}); }
 function eph(content:string,components?:unknown[],embeds?:unknown[]){ return {type:4,data:{content,flags:64,...(components?{components}:{}),...(embeds?{embeds}:{})}}; }
 async function send(env:Env,channelId:string,payload:unknown){ await botJson(env,"/channels/"+channelId+"/messages",{method:"POST",body:JSON.stringify(payload)}); }
+async function sendFile(
+  env:Env,
+  channelId:string,
+  payload:unknown,
+  filename:string,
+  content:string
+){
+  const form=new FormData();
+  form.set("payload_json",JSON.stringify(payload));
+  form.set("files[0]",new File([content],filename,{type:"text/plain;charset=utf-8"}));
+  const response=await fetch("https://discord.com/api/v10/channels/"+channelId+"/messages",{
+    method:"POST",
+    headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN},
+    body:form
+  });
+  if(!response.ok) throw new Error("Discord attachment send failed: "+response.status);
+}
 
 async function machineOwned(env:Env,id:string,ownerId:string){
   const vm=await getMachine(env,id);
@@ -265,12 +282,37 @@ async function deliver(env:Env,order:VmOrder){
     const vm=await getMachine(env,order.vending_machine_id),product=await getVmProduct(env,order.product_id); if(!vm||!product) throw new Error("ORDER_DATA_MISSING");
     const items=product.infinite_stock?[product.infinite_content??""]:await orderStock(env,order.id);
     if(!product.infinite_stock&&items.length<order.quantity) throw new Error("RESERVED_STOCK_MISSING");
+    const deliveredText=items.join("\n");
     const dm=await botJson<{id:string}>(env,"/users/@me/channels",{method:"POST",body:JSON.stringify({recipient_id:order.user_id})});
-    await send(env,dm.id,{content:"「"+product.name+"」の購入ありがとうございます。\n\n"+items.join("\n")});
+    const purchaseEmbed={
+      title:"購入が完了しました",
+      color:5763719,
+      fields:[
+        {name:"商品名",value:product.name,inline:true},
+        {name:"購入数",value:String(order.quantity)+"個",inline:true},
+        {name:"支払金額",value:String(order.total_amount)+"円",inline:true},
+        {name:"決済方法",value:order.payment_method.toUpperCase(),inline:true},
+        {name:"サーバー",value:"<@"+order.user_id+">",inline:true}
+      ],
+      timestamp:new Date().toISOString()
+    };
+    if(deliveredText.length<=1800){
+      await send(env,dm.id,{content:deliveredText,embeds:[purchaseEmbed]});
+    }else{
+      await sendFile(env,dm.id,{embeds:[purchaseEmbed]},"purchase_"+order.id+".txt",deliveredText);
+    }
     if(vm.role_id) await botFetch(env,"/guilds/"+order.guild_id+"/members/"+order.user_id+"/roles/"+vm.role_id,{method:"PUT"}).catch(()=>undefined);
     const log={embeds:[{title:"購入完了",color:5763719,fields:[{name:"商品",value:product.name,inline:true},{name:"個数",value:String(order.quantity),inline:true},{name:"金額",value:String(order.total_amount)+"円",inline:true},{name:"購入者",value:"<@"+order.user_id+">",inline:true},{name:"決済",value:order.payment_method.toUpperCase(),inline:true}]}]};
     for(const channelId of [vm.public_log_channel_id,vm.local_log_channel_id]) if(channelId) await send(env,channelId,log).catch(()=>undefined);
-    if(vm.private_log_channel_id) await send(env,vm.private_log_channel_id,{...log,content:"納品内容:\n```\n"+items.join("\n").slice(0,1800)+"\n```"}).catch(()=>undefined);
+    if(vm.private_log_channel_id){
+      await sendFile(
+        env,
+        vm.private_log_channel_id,
+        log,
+        "purchase_"+order.user_id+"_"+Date.now()+".txt",
+        deliveredText
+      ).catch(()=>undefined);
+    }
     await finishDelivery(env,order);
   }catch(error){
     await resetDelivery(env,order.id);
