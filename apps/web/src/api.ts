@@ -91,11 +91,32 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
-  const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    if (response.status === 401) clearSession();
-    throw new Error(payload.message || `HTTP ${response.status}`);
+  const controller = new AbortController();
+  const timeoutMs = 20_000;
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  const externalSignal = init.signal;
+  const abortFromExternal = () => controller.abort();
+  externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
+
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+      signal: controller.signal
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401) clearSession();
+      throw new Error(payload.message || `HTTP ${response.status}`);
+    }
+    return payload as T;
+  } catch (reason) {
+    if (controller.signal.aborted && !externalSignal?.aborted) {
+      throw new Error("APIの応答が20秒以内に返りませんでした。保存状態を確認して再試行してください");
+    }
+    throw reason;
+  } finally {
+    window.clearTimeout(timeoutId);
+    externalSignal?.removeEventListener("abort", abortFromExternal);
   }
-  return payload as T;
 }
