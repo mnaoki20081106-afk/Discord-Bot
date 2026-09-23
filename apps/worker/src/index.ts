@@ -4,13 +4,16 @@ import {
   cleanExpired,
   consumeChallenge,
   consumeOAuthState,
+  createDashboardSession,
   createPayment,
   createProduct,
   createSession,
+  deleteDashboardSession,
   deleteProduct,
   deleteSession,
   ensureSchema,
   getAuditCursor,
+  getDashboardSession,
   getGuildSettings,
   getPaymentByMerchantId,
   getProduct,
@@ -73,31 +76,28 @@ class HttpError extends Error {
   constructor(public status:number,message:string){super(message);}
 }
 
-async function sessionFromRequest(request:Request,env:Env):Promise<SessionRow>{
+type DashboardActor={
+  user_id:string;
+  username:string;
+  avatar:null;
+};
+
+async function sessionFromRequest(request:Request,env:Env):Promise<DashboardActor>{
   const auth=request.headers.get("Authorization");
   if(!auth?.startsWith("Bearer ")) throw new HttpError(401,"ログインが必要です");
   const raw=auth.slice(7).trim();
-  const row=await getSession(env,await sha256Hex(raw));
+  const row=await getDashboardSession(env,await sha256Hex(raw));
   if(!row) throw new HttpError(401,"セッションが失効しています");
-  return row;
-}
-
-async function manageableGuilds(env:Env,session:SessionRow):Promise<DiscordGuild[]>{
-  const token=await validAccessToken(env,session);
-  const guilds=await userJson<DiscordGuild[]>("/users/@me/guilds",token);
-  return guilds.filter(canManageGuild);
+  return {user_id:"shared-dashboard",username:"共同管理者",avatar:null};
 }
 
 async function requireGuild(
-  request:Request,env:Env,guildId:string,requireBot=true
-):Promise<{session:SessionRow;guild:DiscordGuild}>{
+  request:Request,env:Env,guildId:string,_requireBot=true
+):Promise<{session:DashboardActor;guild:{id:string;name:string;icon:string|null}}>{
   const session=await sessionFromRequest(request,env);
-  const guild=(await manageableGuilds(env,session)).find(g=>g.id===guildId);
-  if(!guild) throw new HttpError(403,"このサーバーを管理する権限がありません");
-  if(requireBot){
-    const installed=await botFetch(env,`/guilds/${guildId}`);
-    if(!installed.ok) throw new HttpError(409,"先にBOTをサーバーへ追加してください");
-  }
+  const response=await botFetch(env,`/guilds/${guildId}`);
+  if(!response.ok) throw new HttpError(403,"BOTが参加していないサーバーです");
+  const guild=await response.json() as {id:string;name:string;icon:string|null};
   return {session,guild};
 }
 
@@ -513,10 +513,30 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(url.pathname==="/api/status"&&request.method==="GET"){
     return json(env,{
       discordReady:true,
+      dashboardPasswordConfigured:Boolean(env.DASHBOARD_PASSWORD),
       payPayConfigured:payPayConfigured(env),
       payPayEnvironment:env.PAYPAY_ENV,
-      runtime:"cloudflare-workers"
+      runtime:"cloudflare-workers",
+      inviteUrl:
+        `https://discord.com/oauth2/authorize?client_id=${env.DISCORD_APPLICATION_ID}`+
+        `&permissions=${BOT_PERMISSIONS}&integration_type=0&scope=bot%20applications.commands`
     });
+  }
+
+  if(url.pathname==="/api/login"&&request.method==="POST"){
+    if(!env.DASHBOARD_PASSWORD) throw new HttpError(503,"管理画面パスワードが未設定です");
+    const input=await bodyObject<{password?:string}>(request);
+    const password=String(input.password??"");
+    if(!password) throw new HttpError(400,"パスワードを入力してください");
+    const [actual,expected]=await Promise.all([
+      sha256Hex(password),
+      sha256Hex(env.DASHBOARD_PASSWORD)
+    ]);
+    if(actual!==expected) throw new HttpError(401,"パスワードが違います");
+    const rawSession=randomToken(32);
+    const expiresAt=Date.now()+30*24*60*60_000;
+    await createDashboardSession(env,await sha256Hex(rawSession),expiresAt);
+    return json(env,{token:rawSession,expiresAt});
   }
 
   if(url.pathname==="/api/me"&&request.method==="GET"){
@@ -526,32 +546,27 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   if(url.pathname==="/api/logout"&&request.method==="POST"){
     const auth=request.headers.get("Authorization");
-    if(auth?.startsWith("Bearer ")) await deleteSession(env,await sha256Hex(auth.slice(7).trim()));
+    if(auth?.startsWith("Bearer ")) await deleteDashboardSession(env,await sha256Hex(auth.slice(7).trim()));
     return json(env,{ok:true});
   }
 
   if(url.pathname==="/api/commands/register"&&request.method==="POST"){
-    const session=await sessionFromRequest(request,env);
-    if((await manageableGuilds(env,session)).length===0) throw new HttpError(403,"管理サーバーがありません");
+    await sessionFromRequest(request,env);
     await registerCommands(env);
     return json(env,{ok:true});
   }
 
   if(url.pathname==="/api/guilds"&&request.method==="GET"){
-    const session=await sessionFromRequest(request,env);
-    const guilds=await manageableGuilds(env,session);
-    const enriched=[];
-    for(const guild of guilds.slice(0,40)){
-      const check=await botFetch(env,`/guilds/${guild.id}`);
-      enriched.push({
-        ...guild,
-        botInstalled:check.ok,
-        inviteUrl:
-          `https://discord.com/oauth2/authorize?client_id=${env.DISCORD_APPLICATION_ID}`+
-          `&permissions=${BOT_PERMISSIONS}&integration_type=0&scope=bot%20applications.commands`
-      });
-    }
-    return json(env,enriched);
+    await sessionFromRequest(request,env);
+    const guilds=await botJson<Array<{id:string;name:string;icon:string|null}>>(
+      env,"/users/@me/guilds?limit=200"
+    );
+    return json(env,guilds.map(guild=>({
+      id:guild.id,
+      name:guild.name,
+      icon:guild.icon,
+      botInstalled:true
+    })));
   }
 
   const meta=url.pathname.match(/^\/api\/guilds\/(\d+)\/meta$/);
@@ -903,12 +918,6 @@ export default {
 
       if(url.pathname==="/paypay/webhook"&&request.method==="POST"){
         return handlePayPayWebhook(request,env,ctx);
-      }
-      if(url.pathname==="/auth/discord"&&request.method==="GET"){
-        return oauthStart(request,env);
-      }
-      if(url.pathname==="/auth/discord/callback"&&request.method==="GET"){
-        return oauthCallback(request,env);
       }
       if(url.pathname.startsWith("/api/")){
         const vendingResponse=await handleVendingApi(request,env,url);
