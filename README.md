@@ -164,7 +164,7 @@ DISCORD_CLIENT_SECRET
 SESSION_ENCRYPTION_KEY
 ```
 
-`SESSION_ENCRYPTION_KEY` は32 bytesをbase64化した値にします。
+`SESSION_ENCRYPTION_KEY` は **32文字以上の推測されにくいランダム文字列** をそのまま設定できます。内部でSHA-256からAES-256-GCM用の鍵を生成します。旧32-byte Base64形式も互換対応しています。
 
 Cloudflare Workerの公開URLが例えば
 
