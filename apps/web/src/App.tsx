@@ -21,6 +21,12 @@ type Meta = {
     parentId?: string | null;
     topic?: string;
     position?: number;
+    permissionOverwrites?: Array<{
+      id: string;
+      type: number;
+      allow: string;
+      deny: string;
+    }>;
   }>;
   categories: Array<{ id: string; name: string; position?: number }>;
   roles: Array<{ id: string; name: string; position: number }>;
