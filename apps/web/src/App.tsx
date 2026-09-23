@@ -214,8 +214,12 @@ export default function App() {
 
       setMeta(serverMeta);
       setSettings(serverSettings);
-      setPanelChannel(serverMeta.channels[0]?.id ?? "");
-      setProductPanelChannel(serverMeta.channels[0]?.id ?? "");
+      const firstMessageChannel =
+        serverMeta.channels.find((channel) =>
+          channel.type === "text" || channel.type === "announcement"
+        )?.id ?? "";
+      setPanelChannel(firstMessageChannel);
+      setProductPanelChannel(firstMessageChannel);
 
       try {
         setProducts(await api<Product[]>(`/api/guilds/${guildId}/products`));
@@ -269,8 +273,16 @@ export default function App() {
   }
 
   async function postPanel(kind: "verification" | "tickets") {
-    if (!selectedId || !panelChannel) return;
+    if (!selectedId) {
+      setError("サーバーを選択してください");
+      return;
+    }
+    if (!panelChannel) {
+      setError("パネルを設置できるテキストチャンネルがありません");
+      return;
+    }
     setBusy(true);
+    setError(null);
     try {
       await api(`/api/guilds/${selectedId}/${kind}/panel`, {
         method: "POST",
@@ -278,7 +290,12 @@ export default function App() {
       });
       flash(kind === "verification" ? "認証パネルを設置しました" : "Ticketパネルを設置しました");
     } catch (reason) {
-      fail(reason);
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setError(
+        (kind === "verification" ? "認証パネル" : "Ticketパネル") +
+        "の設置に失敗しました: " +
+        message
+      );
     } finally {
       setBusy(false);
     }
@@ -518,11 +535,14 @@ export default function App() {
               onRefresh={async () => {
                 const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta`);
                 setMeta(serverMeta);
-                setPanelChannel((current) =>
-                  serverMeta.channels.some((channel) => channel.id === current)
+                setPanelChannel((current) => {
+                  const messageChannels = serverMeta.channels.filter((channel) =>
+                    channel.type === "text" || channel.type === "announcement"
+                  );
+                  return messageChannels.some((channel) => channel.id === current)
                     ? current
-                    : serverMeta.channels[0]?.id ?? ""
-                );
+                    : messageChannels[0]?.id ?? "";
+                });
               }}
               onNotice={flash}
               onError={fail}
@@ -700,18 +720,33 @@ export default function App() {
                       />
                     </Field>
                   </div>
-                  <Field label="パネル設置チャンネル">
+                  <Field
+                    label="パネル設置チャンネル"
+                    hint="テキスト / アナウンスチャンネルに設置できます"
+                  >
                     <select value={panelChannel} onChange={(e) => setPanelChannel(e.target.value)}>
-                      {meta.channels.map((channel) => (
-                        <option key={channel.id} value={channel.id}>#{channel.name}</option>
-                      ))}
+                      {meta.channels
+                        .filter((channel) =>
+                          channel.type === "text" || channel.type === "announcement"
+                        )
+                        .map((channel) => (
+                          <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                        ))}
                     </select>
                   </Field>
                   <div className="button-row">
-                    <button className="primary" onClick={() => void postPanel("verification")}>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => void postPanel("verification")}
+                    >
                       認証パネルを設置
                     </button>
-                    <button className="secondary" onClick={() => void postPanel("tickets")}>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void postPanel("tickets")}
+                    >
                       Ticketパネルを設置
                     </button>
                   </div>
