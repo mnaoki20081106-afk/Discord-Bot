@@ -311,13 +311,18 @@ export default function VendingManager({
     if(!selectedId||!editingProduct||!stockText.trim()) return;
     setBusy(true);
     try{
-      const result=await api<{added:number}>(
-        `/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}/stock`,
-        {method:"POST",body:JSON.stringify({text:stockText})}
-      );
+      const lines=stockText.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+      let added=0;
+      for(let offset=0;offset<lines.length;offset+=400){
+        const result=await api<{added:number}>(
+          `/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}/stock`,
+          {method:"POST",body:JSON.stringify({lines:lines.slice(offset,offset+400)})}
+        );
+        added+=result.added;
+      }
       setStockText("");
       await loadDetail(selectedId);
-      onNotice(`${result.added}件の在庫を追加しました`);
+      onNotice(`${added}件の在庫を追加しました`);
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
