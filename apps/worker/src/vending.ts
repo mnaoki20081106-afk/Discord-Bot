@@ -1,6 +1,6 @@
-import type { Env, SessionRow } from "./types";
-import { botFetch, botJson, canManageGuild, userJson, validAccessToken, type DiscordGuild } from "./discord";
-import { getSession } from "./db";
+import type { Env } from "./types";
+import { botFetch, botJson } from "./discord";
+import { getDashboardSession } from "./db";
 import { json, randomId, sha256Hex } from "./utils";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
@@ -17,19 +17,18 @@ import {
 
 class VendingHttpError extends Error { constructor(public status:number,message:string){super(message);} }
 
-async function sessionFromRequest(request:Request,env:Env):Promise<SessionRow>{
+type DashboardActor={user_id:string;username:string;avatar:null};
+
+async function sessionFromRequest(request:Request,env:Env):Promise<DashboardActor>{
   const auth=request.headers.get("Authorization");
   if(!auth?.startsWith("Bearer ")) throw new VendingHttpError(401,"ログインが必要です");
-  const row=await getSession(env,await sha256Hex(auth.slice(7).trim()));
+  const row=await getDashboardSession(env,await sha256Hex(auth.slice(7).trim()));
   if(!row) throw new VendingHttpError(401,"セッションが失効しています");
-  return row;
+  return {user_id:"shared-dashboard",username:"共同管理者",avatar:null};
 }
 async function requireGuild(request:Request,env:Env,guildId:string){
   const session=await sessionFromRequest(request,env);
-  const token=await validAccessToken(env,session);
-  const guilds=(await userJson<DiscordGuild[]>("/users/@me/guilds",token)).filter(canManageGuild);
-  if(!guilds.some(g=>g.id===guildId)) throw new VendingHttpError(403,"このサーバーを管理できません");
-  if(!(await botFetch(env,"/guilds/"+guildId)).ok) throw new VendingHttpError(409,"先にBOTを追加してください");
+  if(!(await botFetch(env,"/guilds/"+guildId)).ok) throw new VendingHttpError(403,"BOTが参加していないサーバーです");
   return session;
 }
 function input<T>(r:Request){ return r.json() as Promise<T>; }
