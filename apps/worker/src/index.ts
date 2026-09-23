@@ -536,13 +536,10 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     let discordReady=false;
     let discordUser:string|null=null;
     let discordError:string|null=null;
-    let guildCount:number|null=null;
     try{
       const bot=await botJson<{id:string;username:string}>(env,"/users/@me");
       discordReady=true;
       discordUser=bot.username;
-      const guilds=await botJson<Array<{id:string}>>(env,"/users/@me/guilds?limit=200");
-      guildCount=guilds.length;
     }catch(error){
       discordError=error instanceof Error?error.message:String(error);
     }
@@ -550,7 +547,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       discordReady,
       discordUser,
       discordError,
-      guildCount,
+      guildCount:null,
       dashboardPasswordConfigured:Boolean(env.DASHBOARD_PASSWORD),
       payPayConfigured:payPayConfigured(env),
       payPayEnvironment:env.PAYPAY_ENV,
@@ -937,15 +934,16 @@ export default {
           discordBotId=bot.id;
           discordBotUsername=bot.username;
           discordApplicationMatchesToken=bot.id===env.DISCORD_APPLICATION_ID.trim();
-          const guilds=await botJson<Array<{id:string}>>(env,"/users/@me/guilds?limit=200");
-          discordGuildCount=guilds.length;
+          // Do not call /users/@me/guilds from health; dashboard bootstrap owns that request.
+          // This prevents health checks from consuming the same Discord REST rate-limit bucket.
+          discordGuildCount=null;
         }catch(error){
           discordApiError=error instanceof Error?error.message:String(error);
         }
 
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v9-bootstrap",
+          version:"dashboard-auth-v10-rate-limit",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
