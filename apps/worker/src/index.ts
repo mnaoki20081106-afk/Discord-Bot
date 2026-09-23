@@ -510,6 +510,27 @@ async function registerCommands(env:Env):Promise<void>{
   });
 }
 
+async function handleDashboardLogin(request:Request,env:Env):Promise<Response>{
+  if(!env.DASHBOARD_PASSWORD) throw new HttpError(503,"管理画面パスワードが未設定です");
+  const input=await bodyObject<{password?:string}>(request);
+  const password=String(input.password??"");
+  if(!password) throw new HttpError(400,"パスワードを入力してください");
+  const [actual,expected]=await Promise.all([
+    sha256Hex(password),
+    sha256Hex(env.DASHBOARD_PASSWORD)
+  ]);
+  if(actual!==expected) throw new HttpError(401,"パスワードが違います");
+  const rawSession=randomToken(32);
+  const expiresAt=Date.now()+30*24*60*60_000;
+  try{
+    await createDashboardSession(env,await sha256Hex(rawSession),expiresAt);
+  }catch(error){
+    console.error("dashboard session creation failed",error);
+    throw new HttpError(500,"管理セッションの保存に失敗しました");
+  }
+  return json(env,{token:rawSession,expiresAt});
+}
+
 async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(url.pathname==="/api/status"&&request.method==="GET"){
     return json(env,{
@@ -522,27 +543,6 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         `https://discord.com/oauth2/authorize?client_id=${env.DISCORD_APPLICATION_ID}`+
         `&permissions=${BOT_PERMISSIONS}&integration_type=0&scope=bot%20applications.commands`
     });
-  }
-
-  if(url.pathname==="/api/login"&&request.method==="POST"){
-    if(!env.DASHBOARD_PASSWORD) throw new HttpError(503,"管理画面パスワードが未設定です");
-    const input=await bodyObject<{password?:string}>(request);
-    const password=String(input.password??"");
-    if(!password) throw new HttpError(400,"パスワードを入力してください");
-    const [actual,expected]=await Promise.all([
-      sha256Hex(password),
-      sha256Hex(env.DASHBOARD_PASSWORD)
-    ]);
-    if(actual!==expected) throw new HttpError(401,"パスワードが違います");
-    const rawSession=randomToken(32);
-    const expiresAt=Date.now()+30*24*60*60_000;
-    try{
-      await createDashboardSession(env,await sha256Hex(rawSession),expiresAt);
-    }catch(error){
-      console.error("dashboard session creation failed",error);
-      throw new HttpError(500,"管理セッションの保存に失敗しました");
-    }
-    return json(env,{token:rawSession,expiresAt});
   }
 
   if(url.pathname==="/api/me"&&request.method==="GET"){
@@ -564,15 +564,21 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   if(url.pathname==="/api/guilds"&&request.method==="GET"){
     await sessionFromRequest(request,env);
-    const guilds=await botJson<Array<{id:string;name:string;icon:string|null}>>(
-      env,"/users/@me/guilds?limit=200"
-    );
-    return json(env,guilds.map(guild=>({
-      id:guild.id,
-      name:guild.name,
-      icon:guild.icon,
-      botInstalled:true
-    })));
+    try{
+      const guilds=await botJson<Array<{id:string;name:string;icon:string|null}>>(
+        env,"/users/@me/guilds?limit=200"
+      );
+      return json(env,guilds.map(guild=>({
+        id:guild.id,
+        name:guild.name,
+        icon:guild.icon,
+        botInstalled:true
+      })));
+    }catch(error){
+      console.error("bot guild list failed",error);
+      const detail=error instanceof Error?error.message:"unknown";
+      throw new HttpError(502,"BOT参加サーバー一覧の取得に失敗しました: "+detail.slice(0,160));
+    }
   }
 
   const meta=url.pathname.match(/^\/api\/guilds\/(\d+)\/meta$/);
@@ -904,7 +910,7 @@ export default {
           :false;
         return json(env,{
           ok:true,
-          version:"dashboard-auth-v4-routing",
+          version:"dashboard-auth-v5-login",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -924,6 +930,9 @@ export default {
       }
       if(url.pathname==="/interactions"&&request.method==="POST"){
         return handleInteraction(request,env,ctx);
+      }
+      if(url.pathname==="/api/login"&&request.method==="POST"){
+        return handleDashboardLogin(request,env);
       }
 
       await ensureSchema(env);
