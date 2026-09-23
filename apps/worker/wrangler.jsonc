@@ -15,8 +15,8 @@
     "crons": ["* * * * *"]
   },
   "vars": {
-    "WEB_ORIGIN": "https://mnaoki20081106-afk.github.io",
-    "WEB_PUBLIC_URL": "https://mnaoki20081106-afk.github.io/Discord-Bot/",
+    "WEB_ORIGIN": "https://worked-for-us.jp",
+    "WEB_PUBLIC_URL": "https://worked-for-us.jp/",
     "PAYPAY_ENV": "sandbox"
   }
 }
