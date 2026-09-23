@@ -23,9 +23,16 @@ export type DiscordChannel={
   id:string;
   name:string;
   type:number;
+  guild_id?:string;
   parent_id?:string|null;
   topic?:string|null;
   position?:number;
+  permission_overwrites?:Array<{
+    id:string;
+    type:number;
+    allow:string;
+    deny:string;
+  }>;
 };
 
 export type DiscordRole={
