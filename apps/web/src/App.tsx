@@ -138,6 +138,11 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [panelAction, setPanelAction] = useState<"verification" | "tickets" | null>(null);
+  const [panelFeedback, setPanelFeedback] = useState<{
+    kind: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
 
   const selectedGuild = useMemo(
     () => guilds.find((guild) => guild.id === selectedId) ?? null,
@@ -193,6 +198,8 @@ export default function App() {
     setMeta(null);
     setSettings(null);
     setProducts([]);
+    setPanelFeedback(null);
+    setPanelAction(null);
     setBusy(true);
     setError(null);
     try {
@@ -273,30 +280,43 @@ export default function App() {
   }
 
   async function postPanel(kind: "verification" | "tickets") {
+    const label = kind === "verification" ? "認証パネル" : "Ticketパネル";
     if (!selectedId) {
-      setError("サーバーを選択してください");
+      setPanelFeedback({ kind: "error", message: "サーバーを選択してください" });
       return;
     }
     if (!panelChannel) {
-      setError("パネルを設置できるテキストチャンネルがありません");
+      setPanelFeedback({
+        kind: "error",
+        message: "パネルを設置できるテキストチャンネルがありません"
+      });
       return;
     }
+
     setBusy(true);
+    setPanelAction(kind);
+    setPanelFeedback({ kind: "info", message: label + "をDiscordへ送信中..." });
     setError(null);
     try {
       await api(`/api/guilds/${selectedId}/${kind}/panel`, {
         method: "POST",
         body: JSON.stringify({ channelId: panelChannel })
       });
-      flash(kind === "verification" ? "認証パネルを設置しました" : "Ticketパネルを設置しました");
+      const channelName =
+        meta?.channels.find((channel) => channel.id === panelChannel)?.name ?? panelChannel;
+      setPanelFeedback({
+        kind: "success",
+        message: label + "を #" + channelName + " に設置しました"
+      });
+      flash(label + "を設置しました");
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
-      setError(
-        (kind === "verification" ? "認証パネル" : "Ticketパネル") +
-        "の設置に失敗しました: " +
-        message
-      );
+      setPanelFeedback({
+        kind: "error",
+        message: label + "の設置に失敗しました: " + message
+      });
     } finally {
+      setPanelAction(null);
       setBusy(false);
     }
   }
@@ -738,18 +758,35 @@ export default function App() {
                     <button
                       type="button"
                       className="primary"
+                      disabled={panelAction !== null}
                       onClick={() => void postPanel("verification")}
                     >
-                      認証パネルを設置
+                      {panelAction === "verification" ? "設置中..." : "認証パネルを設置"}
                     </button>
                     <button
                       type="button"
                       className="secondary"
+                      disabled={panelAction !== null}
                       onClick={() => void postPanel("tickets")}
                     >
-                      Ticketパネルを設置
+                      {panelAction === "tickets" ? "設置中..." : "Ticketパネルを設置"}
                     </button>
                   </div>
+                  {panelFeedback && (
+                    <div
+                      className={
+                        panelFeedback.kind === "success"
+                          ? "panel-feedback success"
+                          : panelFeedback.kind === "error"
+                            ? "panel-feedback error"
+                            : "panel-feedback info"
+                      }
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {panelFeedback.message}
+                    </div>
+                  )}
                 </article>
 
                 <article className="card">
