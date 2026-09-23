@@ -5,7 +5,7 @@ export type ServerEditorMeta = {
   channels: Array<{
     id: string;
     name: string;
-    type?: "text" | "announcement";
+    type?: "text" | "voice" | "announcement" | "stage" | "forum" | "media";
     parentId?: string | null;
     topic?: string;
     position?: number;
@@ -20,7 +20,7 @@ export type ServerEditorMeta = {
 type Selection =
   | { kind: "channel"; id: string }
   | { kind: "category"; id: string }
-  | { kind: "create"; type: "text" | "category"; parentId: string | null }
+  | { kind: "create"; type: "text" | "voice" | "category"; parentId: string | null }
   | null;
 
 type Props = {
@@ -44,7 +44,7 @@ export default function ServerEditor({
   const [name, setName] = useState("");
   const [topic, setTopic] = useState("");
   const [parentId, setParentId] = useState("");
-  const [createType, setCreateType] = useState<"text" | "category">("text");
+  const [createType, setCreateType] = useState<"text" | "voice" | "category">("text");
   const [saving, setSaving] = useState(false);
 
   const selectedChannel = useMemo(
@@ -86,7 +86,7 @@ export default function ServerEditor({
     setParentId("");
   }
 
-  function openCreate(parent: string | null = null, type: "text" | "category" = "text") {
+  function openCreate(parent: string | null = null, type: "text" | "voice" | "category" = "text") {
     setSelection({ kind: "create", parentId: parent, type });
     setCreateType(type);
     setName("");
@@ -205,7 +205,9 @@ export default function ServerEditor({
                     className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""}`}
                     onClick={() => openChannel(channel.id)}
                   >
-                    <span className="channel-hash">#</span>
+                    <span className="channel-hash">
+                      {channel.type === "voice" || channel.type === "stage" ? "◖))" : "#"}
+                    </span>
                     <span>{channel.name}</span>
                     <span className="channel-edit">›</span>
                   </button>
@@ -239,7 +241,9 @@ export default function ServerEditor({
                       className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""}`}
                       onClick={() => openChannel(channel.id)}
                     >
-                      <span className="channel-hash">#</span>
+                      <span className="channel-hash">
+                        {channel.type === "voice" || channel.type === "stage" ? "◖))" : "#"}
+                      </span>
                       <span>{channel.name}</span>
                       <span className="channel-edit">›</span>
                     </button>
@@ -294,12 +298,13 @@ export default function ServerEditor({
                 <select
                   value={createType}
                   onChange={(event) => {
-                    const next = event.target.value as "text" | "category";
+                    const next = event.target.value as "text" | "voice" | "category";
                     setCreateType(next);
                     if (next === "category") setParentId("");
                   }}
                 >
                   <option value="text"># テキストチャンネル</option>
+                  <option value="voice">🔊 ボイスチャンネル</option>
                   <option value="category">カテゴリ</option>
                 </select>
               </label>
@@ -316,7 +321,7 @@ export default function ServerEditor({
                 />
               </label>
 
-              {createType === "text" && (
+              {createType !== "category" && (
                 <>
                   <label>
                     <span>カテゴリ</span>
@@ -329,15 +334,17 @@ export default function ServerEditor({
                       ))}
                     </select>
                   </label>
-                  <label>
-                    <span>トピック</span>
-                    <textarea
-                      value={topic}
-                      onChange={(event) => setTopic(event.target.value)}
-                      maxLength={1024}
-                      placeholder="任意"
-                    />
-                  </label>
+                  {createType === "text" && (
+                    <label>
+                      <span>トピック</span>
+                      <textarea
+                        value={topic}
+                        onChange={(event) => setTopic(event.target.value)}
+                        maxLength={1024}
+                        placeholder="任意"
+                      />
+                    </label>
+                  )}
                 </>
               )}
 
@@ -382,15 +389,17 @@ export default function ServerEditor({
                       ))}
                     </select>
                   </label>
-                  <label>
-                    <span>トピック</span>
-                    <textarea
-                      value={topic}
-                      onChange={(event) => setTopic(event.target.value)}
-                      maxLength={1024}
-                      placeholder="チャンネルの説明"
-                    />
-                  </label>
+                  {selectedChannel.type === "text" || selectedChannel.type === "announcement" || selectedChannel.type === "forum" || selectedChannel.type === "media" ? (
+                    <label>
+                      <span>トピック</span>
+                      <textarea
+                        value={topic}
+                        onChange={(event) => setTopic(event.target.value)}
+                        maxLength={1024}
+                        placeholder="チャンネルの説明"
+                      />
+                    </label>
+                  ) : null}
                 </>
               )}
 
