@@ -83,7 +83,7 @@ than editing one shared local file.
 Payment credentials are never placed in GitHub Pages or committed to the
 repository. The dashboard sends them over HTTPS to the Worker and D1 stores
 sensitive values encrypted with AES-GCM using the Worker secret
-`SESSION_ENCRYPTION_KEY`.
+`SESSION_ENCRYPTION_KEY`. It may be any unique, hard-to-guess string of at least 32 characters; the Worker derives the AES-256 key with SHA-256.
 
 Do not expose that Worker secret in client-side code.
 
