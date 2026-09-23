@@ -9,13 +9,100 @@ export type ServerEditorMeta = {
     parentId?: string | null;
     topic?: string;
     position?: number;
+    permissionOverwrites?: Array<{
+      id: string;
+      type: number;
+      allow: string;
+      deny: string;
+    }>;
   }>;
   categories: Array<{
     id: string;
     name: string;
     position?: number;
   }>;
+  roles: Array<{
+    id: string;
+    name: string;
+    position: number;
+  }>;
 };
+
+type PermissionMode = "inherit" | "allow" | "deny";
+type PermissionKey =
+  | "view"
+  | "send"
+  | "react"
+  | "files"
+  | "threads"
+  | "connect"
+  | "speak";
+
+const PERMISSION_BITS: Record<PermissionKey, bigint> = {
+  view: 1024n,
+  send: 2048n,
+  react: 64n,
+  files: 32768n,
+  threads: 34359738368n,
+  connect: 1048576n,
+  speak: 2097152n
+};
+
+const TEXT_PERMISSION_ROWS: Array<{ key: PermissionKey; label: string }> = [
+  { key: "view", label: "閲覧" },
+  { key: "send", label: "発言 / 投稿" },
+  { key: "react", label: "リアクション" },
+  { key: "files", label: "ファイル送信" },
+  { key: "threads", label: "スレッド作成" }
+];
+
+const VOICE_PERMISSION_ROWS: Array<{ key: PermissionKey; label: string }> = [
+  { key: "view", label: "閲覧" },
+  { key: "connect", label: "接続" },
+  { key: "speak", label: "発言" }
+];
+
+const EMPTY_PERMISSION_DRAFT: Record<PermissionKey, PermissionMode> = {
+  view: "inherit",
+  send: "inherit",
+  react: "inherit",
+  files: "inherit",
+  threads: "inherit",
+  connect: "inherit",
+  speak: "inherit"
+};
+
+function permissionMode(
+  channel: ServerEditorMeta["channels"][number],
+  targetId: string,
+  key: PermissionKey
+): PermissionMode {
+  const overwrite = channel.permissionOverwrites?.find(
+    (item) => item.id === targetId && item.type === 0
+  );
+  if (!overwrite) return "inherit";
+  const bit = PERMISSION_BITS[key];
+  const allow = BigInt(overwrite.allow || "0");
+  const deny = BigInt(overwrite.deny || "0");
+  if ((allow & bit) === bit) return "allow";
+  if ((deny & bit) === bit) return "deny";
+  return "inherit";
+}
+
+function draftFor(
+  channel: ServerEditorMeta["channels"][number],
+  targetId: string
+): Record<PermissionKey, PermissionMode> {
+  return {
+    view: permissionMode(channel, targetId, "view"),
+    send: permissionMode(channel, targetId, "send"),
+    react: permissionMode(channel, targetId, "react"),
+    files: permissionMode(channel, targetId, "files"),
+    threads: permissionMode(channel, targetId, "threads"),
+    connect: permissionMode(channel, targetId, "connect"),
+    speak: permissionMode(channel, targetId, "speak")
+  };
+}
 
 type Selection =
   | { kind: "channel"; id: string }
@@ -49,6 +136,12 @@ export default function ServerEditor({
   const [dragging, setDragging] = useState<
     { kind: "channel" | "category"; id: string } | null
   >(null);
+  const [permissionTargetId, setPermissionTargetId] = useState(guildId);
+  const [permissionDraft, setPermissionDraft] =
+    useState<Record<PermissionKey, PermissionMode>>(EMPTY_PERMISSION_DRAFT);
+  const [showPermissionBadges, setShowPermissionBadges] = useState(
+    () => localStorage.getItem("dsm_show_permission_badges") !== "0"
+  );
 
   const selectedChannel = useMemo(
     () =>
@@ -78,6 +171,8 @@ export default function ServerEditor({
     setName(channel.name);
     setTopic(channel.topic ?? "");
     setParentId(channel.parentId ?? "");
+    setPermissionTargetId(guildId);
+    setPermissionDraft(draftFor(channel, guildId));
   }
 
   function openCategory(id: string) {
@@ -95,6 +190,39 @@ export default function ServerEditor({
     setName("");
     setTopic("");
     setParentId(parent ?? "");
+  }
+
+  async function savePermissions() {
+    if (!selectedChannel) return;
+    setSaving(true);
+    try {
+      await api(
+        `/api/guilds/${guildId}/channels/${selectedChannel.id}/permissions/${permissionTargetId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            targetType: "role",
+            permissions: permissionDraft
+          })
+        }
+      );
+      await onRefresh();
+      onNotice("チャンネル権限を保存しました");
+    } catch (reason) {
+      onError(reason);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function renderPermissionBadge(channel: ServerEditorMeta["channels"][number]) {
+    if (!showPermissionBadges) return null;
+    const key: PermissionKey =
+      channel.type === "voice" || channel.type === "stage" ? "speak" : "send";
+    const mode = permissionMode(channel, guildId, key);
+    const label =
+      mode === "allow" ? "発言 可" : mode === "deny" ? "発言 不可" : "発言 継承";
+    return <span className={`permission-badge ${mode}`}>{label}</span>;
   }
 
   async function saveExisting(event: FormEvent) {
@@ -251,9 +379,23 @@ export default function ServerEditor({
             左のDiscord風プレビューから、そのまま追加・編集・削除できます。
           </p>
         </div>
-        <button className="secondary editor-add-category" onClick={() => openCreate(null, "category")}>
-          ＋ カテゴリ
-        </button>
+        <div className="editor-heading-actions">
+          <label className="permission-preview-toggle">
+            <input
+              type="checkbox"
+              checked={showPermissionBadges}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setShowPermissionBadges(checked);
+                localStorage.setItem("dsm_show_permission_badges", checked ? "1" : "0");
+              }}
+            />
+            <span>発言権を表示</span>
+          </label>
+          <button className="secondary editor-add-category" onClick={() => openCreate(null, "category")}>
+            ＋ カテゴリ
+          </button>
+        </div>
       </div>
 
       <div className="server-editor-layout">
@@ -291,7 +433,8 @@ export default function ServerEditor({
                     <span className="channel-hash">
                       {channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}
                     </span>
-                    <span>{channel.name}</span>
+                    <span className="channel-name">{channel.name}</span>
+                    {renderPermissionBadge(channel)}
                     <span className="channel-edit">›</span>
                   </button>
                 ))}
@@ -348,7 +491,8 @@ export default function ServerEditor({
                       <span className="channel-hash">
                         {channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}
                       </span>
-                      <span>{channel.name}</span>
+                      <span className="channel-name">{channel.name}</span>
+                    {renderPermissionBadge(channel)}
                       <span className="channel-edit">›</span>
                     </button>
                   ))}
@@ -504,6 +648,77 @@ export default function ServerEditor({
                       />
                     </label>
                   ) : null}
+
+                  <div className="channel-permission-editor">
+                    <div className="permission-editor-head">
+                      <div>
+                        <strong>チャンネル権限</strong>
+                        <small>ロールごとに継承 / 許可 / 拒否を設定</small>
+                      </div>
+                    </div>
+
+                    <label>
+                      <span>対象ロール</span>
+                      <select
+                        value={permissionTargetId}
+                        onChange={(event) => {
+                          const targetId = event.target.value;
+                          setPermissionTargetId(targetId);
+                          setPermissionDraft(draftFor(selectedChannel, targetId));
+                        }}
+                      >
+                        <option value={guildId}>@everyone</option>
+                        {meta.roles
+                          .filter((role) => role.id !== guildId)
+                          .map((role) => (
+                            <option key={role.id} value={role.id}>
+                              @{role.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+
+                    <div className="permission-list">
+                      {(selectedChannel.type === "voice" || selectedChannel.type === "stage"
+                        ? VOICE_PERMISSION_ROWS
+                        : TEXT_PERMISSION_ROWS
+                      ).map((permission) => (
+                        <div className="permission-row" key={permission.key}>
+                          <span>{permission.label}</span>
+                          <div className="permission-modes">
+                            {(["inherit", "allow", "deny"] as PermissionMode[]).map((mode) => (
+                              <button
+                                type="button"
+                                key={mode}
+                                className={
+                                  permissionDraft[permission.key] === mode
+                                    ? `active ${mode}`
+                                    : ""
+                                }
+                                onClick={() =>
+                                  setPermissionDraft({
+                                    ...permissionDraft,
+                                    [permission.key]: mode
+                                  })
+                                }
+                              >
+                                {mode === "inherit" ? "継承" : mode === "allow" ? "許可" : "拒否"}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="secondary permission-save"
+                      disabled={saving}
+                      onClick={() => void savePermissions()}
+                    >
+                      {saving ? "保存中…" : "権限を保存"}
+                    </button>
+                  </div>
                 </>
               )}
 
