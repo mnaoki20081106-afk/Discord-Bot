@@ -46,6 +46,9 @@ export default function ServerEditor({
   const [parentId, setParentId] = useState("");
   const [createType, setCreateType] = useState<"text" | "voice" | "category">("text");
   const [saving, setSaving] = useState(false);
+  const [dragging, setDragging] = useState<
+    { kind: "channel" | "category"; id: string } | null
+  >(null);
 
   const selectedChannel = useMemo(
     () =>
@@ -134,7 +137,7 @@ export default function ServerEditor({
         body: JSON.stringify({
           name: name.trim(),
           type: createType,
-          parentId: createType === "text" ? parentId || null : null,
+          parentId: createType === "category" ? null : parentId || null,
           topic: createType === "text" ? topic : undefined
         })
       });
@@ -170,6 +173,74 @@ export default function ServerEditor({
     }
   }
 
+  async function reorderItem(
+    id: string,
+    position: number,
+    nextParentId?: string | null
+  ) {
+    setSaving(true);
+    try {
+      await api(`/api/guilds/${guildId}/channels/reorder`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          id,
+          position,
+          ...(nextParentId !== undefined ? { parentId: nextParentId } : {})
+        })
+      });
+      await onRefresh();
+      onNotice("並び順を更新しました");
+    } catch (reason) {
+      onError(reason);
+    } finally {
+      setSaving(false);
+      setDragging(null);
+    }
+  }
+
+  function dropOnChannel(target: ServerEditorMeta["channels"][number]) {
+    if (!dragging || dragging.kind !== "channel" || dragging.id === target.id) {
+      setDragging(null);
+      return;
+    }
+    void reorderItem(
+      dragging.id,
+      target.position ?? 0,
+      target.parentId ?? null
+    );
+  }
+
+  function dropOnCategory(target: ServerEditorMeta["categories"][number]) {
+    if (!dragging) return;
+    if (dragging.kind === "category") {
+      if (dragging.id !== target.id) {
+        void reorderItem(dragging.id, target.position ?? 0);
+      } else {
+        setDragging(null);
+      }
+      return;
+    }
+
+    const firstChild = meta.channels
+      .filter((channel) => channel.parentId === target.id)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0];
+
+    void reorderItem(
+      dragging.id,
+      firstChild?.position ?? (target.position ?? 0) + 1,
+      target.id
+    );
+  }
+
+  function dropUncategorized() {
+    if (!dragging || dragging.kind !== "channel") {
+      setDragging(null);
+      return;
+    }
+    const first = uncategorized[0];
+    void reorderItem(dragging.id, first?.position ?? 0, null);
+  }
+
   return (
     <section className="card server-editor-card">
       <div className="section-head server-editor-heading">
@@ -187,7 +258,11 @@ export default function ServerEditor({
 
       <div className="server-editor-layout">
         <div className="discord-preview">
-          <div className="discord-preview-server">
+          <div
+            className="discord-preview-server"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={dropUncategorized}
+          >
             <strong>{guildName}</strong>
             <button
               className="discord-plus"
@@ -205,7 +280,12 @@ export default function ServerEditor({
                 {uncategorized.map((channel) => (
                   <button
                     key={channel.id}
-                    className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""}`}
+                    draggable
+                    onDragStart={() => setDragging({ kind: "channel", id: channel.id })}
+                    onDragEnd={() => setDragging(null)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => dropOnChannel(channel)}
+                    className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""}`}
                     onClick={() => openChannel(channel.id)}
                   >
                     <span className="channel-hash">
@@ -223,7 +303,14 @@ export default function ServerEditor({
               const selected = selection?.kind === "category" && selection.id === category.id;
               return (
                 <div className="discord-channel-group" key={category.id}>
-                  <div className={`discord-category ${selected ? "selected" : ""}`}>
+                  <div
+                    className={`discord-category ${selected ? "selected" : ""} ${dragging?.kind === "category" && dragging.id === category.id ? "dragging" : ""}`}
+                    draggable
+                    onDragStart={() => setDragging({ kind: "category", id: category.id })}
+                    onDragEnd={() => setDragging(null)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => dropOnCategory(category)}
+                  >
                     <button className="discord-category-name" onClick={() => openCategory(category.id)}>
                       <span>⌄</span>
                       <strong>{category.name.toUpperCase()}</strong>
@@ -241,7 +328,21 @@ export default function ServerEditor({
                   {children.map((channel) => (
                     <button
                       key={channel.id}
-                      className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""}`}
+                      draggable
+                      onDragStart={(event) => {
+                        event.stopPropagation();
+                        setDragging({ kind: "channel", id: channel.id });
+                      }}
+                      onDragEnd={() => setDragging(null)}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                      onDrop={(event) => {
+                        event.stopPropagation();
+                        dropOnChannel(channel);
+                      }}
+                      className={`discord-channel ${selection?.kind === "channel" && selection.id === channel.id ? "selected" : ""} ${dragging?.kind === "channel" && dragging.id === channel.id ? "dragging" : ""}`}
                       onClick={() => openChannel(channel.id)}
                     >
                       <span className="channel-hash">
@@ -271,7 +372,7 @@ export default function ServerEditor({
               <h3>プレビューから編集</h3>
               <p>
                 カテゴリ横の＋でその中にチャンネルを追加。チャンネル名を押すと、
-                名前・トピック・所属カテゴリを変更できます。
+                名前・トピック・所属カテゴリを変更できます。ドラッグ＆ドロップで移動・並べ替えもできます。
               </p>
               <div className="editor-quick-actions">
                 <button className="primary" onClick={() => openCreate(null, "text")}>
