@@ -814,3 +814,384 @@ textarea { min-height: 92px; resize: vertical; }
 .discord-channel-scroll.drag-active {
   cursor: grabbing;
 }
+
+.vending-manager {
+  margin-top: 14px;
+  padding: 24px;
+}
+
+.vending-payment-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vending-layout {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  min-height: 600px;
+  border: 1px solid #1d2639;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #090e18;
+}
+
+.vending-sidebar {
+  padding: 16px;
+  border-right: 1px solid #1d2639;
+  background: #0b111e;
+}
+
+.vending-create {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 42px;
+  gap: 7px;
+}
+
+.vending-create .primary {
+  padding: 0;
+  font-size: 20px;
+}
+
+.vending-machine-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+}
+
+.vending-machine-button {
+  display: grid;
+  grid-template-columns: 34px minmax(0,1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  color: #95a3bd;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.vending-machine-button:hover {
+  color: #eef3ff;
+  background: #111a2b;
+}
+
+.vending-machine-button.active {
+  color: #fff;
+  border-color: #2c3a59;
+  background: #141e32;
+}
+
+.vending-machine-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: #8e9aff;
+  background: #1b2540;
+}
+
+.vending-machine-button strong,
+.vending-machine-button small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vending-machine-button strong { font-size: 12px; }
+.vending-machine-button small { margin-top: 3px; color: #56647f; font-size: 9px; }
+
+.vending-empty,
+.vending-select-prompt {
+  color: #64728c;
+  font-size: 11px;
+}
+
+.vending-empty {
+  padding: 22px 10px;
+  text-align: center;
+}
+
+.payment-connect {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid #1c2639;
+}
+
+.payment-connect > strong {
+  display: block;
+  margin-bottom: 10px;
+  color: #8290ab;
+  font-size: 10px;
+  letter-spacing: .05em;
+}
+
+.payment-connect form {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.payment-connect input {
+  padding: 8px 9px;
+  font-size: 10px;
+}
+
+.vending-main {
+  min-width: 0;
+  padding: 20px;
+}
+
+.vending-select-prompt {
+  min-height: 420px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 7px;
+  text-align: center;
+}
+
+.vending-select-prompt strong {
+  color: #aab6cf;
+  font-size: 15px;
+}
+
+.vending-tabs-section {
+  padding: 18px;
+  margin-bottom: 14px;
+  border: 1px solid #1c263a;
+  border-radius: 15px;
+  background: #0c1321;
+}
+
+.section-head.compact {
+  margin-bottom: 12px;
+}
+
+.section-head.compact h3,
+.vending-tabs-section > h3 {
+  margin: 4px 0 0;
+  font-size: 16px;
+}
+
+.vending-publish-row {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.vending-product-create {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #1b2538;
+}
+
+.vending-products {
+  display: grid;
+  gap: 6px;
+}
+
+.vending-product-card {
+  border: 1px solid #1c263a;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0a101c;
+}
+
+.vending-product-card.active {
+  border-color: #4b5ac7;
+}
+
+.vending-product-summary {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 38px minmax(0,1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  color: #d9e2f4;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.vending-product-summary:hover {
+  background: #11192a;
+}
+
+.vending-product-emoji {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: #151e31;
+  font-size: 18px;
+}
+
+.vending-product-copy strong,
+.vending-product-copy small {
+  display: block;
+}
+
+.vending-product-copy strong { font-size: 12px; }
+.vending-product-copy small { margin-top: 4px; color: #65738d; font-size: 9px; }
+
+.vending-stock-count {
+  min-width: 42px;
+  padding: 6px 9px;
+  text-align: center;
+  color: #9fe0b7;
+  border: 1px solid #214831;
+  border-radius: 999px;
+  background: #0d2117;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.vending-sales {
+  color: #6d7b96;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.vending-product-editor {
+  margin-top: 12px;
+  padding: 18px;
+  border: 1px solid #26324a;
+  border-radius: 14px;
+  background: #0a111e;
+}
+
+.compact-toggle {
+  margin-top: 13px;
+  padding: 11px 0;
+}
+
+.compact-toggle > input {
+  width: 18px;
+  height: 18px;
+}
+
+.vending-stock-editor {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #1b2538;
+}
+
+.vending-stock-editor textarea {
+  min-height: 125px;
+  margin-top: 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.withdraw-input {
+  width: 82px;
+}
+
+.stock-preview {
+  max-height: 240px;
+  margin: 12px 0 0;
+  padding: 13px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #a7b3c8;
+  border: 1px solid #202b40;
+  border-radius: 10px;
+  background: #070c14;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.vending-grid-two {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 14px;
+}
+
+.coupon-create {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 110px auto;
+  gap: 7px;
+  margin: 14px 0;
+}
+
+.coupon-list {
+  display: grid;
+  gap: 7px;
+}
+
+.coupon-row {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid #1f293e;
+  border-radius: 10px;
+  background: #0a101b;
+}
+
+.coupon-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.coupon-row span {
+  color: #8ed6a8;
+  font-size: 10px;
+}
+
+@media (max-width: 1050px) {
+  .vending-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .vending-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #1d2639;
+  }
+
+  .vending-machine-list {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+
+  .payment-connect {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 10px;
+  }
+
+  .payment-connect > strong {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 700px) {
+  .vending-manager { padding: 16px; }
+  .vending-main { padding: 12px; }
+  .vending-machine-list,
+  .payment-connect,
+  .vending-grid-two {
+    grid-template-columns: 1fr;
+  }
+  .vending-product-summary {
+    grid-template-columns: 34px minmax(0,1fr) auto;
+  }
+  .vending-sales {
+    grid-column: 2 / -1;
+  }
+  .coupon-create,
+  .vending-publish-row {
+    grid-template-columns: 1fr;
+  }
+}
