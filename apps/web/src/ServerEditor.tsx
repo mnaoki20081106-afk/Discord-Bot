@@ -157,6 +157,10 @@ export default function ServerEditor({
   const [pressingChannelId, setPressingChannelId] = useState<string | null>(null);
   const [touchDraggingId, setTouchDraggingId] = useState<string | null>(null);
   const [touchDropTarget, setTouchDropTarget] = useState<TouchDropTarget>(null);
+  const [reorderFeedback, setReorderFeedback] = useState<{
+    kind: "saving" | "success" | "error";
+    message: string;
+  } | null>(null);
   const [touchDragGhost, setTouchDragGhost] = useState<{
     channelId: string;
     name: string;
@@ -337,24 +341,72 @@ export default function ServerEditor({
     }
   }
 
-  async function reorderItem(
+  async function reorderChannel(
     id: string,
-    position: number,
-    nextParentId?: string | null
+    destination:
+      | { targetId: string; placement: "before" | "after" }
+      | { parentId: string | null; placement: "start" }
   ) {
     setSaving(true);
+    setReorderFeedback({
+      kind: "saving",
+      message: "Discordへ並び順を反映中…"
+    });
     try {
       await api(`/api/guilds/${guildId}/channels/reorder`, {
         method: "PATCH",
-        body: JSON.stringify({
-          id,
-          position,
-          ...(nextParentId !== undefined ? { parentId: nextParentId } : {})
-        })
+        body: JSON.stringify({ id, ...destination })
       });
       await onRefresh();
-      onNotice("並び順を更新しました");
+      setReorderFeedback({
+        kind: "success",
+        message: "並び替えを反映しました"
+      });
+      window.setTimeout(() => {
+        setReorderFeedback((current) =>
+          current?.kind === "success" ? null : current
+        );
+      }, 1800);
     } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setReorderFeedback({
+        kind: "error",
+        message: "並び替えに失敗しました: " + message
+      });
+      onError(reason);
+    } finally {
+      setSaving(false);
+      setDragging(null);
+    }
+  }
+
+  async function reorderCategory(id: string, position: number) {
+    setSaving(true);
+    setReorderFeedback({
+      kind: "saving",
+      message: "カテゴリの並び順を反映中…"
+    });
+    try {
+      await api(`/api/guilds/${guildId}/channels/reorder`, {
+        method: "PATCH",
+        body: JSON.stringify({ id, position })
+      });
+      await onRefresh();
+      setReorderFeedback({
+        kind: "success",
+        message: "カテゴリの並び替えを反映しました"
+      });
+      window.setTimeout(() => {
+        setReorderFeedback((current) =>
+          current?.kind === "success" ? null : current
+        );
+      }, 1800);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setReorderFeedback({
+        kind: "error",
+        message: "カテゴリの並び替えに失敗しました: " + message
+      });
       onError(reason);
     } finally {
       setSaving(false);
@@ -367,33 +419,27 @@ export default function ServerEditor({
       setDragging(null);
       return;
     }
-    void reorderItem(
-      dragging.id,
-      target.position ?? 0,
-      target.parentId ?? null
-    );
+    void reorderChannel(dragging.id, {
+      targetId: target.id,
+      placement: "before"
+    });
   }
 
   function dropOnCategory(target: ServerEditorMeta["categories"][number]) {
     if (!dragging) return;
     if (dragging.kind === "category") {
       if (dragging.id !== target.id) {
-        void reorderItem(dragging.id, target.position ?? 0);
+        void reorderCategory(dragging.id, target.position ?? 0);
       } else {
         setDragging(null);
       }
       return;
     }
 
-    const firstChild = meta.channels
-      .filter((channel) => channel.parentId === target.id)
-      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0];
-
-    void reorderItem(
-      dragging.id,
-      firstChild?.position ?? (target.position ?? 0) + 1,
-      target.id
-    );
+    void reorderChannel(dragging.id, {
+      parentId: target.id,
+      placement: "start"
+    });
   }
 
   function dropUncategorized() {
@@ -401,8 +447,10 @@ export default function ServerEditor({
       setDragging(null);
       return;
     }
-    const first = uncategorized[0];
-    void reorderItem(dragging.id, first?.position ?? 0, null);
+    void reorderChannel(dragging.id, {
+      parentId: null,
+      placement: "start"
+    });
   }
 
   function clearPendingTouch() {
@@ -540,33 +588,50 @@ export default function ServerEditor({
     if (target.kind === "channel") {
       const targetChannel = meta.channels.find((channel) => channel.id === target.id);
       if (!targetChannel || targetChannel.id === channelId) return;
-      const position =
-        (targetChannel.position ?? 0) + (target.placement === "after" ? 1 : 0);
-      void reorderItem(channelId, position, targetChannel.parentId ?? null);
+      void reorderChannel(channelId, {
+        targetId: targetChannel.id,
+        placement: target.placement
+      });
       return;
     }
 
     if (target.kind === "category") {
       const category = meta.categories.find((item) => item.id === target.id);
       if (!category) return;
-      const firstChild = meta.channels
-        .filter(
-          (channel) =>
-            channel.id !== channelId && channel.parentId === category.id
-        )
-        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0];
-      void reorderItem(
-        channelId,
-        firstChild?.position ?? (category.position ?? 0) + 1,
-        category.id
-      );
+      void reorderChannel(channelId, {
+        parentId: category.id,
+        placement: "start"
+      });
       return;
     }
 
-    const first = uncategorized
-      .filter((channel) => channel.id !== channelId)
-      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0];
-    void reorderItem(channelId, first?.position ?? 0, null);
+    void reorderChannel(channelId, {
+      parentId: null,
+      placement: "start"
+    });
+  }
+
+  function touchDropDescription(): string {
+    if (!touchDropTarget) return "移動先を選んでください";
+
+    if (touchDropTarget.kind === "channel") {
+      const target = meta.channels.find(
+        (channel) => channel.id === touchDropTarget.id
+      );
+      if (!target) return "移動先を選んでください";
+      return `#${target.name} の${touchDropTarget.placement === "before" ? "前" : "後"}へ移動`;
+    }
+
+    if (touchDropTarget.kind === "category") {
+      const category = meta.categories.find(
+        (item) => item.id === touchDropTarget.id
+      );
+      return category
+        ? `${category.name} の先頭へ移動`
+        : "カテゴリへ移動";
+    }
+
+    return "カテゴリなしの先頭へ移動";
   }
 
   useEffect(() => {
@@ -695,6 +760,32 @@ export default function ServerEditor({
 
       <div className="server-editor-layout">
         <div className="discord-preview">
+          {(touchDraggingId || reorderFeedback) && (
+            <div
+              className={
+                touchDraggingId
+                  ? "reorder-status dragging"
+                  : `reorder-status ${reorderFeedback?.kind ?? ""}`
+              }
+              role="status"
+              aria-live="polite"
+            >
+              <span className="reorder-status-icon">
+                {touchDraggingId
+                  ? "↕"
+                  : reorderFeedback?.kind === "success"
+                    ? "✓"
+                    : reorderFeedback?.kind === "error"
+                      ? "!"
+                      : "…"}
+              </span>
+              <strong>
+                {touchDraggingId
+                  ? touchDropDescription()
+                  : reorderFeedback?.message}
+              </strong>
+            </div>
+          )}
           <div
             className={`discord-preview-server ${
               touchDropTarget?.kind === "uncategorized" ? "touch-drop-target" : ""
