@@ -388,11 +388,19 @@ export default function ServerEditor({
         });
       }
 
-      await onRefresh();
+      setSaving(false);
+      setBulkSavingProgress(null);
       setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
       onNotice(
         `${bulkSelectedChannels.length}チャンネルの${permissionPreviewRoleName}権限を更新しました`
       );
+      void onRefresh().catch(() => {
+        onError(
+          new Error(
+            "権限の保存は完了しましたが、最新表示の再取得に失敗しました。画面を再読み込みすると反映を確認できます"
+          )
+        );
+      });
     } catch (reason) {
       onError(reason);
     } finally {
@@ -415,8 +423,15 @@ export default function ServerEditor({
           })
         }
       );
-      await onRefresh();
+      setSaving(false);
       onNotice("チャンネル権限を保存しました");
+      void onRefresh().catch(() => {
+        onError(
+          new Error(
+            "権限の保存は完了しましたが、最新表示の再取得に失敗しました。画面を再読み込みすると反映を確認できます"
+          )
+        );
+      });
     } catch (reason) {
       onError(reason);
     } finally {
