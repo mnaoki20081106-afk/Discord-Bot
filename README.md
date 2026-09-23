@@ -120,6 +120,7 @@ cp .env.example .env
 PORT=8787
 API_PUBLIC_URL=https://YOUR-BACKEND.example.com
 WEB_ORIGIN=https://mnaoki20081106-afk.github.io
+WEB_PUBLIC_URL=https://mnaoki20081106-afk.github.io/Discord-Bot/
 DATABASE_URL=postgres://...
 
 DISCORD_CLIENT_ID=...
@@ -200,10 +201,11 @@ Pages URL:
 https://mnaoki20081106-afk.github.io/Discord-Bot/
 ```
 
-Backend側の `WEB_ORIGIN` は **originだけ** を指定します。
+Backend側では、CORS用Originと実際のPages URLを分けます。
 
 ```env
 WEB_ORIGIN=https://mnaoki20081106-afk.github.io
+WEB_PUBLIC_URL=https://mnaoki20081106-afk.github.io/Discord-Bot/
 ```
 
 ## Slash Commands
