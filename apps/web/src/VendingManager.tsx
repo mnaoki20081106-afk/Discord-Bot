@@ -123,7 +123,7 @@ export default function VendingManager({
     });
   },[detail,editingProduct,productEdit]);
 
-  const panelDirty = Boolean(detail) && (
+  const panelDirty = detail!==null && (
     machineForm.name!==detail.name ||
     machineForm.panelTitle!==(detail.panel_title??"") ||
     machineForm.panelDescription!==(detail.panel_description??"") ||
