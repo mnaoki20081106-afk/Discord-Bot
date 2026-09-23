@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS: GuildSettings = {
   logChannelId: null,
   verifiedRoleId: null,
   minAccountAgeDays: 3,
+  ticketSupportRoleIds: [],
   trustedUserIds: [],
   trustedRoleIds: []
 };
