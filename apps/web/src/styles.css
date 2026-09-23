@@ -1195,3 +1195,16 @@ textarea { min-height: 92px; resize: vertical; }
     grid-template-columns: 1fr;
   }
 }
+
+.vending-panel-update {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (max-width: 700px) {
+  .vending-panel-update {
+    grid-template-columns: 1fr;
+  }
+}
