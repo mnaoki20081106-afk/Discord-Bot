@@ -36,6 +36,7 @@ const schema=[
 "CREATE TABLE IF NOT EXISTS vending_stock_notifications (vending_machine_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,channel_id TEXT NOT NULL,role_id TEXT NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_orders (id TEXT PRIMARY KEY,vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,payment_method TEXT NOT NULL,quantity INTEGER NOT NULL,unit_price INTEGER NOT NULL,discount_each INTEGER NOT NULL DEFAULT 0,total_amount INTEGER NOT NULL,status TEXT NOT NULL,payment_link_hash TEXT,payment_link_enc TEXT,reserved_until INTEGER,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,paid_at INTEGER,delivered_at INTEGER)",
 "CREATE INDEX IF NOT EXISTS vending_orders_status_idx ON vending_orders(status,reserved_until,created_at)",
+"CREATE UNIQUE INDEX IF NOT EXISTS vending_orders_link_hash_unique ON vending_orders(payment_link_hash) WHERE payment_link_hash IS NOT NULL",
 "CREATE TABLE IF NOT EXISTS vending_payment_accounts (user_id TEXT PRIMARY KEY,paypay_phone_enc TEXT,paypay_password_enc TEXT,paypay_uuid TEXT,kyash_email_enc TEXT,kyash_password_enc TEXT,kyash_client_uuid TEXT,kyash_installation_uuid TEXT,kyash_access_token_enc TEXT,updated_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_payment_login_challenges (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,provider TEXT NOT NULL,payload_enc TEXT NOT NULL,expires_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_used_payment_links (link_hash TEXT PRIMARY KEY,provider TEXT NOT NULL,order_id TEXT NOT NULL,used_at INTEGER NOT NULL)"
@@ -55,6 +56,7 @@ export async function cleanVendingExpired(env:Env){
     await releaseStock(env,row.id);
     await env.DB.prepare("UPDATE vending_orders SET status='expired',updated_at=? WHERE id=? AND status='awaiting_payment'").bind(now,row.id).run();
   }
+  await env.DB.prepare("UPDATE vending_orders SET status='paid',updated_at=? WHERE status='delivering' AND delivered_at IS NULL AND updated_at<?").bind(now,now-5*60_000).run();
   await env.DB.prepare("DELETE FROM vending_payment_login_challenges WHERE expires_at<?").bind(now).run();
 }
 
