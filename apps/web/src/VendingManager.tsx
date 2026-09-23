@@ -75,6 +75,7 @@ export default function VendingManager({
     panelImageUrl:""
   });
   const [panelChannel,setPanelChannel]=useState("");
+  const [panelMessageUrl,setPanelMessageUrl]=useState("");
   const [notifyChannel,setNotifyChannel]=useState("");
   const [notifyRole,setNotifyRole]=useState("");
 
@@ -119,8 +120,15 @@ export default function VendingManager({
   }
 
   async function loadDetail(id:string){
-    const data=await api<MachineDetail>(`/api/guilds/${guildId}/vending/${id}`);
+    const [data,notification]=await Promise.all([
+      api<MachineDetail>(`/api/guilds/${guildId}/vending/${id}`),
+      api<{channel_id:string;role_id:string}|null>(
+        `/api/guilds/${guildId}/vending/${id}/stock-notification`
+      )
+    ]);
     setDetail(data);
+    setNotifyChannel(notification?.channel_id??"");
+    setNotifyRole(notification?.role_id??"");
     setMachineForm({
       name:data.name,
       publicLogChannelId:data.public_log_channel_id??"",
@@ -211,6 +219,19 @@ export default function VendingManager({
         body:JSON.stringify({channelId:panelChannel})
       });
       onNotice("Discordへ自販機パネルを設置しました");
+    }catch(reason){onError(reason);}
+    finally{setBusy(false);}
+  }
+
+  async function updatePanel(){
+    if(!selectedId||!panelMessageUrl.trim()) return;
+    setBusy(true);
+    try{
+      await api(`/api/guilds/${guildId}/vending/${selectedId}/panel/update`,{
+        method:"POST",
+        body:JSON.stringify({messageUrl:panelMessageUrl.trim()})
+      });
+      onNotice("既存の自販機パネルを更新しました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
@@ -583,6 +604,16 @@ export default function VendingManager({
                     {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
                   </select>
                   <button className="primary" onClick={()=>void publishPanel()} disabled={!panelChannel||busy}>Discordに設置</button>
+                </div>
+                <div className="vending-panel-update">
+                  <input
+                    value={panelMessageUrl}
+                    onChange={e=>setPanelMessageUrl(e.target.value)}
+                    placeholder="既存パネルのDiscordメッセージURL"
+                  />
+                  <button className="secondary" onClick={()=>void updatePanel()} disabled={!panelMessageUrl.trim()||busy}>
+                    既存パネル更新
+                  </button>
                 </div>
               </div>
 
