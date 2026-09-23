@@ -220,6 +220,7 @@ async function inspectAuditAction(
     await neutralizeExecutor(
       guild,
       executorId,
+      settings,
       `Anti-Nuke: ${settings.nukeWindowSeconds}秒で${count}回の危険操作`
     );
   }
@@ -602,10 +603,12 @@ async function onInteraction(interaction: Interaction): Promise<void> {
         interaction.commandName === "ticket-panel") &&
       interaction.guild
     ) {
-      const channel = interaction.options.getChannel("channel", true);
+      const channelOption = interaction.options.getChannel("channel", true);
+      const channel = await interaction.guild.channels.fetch(channelOption.id).catch(() => null);
       if (
-        channel.type !== ChannelType.GuildText &&
-        channel.type !== ChannelType.GuildAnnouncement
+        !channel ||
+        (channel.type !== ChannelType.GuildText &&
+          channel.type !== ChannelType.GuildAnnouncement)
       ) {
         await interaction.reply({ ephemeral: true, content: "テキストチャンネルを指定してください。" });
         return;
@@ -656,7 +659,10 @@ async function onInteraction(interaction: Interaction): Promise<void> {
     if (interaction.customId === "ticket:create") return createTicket(interaction);
     if (interaction.customId === "ticket:close") {
       await interaction.reply({ ephemeral: true, content: "チケットを閉じます。" });
-      setTimeout(() => interaction.channel?.delete().catch(() => undefined), 1200);
+      const ticketChannel = interaction.guild?.channels.cache.get(interaction.channelId);
+      setTimeout(() => {
+        if (ticketChannel?.deletable) void ticketChannel.delete().catch(() => undefined);
+      }, 1200);
       return;
     }
     if (interaction.customId.startsWith("buy:")) return purchase(interaction);
@@ -679,14 +685,13 @@ export async function startBot(): Promise<void> {
   });
 
   client.on(Events.ChannelDelete, (channel) => {
-    if (channel.guild) {
-      void inspectAuditAction(
-        channel.guild,
-        channel.id,
-        AuditLogEvent.ChannelDelete,
-        `チャンネル削除 #${channel.name}`
-      );
-    }
+    if (channel.isDMBased()) return;
+    void inspectAuditAction(
+      channel.guild,
+      channel.id,
+      AuditLogEvent.ChannelDelete,
+      `チャンネル削除 #${channel.name}`
+    );
   });
 
   client.on(Events.GuildRoleDelete, (role) => {
@@ -734,6 +739,7 @@ export async function startBot(): Promise<void> {
       await neutralizeExecutor(
         newRole.guild,
         executorId,
+        settings,
         "危険権限をロールへ追加したため"
       );
     })().catch(console.error);
