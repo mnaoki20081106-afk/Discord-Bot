@@ -8,6 +8,7 @@ export interface Env {
   DISCORD_BOT_TOKEN: string;
   DISCORD_CLIENT_SECRET: string;
   SESSION_ENCRYPTION_KEY: string;
+  DASHBOARD_PASSWORD: string;
   PAYPAY_API_KEY?: string;
   PAYPAY_API_SECRET?: string;
   PAYPAY_MERCHANT_ID?: string;
@@ -31,6 +32,12 @@ export type GuildSettings = {
   minAccountAgeDays: number;
   trustedUserIds: string[];
   trustedRoleIds: string[];
+};
+
+export type DashboardSession = {
+  token_hash: string;
+  expires_at: number;
+  created_at: number;
 };
 
 export type SessionRow = {
