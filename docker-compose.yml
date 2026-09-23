@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: discord_manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - discord_manager_db:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/discord_manager
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+
+volumes:
+  discord_manager_db:
