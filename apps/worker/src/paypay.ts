@@ -1,4 +1,5 @@
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+import { bytesToHex } from "./utils";
 import type { Env } from "./types";
 
 function baseUrl(env:Env):string{
@@ -12,7 +13,9 @@ function auth(env:Env,method:string,path:string,body?:string):{
   contentType?:string;
 }{
   if(!env.PAYPAY_API_KEY||!env.PAYPAY_API_SECRET) throw new Error("PayPay not configured");
-  const nonce=randomBytes(6).toString("hex");
+  const nonceBytes=new Uint8Array(6);
+  crypto.getRandomValues(nonceBytes);
+  const nonce=bytesToHex(nonceBytes);
   const epoch=Math.floor(Date.now()/1000).toString();
   const contentType=body===undefined?"empty":"application/json";
   const hash=body===undefined
