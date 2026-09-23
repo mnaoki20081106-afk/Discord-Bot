@@ -221,7 +221,7 @@ app.get("/auth/discord/callback", async (request, reply) => {
     "dsm_oauth_state=; Path=/auth/discord; HttpOnly; SameSite=Lax; Max-Age=0"
   );
   return reply.redirect(
-    `${env.WEB_ORIGIN.replace(/\/$/, "")}/#session=${encodeURIComponent(rawSession)}`
+    `${env.WEB_PUBLIC_URL.replace(/\/$/, "")}/#session=${encodeURIComponent(rawSession)}`
   );
 });
 
