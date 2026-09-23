@@ -42,6 +42,12 @@ import {
 } from "./discord";
 import { createPayPayQr, getPayPayStatus, payPayConfigured } from "./paypay";
 import {
+  handleVendingApi,
+  handleVendingInteraction,
+  vendingSweep,
+  VendingHttpError
+} from "./vending";
+import {
   accountCreatedAt,
   challengeCode,
   corsHeaders,
@@ -366,6 +372,8 @@ async function handleInteraction(
   if(!(await verifyInteraction(env,request,text))) return new Response("invalid signature",{status:401});
   const interaction=JSON.parse(text) as any;
   if(interaction.type===1) return interactionResponse({type:1});
+  const vendingResponse=await handleVendingInteraction(interaction,env,ctx);
+  if(vendingResponse) return vendingResponse;
 
   if(interaction.type===2){
     const name=interaction.data?.name;
@@ -874,13 +882,21 @@ export default {
         return oauthCallback(request,env);
       }
       if(url.pathname.startsWith("/api/")){
+        const vendingResponse=await handleVendingApi(request,env,url);
+        if(vendingResponse) return vendingResponse;
         return await handleApi(request,env,url);
       }
       throw new HttpError(404,"Not found");
     }catch(error){
       console.error(error);
-      const status=error instanceof HttpError?error.status:500;
-      const message=error instanceof HttpError?error.message:"サーバー処理に失敗しました";
+      const status=
+        error instanceof HttpError?error.status:
+        error instanceof VendingHttpError?error.status:
+        500;
+      const message=
+        error instanceof HttpError||error instanceof VendingHttpError
+          ?error.message
+          :"サーバー処理に失敗しました";
       return json(env,{error:status>=500?"server_error":"request_error",message},status);
     }
   },
@@ -890,7 +906,8 @@ export default {
     ctx.waitUntil(Promise.all([
       cleanExpired(env),
       auditWatch(env),
-      paymentSweep(env)
+      paymentSweep(env),
+      vendingSweep(env)
     ]).then(()=>undefined));
   }
 } satisfies ExportedHandler<Env>;
