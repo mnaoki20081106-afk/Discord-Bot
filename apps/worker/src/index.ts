@@ -366,7 +366,7 @@ async function handleInteraction(
   if(interaction.type===3){
     const id=interaction.data?.custom_id as string;
     if(id?.startsWith("verify:start:")){
-      const guildId=id.split(":")[2];
+      const guildId=id.split(":")[2]!;
       const challengeId=randomId();
       const code=challengeCode();
       await putChallenge(env,challengeId,guildId,interaction.member.user.id,code);
@@ -382,7 +382,7 @@ async function handleInteraction(
       ));
     }
     if(id?.startsWith("verify:answer:")){
-      const challengeId=id.split(":")[2];
+      const challengeId=id.split(":")[2]!;
       return interactionResponse({
         type:9,
         data:{
@@ -448,7 +448,7 @@ async function handleInteraction(
   if(interaction.type===5){
     const id=interaction.data?.custom_id as string;
     if(id?.startsWith("verify:modal:")){
-      const challengeId=id.split(":")[2];
+      const challengeId=id.split(":")[2]!;
       const challenge=await consumeChallenge(env,challengeId);
       if(!challenge||challenge.expires_at<Date.now()) return interactionResponse(ephemeral("認証が失効しています。"));
       if(challenge.user_id!==interaction.member.user.id||challenge.guild_id!==interaction.guild_id){
@@ -530,7 +530,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   const meta=url.pathname.match(/^\/api\/guilds\/(\d+)\/meta$/);
   if(meta&&request.method==="GET"){
-    const guildId=meta[1];
+    const guildId=meta[1]!;
     await requireGuild(request,env,guildId);
     const guild=await botJson<{id:string;name:string;icon:string|null}>(env,`/guilds/${guildId}`);
     return json(env,{...guild,...await discordMeta(env,guildId)});
@@ -538,7 +538,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   const settingsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/settings$/);
   if(settingsMatch){
-    const guildId=settingsMatch[1];
+    const guildId=settingsMatch[1]!;
     await requireGuild(request,env,guildId);
     if(request.method==="GET") return json(env,await getGuildSettings(env,guildId));
     if(request.method==="PUT"){
@@ -556,7 +556,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   const channelsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/channels$/);
   if(channelsMatch&&request.method==="POST"){
-    const guildId=channelsMatch[1];
+    const guildId=channelsMatch[1]!;
     await requireGuild(request,env,guildId);
     const input=await bodyObject<{name:string;type:"text"|"category";parentId?:string|null;topic?:string}>(request);
     const name=input.name?.trim();
@@ -572,22 +572,22 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   const templateMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/templates\/(community|shop|support)$/);
   if(templateMatch&&request.method==="POST"){
-    await requireGuild(request,env,templateMatch[1]);
-    await applyTemplate(env,templateMatch[1],templateMatch[2]);
+    await requireGuild(request,env,templateMatch[1]!);
+    await applyTemplate(env,templateMatch[1]!,templateMatch[2]!);
     return json(env,{ok:true});
   }
 
   const verifyPanel=url.pathname.match(/^\/api\/guilds\/(\d+)\/verification\/panel$/);
   if(verifyPanel&&request.method==="POST"){
-    await requireGuild(request,env,verifyPanel[1]);
+    await requireGuild(request,env,verifyPanel[1]!);
     const {channelId}=await bodyObject<{channelId:string}>(request);
-    await publishVerificationPanel(env,verifyPanel[1],channelId);
+    await publishVerificationPanel(env,verifyPanel[1]!,channelId);
     return json(env,{ok:true});
   }
 
   const ticketPanel=url.pathname.match(/^\/api\/guilds\/(\d+)\/tickets\/panel$/);
   if(ticketPanel&&request.method==="POST"){
-    await requireGuild(request,env,ticketPanel[1]);
+    await requireGuild(request,env,ticketPanel[1]!);
     const {channelId}=await bodyObject<{channelId:string}>(request);
     await publishTicketPanel(env,channelId);
     return json(env,{ok:true});
@@ -595,7 +595,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   const productsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/products$/);
   if(productsMatch){
-    const guildId=productsMatch[1];
+    const guildId=productsMatch[1]!;
     await requireGuild(request,env,guildId);
     if(request.method==="GET") return json(env,await listProducts(env,guildId));
     if(request.method==="POST"){
@@ -621,16 +621,16 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   const productDelete=url.pathname.match(/^\/api\/guilds\/(\d+)\/products\/([^/]+)$/);
   if(productDelete&&request.method==="DELETE"){
-    await requireGuild(request,env,productDelete[1]);
-    if(!(await deleteProduct(env,productDelete[1],productDelete[2]))) throw new HttpError(404,"商品が見つかりません");
+    await requireGuild(request,env,productDelete[1]!);
+    if(!(await deleteProduct(env,productDelete[1]!,productDelete[2]!))) throw new HttpError(404,"商品が見つかりません");
     return json(env,{ok:true});
   }
 
   const productPanel=url.pathname.match(/^\/api\/guilds\/(\d+)\/products\/([^/]+)\/panel$/);
   if(productPanel&&request.method==="POST"){
-    await requireGuild(request,env,productPanel[1]);
-    const product=await getProduct(env,productPanel[2]);
-    if(!product||product.guild_id!==productPanel[1]||!product.active) throw new HttpError(404,"商品が見つかりません");
+    await requireGuild(request,env,productPanel[1]!);
+    const product=await getProduct(env,productPanel[2]!);
+    if(!product||product.guild_id!==productPanel[1]!||!product.active) throw new HttpError(404,"商品が見つかりません");
     const {channelId}=await bodyObject<{channelId:string}>(request);
     await publishProductPanel(env,channelId,product);
     return json(env,{ok:true});
@@ -728,7 +728,7 @@ async function auditWatch(env:Env):Promise<void>{
       id:string;action_type:number;user_id?:string|null;
     }> }>(env,`/guilds/${row.guild_id}/audit-logs?limit=30`).catch(()=>null);
     if(!payload?.audit_log_entries?.length) continue;
-    const newest=payload.audit_log_entries[0].id;
+    const newest=payload.audit_log_entries[0]!.id;
     const cursor=await getAuditCursor(env,row.guild_id);
     if(!cursor){
       await setAuditCursor(env,row.guild_id,newest);
@@ -751,7 +751,7 @@ async function auditWatch(env:Env):Promise<void>{
       times.sort((a,b)=>a-b);
       let left=0,hit=false;
       for(let right=0;right<times.length;right++){
-        while(times[right]-times[left]>windowMs) left++;
+        while(times[right]!-times[left]!>windowMs) left++;
         if(right-left+1>=settings.nukeActions){hit=true;break;}
       }
       if(hit) await neutralize(env,row.guild_id,userId,settings).catch(console.error);
