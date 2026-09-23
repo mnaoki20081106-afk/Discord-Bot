@@ -345,7 +345,7 @@ export default function App() {
           <span className="eyebrow">Discord Server Manager</span>
           <h1>サーバー管理を、ひとつの画面に。</h1>
           <p>
-            セキュリティ、認証、チャンネル構築、Ticket、PayPay自販機を
+            サーバー構成、チャンネル編集、セキュリティ、認証、Ticketを
             Discordログインからまとめて管理します。
           </p>
           <button
@@ -686,137 +686,6 @@ export default function App() {
               </div>
             </section>
 
-            <section className="card shop-section">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">PAYPAY VENDING</span>
-                  <h2>PayPay自販機</h2>
-                  <p className="muted">
-                    決済完了を確認してからロール付与またはDM納品します。
-                  </p>
-                </div>
-                <span className={`status-pill ${status?.payPayConfigured ? "good" : "warn"}`}>
-                  <i /> {status?.payPayConfigured ? "決済利用可能" : "APIキー未設定"}
-                </span>
-              </div>
-
-              <div className="shop-layout">
-                <form className="product-form" onSubmit={(e) => void createProduct(e)}>
-                  <Field label="商品名">
-                    <input
-                      required
-                      value={productForm.name}
-                      onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
-                      placeholder="Premium Role"
-                    />
-                  </Field>
-                  <Field label="説明">
-                    <textarea
-                      value={productForm.description}
-                      onChange={(e) =>
-                        setProductForm({ ...productForm, description: e.target.value })
-                      }
-                      placeholder="商品の説明"
-                    />
-                  </Field>
-                  <div className="form-grid two">
-                    <Field label="価格（円）">
-                      <input
-                        type="number"
-                        min="1"
-                        required
-                        value={productForm.priceYen}
-                        onChange={(e) =>
-                          setProductForm({ ...productForm, priceYen: Number(e.target.value) })
-                        }
-                      />
-                    </Field>
-                    <Field label="納品方式">
-                      <select
-                        value={productForm.deliveryType}
-                        onChange={(e) =>
-                          setProductForm({
-                            ...productForm,
-                            deliveryType: e.target.value as "role" | "text"
-                          })
-                        }
-                      >
-                        <option value="role">Discordロール</option>
-                        <option value="text">DMテキスト</option>
-                      </select>
-                    </Field>
-                  </div>
-
-                  {productForm.deliveryType === "role" ? (
-                    <Field label="付与ロール">
-                      <select
-                        required
-                        value={productForm.roleId}
-                        onChange={(e) =>
-                          setProductForm({ ...productForm, roleId: e.target.value })
-                        }
-                      >
-                        <option value="">ロールを選択</option>
-                        {meta.roles.map((role) => (
-                          <option key={role.id} value={role.id}>@{role.name}</option>
-                        ))}
-                      </select>
-                    </Field>
-                  ) : (
-                    <Field label="購入後にDMする内容">
-                      <textarea
-                        required
-                        value={productForm.deliveryText}
-                        onChange={(e) =>
-                          setProductForm({ ...productForm, deliveryText: e.target.value })
-                        }
-                        placeholder="ダウンロードURLや購入者向けメッセージ"
-                      />
-                    </Field>
-                  )}
-
-                  <button className="primary" type="submit">商品を追加</button>
-                </form>
-
-                <div className="product-list">
-                  <Field label="販売パネル設置先">
-                    <select
-                      value={productPanelChannel}
-                      onChange={(e) => setProductPanelChannel(e.target.value)}
-                    >
-                      {meta.channels.map((channel) => (
-                        <option key={channel.id} value={channel.id}>#{channel.name}</option>
-                      ))}
-                    </select>
-                  </Field>
-
-                  {products.length === 0 ? (
-                    <div className="product-empty">まだ商品がありません。</div>
-                  ) : (
-                    products.map((product) => (
-                      <article className="product" key={product.id}>
-                        <div>
-                          <span className="product-type">
-                            {product.delivery_type === "role" ? "ROLE" : "DM"}
-                          </span>
-                          <h3>{product.name}</h3>
-                          <p>{product.description || "説明なし"}</p>
-                        </div>
-                        <strong className="price">¥{product.price_yen.toLocaleString("ja-JP")}</strong>
-                        <div className="product-actions">
-                          <button className="secondary" onClick={() => void publishProduct(product.id)}>
-                            Discordに設置
-                          </button>
-                          <button className="danger" onClick={() => void removeProduct(product.id)}>
-                            削除
-                          </button>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </div>
-            </section>
           </>
         )}
       </main>
