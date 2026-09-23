@@ -117,6 +117,7 @@ export async function deleteCoupon(env:Env,vmId:string,ownerId:string,code:strin
 
 export async function saveStockNotify(env:Env,vmId:string,guildId:string,channelId:string,roleId:string){ await env.DB.prepare("INSERT INTO vending_stock_notifications(vending_machine_id,guild_id,channel_id,role_id,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(vending_machine_id) DO UPDATE SET guild_id=excluded.guild_id,channel_id=excluded.channel_id,role_id=excluded.role_id,updated_at=excluded.updated_at").bind(vmId,guildId,channelId,roleId,Date.now()).run(); }
 export async function getStockNotify(env:Env,vmId:string){ return await env.DB.prepare("SELECT guild_id,channel_id,role_id FROM vending_stock_notifications WHERE vending_machine_id=?").bind(vmId).first<{guild_id:string;channel_id:string;role_id:string}>()??null; }
+export async function deleteStockNotify(env:Env,vmId:string){ await env.DB.prepare("DELETE FROM vending_stock_notifications WHERE vending_machine_id=?").bind(vmId).run(); }
 
 export async function reserveOrder(env:Env,input:{vmId:string;product:VmProduct;guildId:string;userId:string;method:"paypay"|"kyash";quantity:number;discount:number}){
   const now=Date.now(),q=input.product.infinite_stock?1:input.quantity,unit=input.method==="kyash"?input.product.price_kyash:input.product.price_paypay,total=Math.max(0,(unit-input.discount)*q),orderId=randomId(),until=now+10*60_000;
