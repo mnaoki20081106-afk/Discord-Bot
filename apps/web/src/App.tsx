@@ -15,6 +15,7 @@ type Meta = {
   id: string;
   name: string;
   icon: string | null;
+  botAdministrator?: boolean;
   channels: Array<{
     id: string;
     name: string;
@@ -22,6 +23,8 @@ type Meta = {
     parentId?: string | null;
     topic?: string;
     position?: number;
+    botCanView?: boolean;
+    botCanPost?: boolean;
     permissionOverwrites?: Array<{
       id: string;
       type: number;
@@ -169,6 +172,16 @@ export default function App() {
     [guilds, selectedId]
   );
 
+  const selectedVerificationChannel = useMemo(
+    () => meta?.channels.find((channel) => channel.id === verificationPanelChannel) ?? null,
+    [meta, verificationPanelChannel]
+  );
+
+  const selectedTicketChannel = useMemo(
+    () => meta?.channels.find((channel) => channel.id === ticketPanelChannel) ?? null,
+    [meta, ticketPanelChannel]
+  );
+
   function flash(message: string) {
     setNotice(message);
     setError(null);
@@ -242,12 +255,15 @@ export default function App() {
 
       setMeta(serverMeta);
       setSettings(serverSettings);
-      const firstMessageChannel =
-        serverMeta.channels.find((channel) =>
+      const messageChannels = serverMeta.channels.filter(
+        (channel) =>
           channel.type === "text" || channel.type === "announcement"
-        )?.id ?? "";
-      setVerificationPanelChannel(firstMessageChannel);
-      setTicketPanelChannel(firstMessageChannel);
+      );
+      const firstPanelChannel =
+        messageChannels.find((channel) => channel.botCanPost !== false)?.id ?? "";
+      const firstMessageChannel = messageChannels[0]?.id ?? "";
+      setVerificationPanelChannel(firstPanelChannel);
+      setTicketPanelChannel(firstPanelChannel);
       setProductPanelChannel(firstMessageChannel);
 
       try {
@@ -315,7 +331,19 @@ export default function App() {
     if (!channelId) {
       setFeedback({
         kind: "error",
-        message: "パネルを設置できるテキストチャンネルがありません"
+        message:
+          "BOTが投稿できるテキストチャンネルがありません。BOT権限を更新してください"
+      });
+      return;
+    }
+
+    const selectedPanelChannel =
+      meta?.channels.find((channel) => channel.id === channelId) ?? null;
+    if (selectedPanelChannel?.botCanPost === false) {
+      setFeedback({
+        kind: "error",
+        message:
+          "このチャンネルではBOTの閲覧・送信・埋め込み権限が拒否されています。BOT権限を更新するか、投稿可能なチャンネルを選択してください"
       });
       return;
     }
@@ -536,7 +564,7 @@ export default function App() {
           <div className="status-row">
             {status?.inviteUrl && (
               <a className="primary" href={status.inviteUrl} target="_blank" rel="noreferrer">
-                BOTをサーバーへ追加
+                {selectedGuild ? "BOT権限を更新" : "BOTをサーバーへ追加"}
               </a>
             )}
             <span
@@ -585,10 +613,13 @@ export default function App() {
                 const messageChannels = serverMeta.channels.filter((channel) =>
                   channel.type === "text" || channel.type === "announcement"
                 );
+                const postableChannels = messageChannels.filter(
+                  (channel) => channel.botCanPost !== false
+                );
                 const keepOrFirst = (current: string) =>
-                  messageChannels.some((channel) => channel.id === current)
+                  postableChannels.some((channel) => channel.id === current)
                     ? current
-                    : messageChannels[0]?.id ?? "";
+                    : postableChannels[0]?.id ?? "";
                 setVerificationPanelChannel(keepOrFirst);
                 setTicketPanelChannel(keepOrFirst);
               }}
@@ -800,7 +831,13 @@ export default function App() {
                           channel.type === "text" || channel.type === "announcement"
                         )
                         .map((channel) => (
-                          <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                          <option
+                            key={channel.id}
+                            value={channel.id}
+                            disabled={channel.botCanPost === false}
+                          >
+                            #{channel.name}{channel.botCanPost === false ? " — BOTアクセス不可" : ""}
+                          </option>
                         ))}
                     </select>
                   </Field>
@@ -808,7 +845,11 @@ export default function App() {
                     <button
                       type="button"
                       className="primary"
-                      disabled={panelAction !== null}
+                      disabled={
+                        panelAction !== null ||
+                        !verificationPanelChannel ||
+                        selectedVerificationChannel?.botCanPost === false
+                      }
                       onClick={() => void postPanel("verification")}
                     >
                       {panelAction === "verification" ? "設置中..." : "認証パネルを設置"}
@@ -829,6 +870,18 @@ export default function App() {
                       {verificationPanelFeedback.message}
                     </div>
                   )}
+                  {status?.inviteUrl &&
+                    (!verificationPanelChannel ||
+                      selectedVerificationChannel?.botCanPost === false) && (
+                      <a
+                        className="secondary panel-permission-repair"
+                        href={status.inviteUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        BOT権限を更新
+                      </a>
+                    )}
                 </article>
 
                 <article className="card">
@@ -896,7 +949,13 @@ export default function App() {
                           channel.type === "text" || channel.type === "announcement"
                         )
                         .map((channel) => (
-                          <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                          <option
+                            key={channel.id}
+                            value={channel.id}
+                            disabled={channel.botCanPost === false}
+                          >
+                            #{channel.name}{channel.botCanPost === false ? " — BOTアクセス不可" : ""}
+                          </option>
                         ))}
                     </select>
                   </Field>
@@ -905,7 +964,11 @@ export default function App() {
                     <button
                       type="button"
                       className="primary"
-                      disabled={panelAction !== null}
+                      disabled={
+                        panelAction !== null ||
+                        !ticketPanelChannel ||
+                        selectedTicketChannel?.botCanPost === false
+                      }
                       onClick={() => void postPanel("tickets")}
                     >
                       {panelAction === "tickets" ? "設置中..." : "Ticketパネルを設置"}
@@ -926,6 +989,17 @@ export default function App() {
                       {ticketPanelFeedback.message}
                     </div>
                   )}
+                  {status?.inviteUrl &&
+                    (!ticketPanelChannel || selectedTicketChannel?.botCanPost === false) && (
+                      <a
+                        className="secondary panel-permission-repair"
+                        href={status.inviteUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        BOT権限を更新
+                      </a>
+                    )}
                 </article>
 
                 <article className="card">
