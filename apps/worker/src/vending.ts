@@ -326,6 +326,17 @@ async function deliver(env:Env,order:VmOrder){
   }
 }
 
+async function tryDeliver(env:Env,order:VmOrder):Promise<boolean>{
+  try{
+    await deliver(env,order);
+    const latest=await getOrder(env,order.id);
+    return latest?.status==="delivered";
+  }catch(error){
+    console.error("vending delivery failed",order.id,error);
+    return false;
+  }
+}
+
 export async function handleVendingInteraction(interaction:any,env:Env,ctx:ExecutionContext):Promise<Response|null>{
   await ensureVendingSchema(env);
   if(interaction.type===3){
@@ -333,6 +344,17 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
     if(id.startsWith("vm:buy:")){
       const vmId=id.slice(7),vm=await getMachine(env,vmId); if(!vm) return ires(eph("自販機が見つかりません。"));
       return ires(eph("決済方法を選択してください。",[{type:1,components:[{type:3,custom_id:"vm:method:"+vmId,placeholder:"決済方法",options:[{label:"PayPay",value:"paypay",emoji:{name:"💴"}},{label:"Kyash",value:"kyash",emoji:{name:"💳"}}]}]}]));
+    }
+    if(id.startsWith("vm:retry:")){
+      const orderId=id.slice(9),order=await getOrder(env,orderId);
+      if(!order||order.user_id!==interaction.member?.user?.id||order.status!=="paid"){
+        return ires(eph("再試行できる注文がありません。"));
+      }
+      const ok=await tryDeliver(env,order);
+      return ires(eph(
+        ok?"納品が完了しました。DMを確認してください。":"納品できませんでした。DMを受信できる設定を確認して、もう一度試してください。",
+        ok?undefined:[{type:1,components:[{type:2,style:1,label:"納品を再試行",custom_id:"vm:retry:"+order.id}]}]
+      ));
     }
     if(id.startsWith("vm:stock:")){
       const vmId=id.slice(9),products=await listVmProducts(env,vmId); return ires(eph("",undefined,[{title:"在庫・販売数情報",color:5793266,fields:products.map(p=>({name:p.name,value:"在庫: "+(p.infinite_stock?"∞":p.stock_count)+"\n販売数: "+p.sales_count,inline:false}))}]));
@@ -363,7 +385,13 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
       const coupon=couponCode?await getCoupon(env,vmId,couponCode):null; if(couponCode&&!coupon) return ires(eph("無効なクーポンコードです。"));
       let order:VmOrder|null=null; try{order=await reserveOrder(env,{vmId,product,guildId:interaction.guild_id,userId:interaction.member.user.id,method,quantity,discount:coupon?.discount??0});}catch(e){return ires(eph(String(e).includes("OUT_OF_STOCK")?"在庫が不足しています。":"在庫確保に失敗しました。"));}
       if(!order) return ires(eph("注文作成に失敗しました。"));
-      if(order.total_amount===0){ await deliver(env,order); return ires(eph("購入完了しました。DMを確認してください。")); }
+      if(order.total_amount===0){
+        const ok=await tryDeliver(env,order);
+        return ires(eph(
+          ok?"購入完了しました。DMを確認してください。":"購入は完了しましたがDM納品に失敗しました。DMを開いて再試行してください。",
+          ok?undefined:[{type:1,components:[{type:2,style:1,label:"納品を再試行",custom_id:"vm:retry:"+order.id}]}]
+        ));
+      }
       return ires(eph("**"+product.name+"** × "+order.quantity+"\n支払額: **"+order.total_amount+"円**\n10分以内に送金リンクを入力してください。",[{type:1,components:[{type:2,style:3,label:"送金リンクを入力",custom_id:"vm:pay:"+order.id}]}]));
     }
     if(id.startsWith("vm:paymodal:")){
@@ -375,7 +403,15 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
         const account=await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY); if(!account) return ires(eph("販売者のPayPayが未登録です。"));
         const info=await checkPayPayLink(link); const amount=Number(info?.payload?.message?.data?.amount??0); if(amount<order.total_amount) return ires(eph("金額が不足しています。必要: "+order.total_amount+"円 / リンク: "+amount+"円"));
         const result=await acceptPayPayLink(link,account);
-        if(result.ok){await markPaid(env,order.id,"paypay",hash); const paid=await getOrder(env,order.id); if(paid) await deliver(env,paid); return ires(eph("決済と納品が完了しました。DMを確認してください。"));}
+        if(result.ok){
+          await markPaid(env,order.id,"paypay",hash);
+          const paid=await getOrder(env,order.id);
+          const delivered=paid?await tryDeliver(env,paid):false;
+          return ires(eph(
+            delivered?"決済と納品が完了しました。DMを確認してください。":"決済は完了しましたがDM納品に失敗しました。DMを開いて再試行してください。",
+            delivered?undefined:[{type:1,components:[{type:2,style:1,label:"納品を再試行",custom_id:"vm:retry:"+order.id}]}]
+          ));
+        }
         if(result.pending){return ires(eph("PayPay受け取りが保留されています。受け取り保留を解除してください。1分ごとに自動確認します。"));}
         return ires(eph("PayPay決済を確認できませんでした。"));
       }
@@ -383,7 +419,13 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
         const account=await getKyashAccount(env,vm.owner_id); if(!account) return ires(eph("販売者のKyashが未登録です。"));
         const result=await receiveKyashLink(link,account); if(result.amount<order.total_amount) return ires(eph("金額が不足しています。必要: "+order.total_amount+"円 / リンク: "+result.amount+"円"));
         if(!result.ok) return ires(eph("Kyash決済を確認できませんでした。"));
-        await markPaid(env,order.id,"kyash",hash); const paid=await getOrder(env,order.id); if(paid) await deliver(env,paid); return ires(eph("決済と納品が完了しました。DMを確認してください。"));
+        await markPaid(env,order.id,"kyash",hash);
+        const paid=await getOrder(env,order.id);
+        const delivered=paid?await tryDeliver(env,paid):false;
+        return ires(eph(
+          delivered?"決済と納品が完了しました。DMを確認してください。":"決済は完了しましたがDM納品に失敗しました。DMを開いて再試行してください。",
+          delivered?undefined:[{type:1,components:[{type:2,style:1,label:"納品を再試行",custom_id:"vm:retry:"+order.id}]}]
+        ));
       }
     }
   }
