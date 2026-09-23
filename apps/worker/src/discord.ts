@@ -36,6 +36,10 @@ export type DiscordRole={
   managed:boolean;
 };
 
+export class DiscordApiError extends Error {
+  constructor(public status:number, message:string){ super(message); }
+}
+
 export async function botFetch(
   env:Env,
   path:string,
@@ -73,12 +77,12 @@ export async function botJson<T>(
         await new Promise(resolve=>setTimeout(resolve,retryAfterMs+50));
         continue;
       }
-      throw new Error(`Discord API 429: ${raw.slice(0,300)}`);
+      throw new DiscordApiError(429, "Discord APIのレート制限中です。少し待って再試行してください");
     }
 
     if(!response.ok){
       const text=await response.text().catch(()=>"");
-      throw new Error(`Discord API ${response.status}: ${text.slice(0,300)}`);
+      throw new DiscordApiError(response.status, `Discord API ${response.status}: ${text.slice(0,300)}`);
     }
     if(response.status===204) return undefined as T;
     return response.json() as Promise<T>;

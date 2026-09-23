@@ -8,12 +8,13 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "deploy": "wrangler deploy",
-    "deploy:worker": "wrangler deploy"
+    "deploy:worker": "wrangler deploy",
+    "test": "wrangler deploy --dry-run --outdir .test-worker && node --test test/*.test.mjs"
   },
-  "dependencies": {},
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260923.1",
     "@types/node": "^22.18.6",
+    "miniflare": "^4.20260730.0",
     "typescript": "^5.9.2",
     "wrangler": "^4.45.0"
   }

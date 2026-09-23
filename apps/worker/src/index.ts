@@ -30,6 +30,7 @@ import {
   setPaymentStatus
 } from "./db";
 import {
+  DiscordApiError,
   botFetch,
   botJson,
   canManageGuild,
@@ -96,17 +97,7 @@ async function requireGuild(
   request:Request,env:Env,guildId:string,_requireBot=true
 ):Promise<{session:DashboardActor;guild:{id:string;name:string;icon:string|null}}>{
   const session=await sessionFromRequest(request,env);
-  const response=await botFetch(env,`/guilds/${guildId}`);
-  if(!response.ok){
-    const detail=await response.text().catch(()=>"");
-    throw new HttpError(
-      response.status===429?429:403,
-      response.status===429
-        ?"Discord APIのレート制限中です。数秒後に再試行してください"
-        :"BOTがサーバー情報を取得できません: Discord API "+response.status+" "+detail.slice(0,180)
-    );
-  }
-  const guild=await response.json() as {id:string;name:string;icon:string|null};
+  const guild=await botJson<{id:string;name:string;icon:string|null}>(env,`/guilds/${guildId}`);
   return {session,guild};
 }
 
@@ -944,6 +935,15 @@ export default {
             d1Error=error instanceof Error?error.message:String(error);
           }
         }
+        let d1SchemaReady=false;
+        if(d1Reachable){
+          try{
+            await ensureSchema(env);
+            d1SchemaReady=true;
+          }catch(error){
+            console.error("D1 schema initialization failed",error);
+          }
+        }
         const dashboardSessionStorage=env.DB
           ?await dashboardSessionStorageReady(env)
           :false;
@@ -968,8 +968,8 @@ export default {
         }
 
         return json(env,{
-          ok:true,
-          version:"dashboard-auth-v12-meta",
+          ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
+          version:"dashboard-auth-v13-d1-batch",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -989,15 +989,16 @@ export default {
           d1:{
             bound:Boolean(env.DB),
             reachable:d1Reachable,
+            schemaReady:d1SchemaReady,
             error:d1Error
           }
         });
       }
       if(url.pathname==="/interactions"&&request.method==="POST"){
-        return handleInteraction(request,env,ctx);
+        return await handleInteraction(request,env,ctx);
       }
       if(url.pathname==="/api/login"&&request.method==="POST"){
-        return handleDashboardLogin(request,env);
+        return await handleDashboardLogin(request,env);
       }
 
       // Read-only dashboard bootstrap routes must not depend on the full historical schema.
@@ -1032,9 +1033,10 @@ export default {
       const status=
         error instanceof HttpError?error.status:
         error instanceof VendingHttpError?error.status:
+        error instanceof DiscordApiError?(error.status===429?429:502):
         500;
       const message=
-        error instanceof HttpError||error instanceof VendingHttpError
+        error instanceof HttpError||error instanceof VendingHttpError||error instanceof DiscordApiError
           ?error.message
           :"サーバー処理に失敗しました";
       return json(env,{error:status>=500?"server_error":"request_error",message},status);

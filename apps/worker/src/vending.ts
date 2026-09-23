@@ -28,7 +28,7 @@ async function sessionFromRequest(request:Request,env:Env):Promise<DashboardActo
 }
 async function requireGuild(request:Request,env:Env,guildId:string){
   const session=await sessionFromRequest(request,env);
-  if(!(await botFetch(env,"/guilds/"+guildId)).ok) throw new VendingHttpError(403,"BOTが参加していないサーバーです");
+  await botJson(env,"/guilds/"+guildId);
   return session;
 }
 function input<T>(r:Request){ return r.json() as Promise<T>; }

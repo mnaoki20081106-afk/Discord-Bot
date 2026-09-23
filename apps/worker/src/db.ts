@@ -101,20 +101,26 @@ CREATE TABLE IF NOT EXISTS audit_cursors (
 );
 `;
 
-let schemaReady = false;
+const schemaInitializations = new WeakMap<D1Database, Promise<void>>();
 export async function ensureSchema(env: Env): Promise<void> {
-  if (schemaReady) return;
-
-  // Always apply the idempotent base schema on cold start.
-  // Older D1 databases may already have meta while missing tables added later.
-  await env.DB.exec(schema);
-
-  await env.DB.prepare(`
-    INSERT INTO meta(key, value) VALUES ('schema_version', '3')
-    ON CONFLICT(key) DO UPDATE SET value='3'
-  `).run();
-
-  schemaReady = true;
+  let initialization = schemaInitializations.get(env.DB);
+  if (!initialization) {
+    initialization = (async () => {
+      // D1 exec splits on newlines, including those inside CREATE TABLE.
+      // This static DDL contains no semicolons in literals or triggers.
+      const statements = schema.split(";").map(sql => sql.trim()).filter(Boolean);
+      await env.DB.batch([
+        ...statements.map(sql => env.DB.prepare(sql)),
+        env.DB.prepare(`
+          INSERT INTO meta(key, value) VALUES ('schema_version', '3')
+          ON CONFLICT(key) DO UPDATE SET value='3'
+        `)
+      ]);
+    })();
+    schemaInitializations.set(env.DB, initialization);
+    initialization.catch(() => schemaInitializations.delete(env.DB));
+  }
+  await initialization;
 }
 
 export async function cleanExpired(env: Env): Promise<void> {
