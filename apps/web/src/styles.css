@@ -553,6 +553,37 @@ textarea { min-height: 92px; resize: vertical; }
   white-space: nowrap;
 }
 
+.editor-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.permission-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #263149;
+  border-radius: 10px;
+  color: #8f9db8;
+  background: #11192a;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+  user-select: none;
+}
+
+.permission-preview-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #6473f6;
+}
+
 .server-editor-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
@@ -679,7 +710,7 @@ textarea { min-height: 92px; resize: vertical; }
   width: 100%;
   height: 34px;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) 20px;
+  grid-template-columns: 24px minmax(0, 1fr) auto 20px;
   align-items: center;
   gap: 3px;
   margin: 1px 0;
@@ -702,13 +733,38 @@ textarea { min-height: 92px; resize: vertical; }
   background: #404249;
 }
 
-.discord-channel > span:nth-child(2) {
+.channel-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 14px;
   font-weight: 600;
+}
+
+.permission-badge {
+  justify-self: end;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+
+.permission-badge.allow {
+  color: #9de6ba;
+  background: rgba(48, 166, 95, .14);
+}
+
+.permission-badge.deny {
+  color: #f2a0aa;
+  background: rgba(201, 71, 87, .14);
+}
+
+.permission-badge.inherit {
+  color: #9aa3b2;
+  background: rgba(154, 163, 178, .10);
 }
 
 .channel-hash {
@@ -718,6 +774,7 @@ textarea { min-height: 92px; resize: vertical; }
 }
 
 .channel-edit {
+  grid-column: -1;
   opacity: 0;
   color: #b5bac1;
   font-size: 18px;
@@ -856,6 +913,116 @@ textarea { min-height: 92px; resize: vertical; }
   margin-top: 4px;
 }
 
+.channel-permission-editor {
+  margin: 20px 0 4px;
+  padding: 16px;
+  border: 1px solid #263149;
+  border-radius: 14px;
+  background: #0a1120;
+}
+
+.permission-editor-head {
+  margin-bottom: 14px;
+}
+
+.permission-editor-head strong,
+.permission-editor-head small {
+  display: block;
+}
+
+.permission-editor-head strong {
+  color: #dce5f8;
+  font-size: 12px;
+}
+
+.permission-editor-head small {
+  margin-top: 4px;
+  color: #66758f;
+  font-size: 9px;
+}
+
+.channel-permission-editor > label {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.channel-permission-editor > label > span {
+  display: block;
+  margin-bottom: 7px;
+  color: #8b99b5;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.permission-list {
+  display: grid;
+  gap: 7px;
+}
+
+.permission-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 42px;
+  padding: 7px 8px 7px 11px;
+  border: 1px solid #1d2840;
+  border-radius: 10px;
+  background: #0e1727;
+}
+
+.permission-row > span {
+  color: #bac6dc;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.permission-modes {
+  display: grid;
+  grid-template-columns: repeat(3, 52px);
+  gap: 4px;
+}
+
+.permission-modes button {
+  min-height: 28px;
+  padding: 0 7px;
+  border: 1px solid #27344d;
+  border-radius: 8px;
+  color: #6f7e99;
+  background: #111a2b;
+  font-size: 9px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.permission-modes button:hover {
+  color: #d9e2f5;
+  border-color: #3d4c6e;
+}
+
+.permission-modes button.active.inherit {
+  color: #d1d8e6;
+  border-color: #5b6678;
+  background: #242c3a;
+}
+
+.permission-modes button.active.allow {
+  color: #a5ebbf;
+  border-color: #2c7148;
+  background: #12301f;
+}
+
+.permission-modes button.active.deny {
+  color: #f2a2ac;
+  border-color: #71313b;
+  background: #35161b;
+}
+
+.permission-save {
+  width: 100%;
+  margin-top: 12px;
+}
+
 .server-editor-card + .metric-grid {
   margin-top: 14px;
 }
@@ -877,6 +1044,25 @@ textarea { min-height: 92px; resize: vertical; }
 
   .server-editor-inspector {
     min-height: 390px;
+  }
+
+  .editor-heading-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .permission-preview-toggle,
+  .editor-heading-actions .editor-add-category {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .permission-row {
+    grid-template-columns: 1fr;
+  }
+
+  .permission-modes {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
