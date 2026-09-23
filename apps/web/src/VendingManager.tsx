@@ -123,16 +123,6 @@ export default function VendingManager({
     });
   },[detail,editingProduct,productEdit]);
 
-  const previewTitle =
-    machineForm.panelTitle.trim() ||
-    machineForm.name.trim() ||
-    detail?.name ||
-    "自販機";
-
-  const previewIntro =
-    machineForm.panelDescription ||
-    "購入したい商品を下のボタンから選択してください。";
-
   const panelDirty = Boolean(detail) && (
     machineForm.name!==detail.name ||
     machineForm.panelTitle!==(detail.panel_title??"") ||
