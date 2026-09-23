@@ -1208,3 +1208,26 @@ textarea { min-height: 92px; resize: vertical; }
     grid-template-columns: 1fr;
   }
 }
+
+.vending-stock-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 9px;
+}
+.vending-stock-file-row small {
+  color: #62708a;
+  font-size: 9px;
+}
+.vending-file-button {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+.vending-file-button input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
