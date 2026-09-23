@@ -118,6 +118,25 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     if(request.method==="POST"){
       const b=await input<{text?:string;lines?:string[]}>(request); const lines=Array.isArray(b.lines)?b.lines:String(b.text??"").split(/\r?\n/);
       const count=await addStock(env,productId,lines);
+      const notification=await getStockNotify(env,vmId);
+      if(count>0&&notification){
+        const productInfo=await getVmProduct(env,productId);
+        if(productInfo){
+          await send(env,notification.channel_id,{
+            content:"<@&"+notification.role_id+">",
+            allowed_mentions:{roles:[notification.role_id]},
+            embeds:[{
+              title:"在庫追加のお知らせ",
+              color:5763719,
+              description:"**"+productInfo.name+"** の在庫が追加されました。",
+              fields:[
+                {name:"追加数",value:String(count)+"個",inline:true},
+                {name:"自販機",value:vm.name,inline:true}
+              ]
+            }]
+          }).catch(()=>undefined);
+        }
+      }
       return json(env,{ok:true,added:count});
     }
   }
