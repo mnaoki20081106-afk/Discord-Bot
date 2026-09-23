@@ -320,6 +320,35 @@ textarea { min-height: 92px; resize: vertical; }
 .secondary:hover { color: white; background: #1a2439; }
 .danger { color: #ef949d; background: #241216; border: 1px solid #4b2229; }
 .button-row { display: flex; gap: 8px; margin-top: 15px; }
+.primary:disabled, .secondary:disabled, .danger:disabled {
+  opacity: .58;
+  cursor: wait;
+  transform: none;
+  filter: none;
+}
+.panel-feedback {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.panel-feedback.info {
+  color: #b8c4df;
+  border: 1px solid #2b3650;
+  background: #111827;
+}
+.panel-feedback.success {
+  color: #9de6ba;
+  border: 1px solid #1b5635;
+  background: #0c2418;
+}
+.panel-feedback.error {
+  color: #f3a1aa;
+  border: 1px solid #55262d;
+  background: #241014;
+}
 
 .template-grid {
   display: grid;
