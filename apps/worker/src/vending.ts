@@ -187,6 +187,27 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     return json(env,{ok:true});
   }
 
+  const panelUpdate=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/panel\/update$/);
+  if(panelUpdate&&request.method==="POST"){
+    const guildId=panelUpdate[1]!,vmId=panelUpdate[2]!,session=await requireGuild(request,env,guildId);
+    const vm=await machineOwned(env,vmId,session.user_id);
+    const b=await input<{messageUrl:string}>(request);
+    const match=String(b.messageUrl??"").match(/discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/);
+    if(!match||match[1]!==guildId) throw new VendingHttpError(400,"DiscordメッセージURLが不正です");
+    const channelId=match[2]!,messageId=match[3]!,products=await listVmProducts(env,vmId);
+    await botJson(env,"/channels/"+channelId+"/messages/"+messageId,{
+      method:"PATCH",
+      body:JSON.stringify({
+        embeds:[panelEmbed(vm,products)],
+        components:[{type:1,components:[
+          {type:2,style:3,label:"購入する",emoji:{name:"🛒"},custom_id:"vm:buy:"+vmId},
+          {type:2,style:1,label:"在庫・販売数",emoji:{name:"📦"},custom_id:"vm:stock:"+vmId}
+        ]}]
+      })
+    });
+    return json(env,{ok:true});
+  }
+
   if(url.pathname==="/api/vending/payments/status"&&request.method==="GET"){
     const s=await sessionFromRequest(request,env);
     return json(env,{
