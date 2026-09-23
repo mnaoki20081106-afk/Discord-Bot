@@ -1,11 +1,12 @@
 import type { Env } from "./types";
 
-export function corsHeaders(env: Env): HeadersInit {
+export function corsHeaders(_env: Env): HeadersInit {
+  // This API uses Bearer tokens rather than browser cookies, so wildcard CORS is safe here
+  // and keeps the dashboard working from both the apex and www GitHub Pages domains.
   return {
-    "Access-Control-Allow-Origin": env.WEB_ORIGIN,
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Vary": "Origin"
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   };
 }
 
