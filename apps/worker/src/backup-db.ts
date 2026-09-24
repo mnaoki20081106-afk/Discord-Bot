@@ -269,6 +269,24 @@ export async function countRecoveryMembers(env:Env,guildId:string):Promise<numbe
   return Number(row?.count??0);
 }
 
+export async function rotateRecoveryMember(
+  env:Env,
+  guildId:string,
+  userId:string,
+  accessTokenEnc:string,
+  refreshTokenEnc:string,
+  tokenExpiresAt:number
+):Promise<void>{
+  await ensureBackupSchema(env);
+  await env.DB.prepare(`
+    UPDATE member_recovery_tokens SET
+      access_token_enc=?,refresh_token_enc=?,token_expires_at=?,revoked_at=NULL,updated_at=?
+    WHERE guild_id=? AND user_id=?
+  `).bind(
+    accessTokenEnc,refreshTokenEnc,tokenExpiresAt,Date.now(),guildId,userId
+  ).run();
+}
+
 export async function markRecoveryMemberRevoked(
   env:Env,guildId:string,userId:string
 ):Promise<void>{
