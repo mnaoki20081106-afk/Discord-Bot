@@ -148,9 +148,24 @@ export function snowflakeTime(id:string):number {
   return Number((BigInt(id)>>22n)+1420070400000n);
 }
 
-export function challengeCode():string {
-  const alphabet="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes=new Uint8Array(6);
+export function verificationChallenge():{question:string;answer:string} {
+  const bytes=new Uint8Array(2);
   crypto.getRandomValues(bytes);
-  return [...bytes].map(v=>alphabet[v%alphabet.length]).join("");
+  const left=10+(bytes[0]!%90);
+  const right=1+(bytes[1]!%9);
+  return {
+    question:`${left} + ${right}`,
+    answer:String(left+right)
+  };
+}
+
+export function normalizeVerificationAnswer(value:string|undefined|null):string|null {
+  const normalized=(value??"")
+    .trim()
+    .replace(/[０-９]/g,char=>String.fromCharCode(char.charCodeAt(0)-0xfee0))
+    .replace(/\s+/g,"");
+  if(!/^\d{2,3}$/.test(normalized)) return null;
+  const answer=Number(normalized);
+  if(!Number.isSafeInteger(answer)||answer<11||answer>108) return null;
+  return String(answer);
 }
