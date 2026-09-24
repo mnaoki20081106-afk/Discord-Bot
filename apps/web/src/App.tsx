@@ -3,6 +3,7 @@ import { API_BASE, api, clearSession, currentSession, login } from "./api";
 import ServerEditor from "./ServerEditor";
 import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
+import BackupManager from "./BackupManager";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -152,6 +153,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<"manage" | "backup">("manage");
   const [meta, setMeta] = useState<Meta | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
@@ -632,8 +634,27 @@ export default function App() {
           </section>
         )}
 
-        {selectedGuild && meta && settings && (
+        {selectedGuild && meta && (
           <>
+            <nav className="page-tabs" aria-label="サーバー管理メニュー">
+              <button
+                type="button"
+                className={activeView === "manage" ? "active" : ""}
+                onClick={() => setActiveView("manage")}
+              >
+                サーバー管理
+              </button>
+              <button
+                type="button"
+                className={activeView === "backup" ? "active" : ""}
+                onClick={() => setActiveView("backup")}
+              >
+                バックアップ管理
+              </button>
+            </nav>
+
+            {activeView === "manage" && settings && (
+              <>
             <ServerEditor
               guildId={selectedId!}
               guildName={meta.name}
@@ -1062,7 +1083,17 @@ export default function App() {
               onNotice={flash}
               onError={fail}
             />
+              </>
+            )}
 
+            {activeView === "backup" && (
+              <BackupManager
+                guildId={selectedId!}
+                channels={meta.channels}
+                onNotice={flash}
+                onError={fail}
+              />
+            )}
           </>
         )}
       </main>
