@@ -155,6 +155,26 @@ function botBasePermissions(
   return permissions;
 }
 
+function compareRoleHierarchy(a:DiscordRole,b:DiscordRole):number{
+  if(a.position!==b.position) return a.position>b.position?1:-1;
+  if(a.id===b.id) return 0;
+  // Discord permits duplicate role positions. For equal positions, roles are
+  // ordered by snowflake ID; this matches discord.js RoleManager comparison.
+  return BigInt(a.id)<BigInt(b.id)?1:-1;
+}
+
+function highestMemberRole(
+  roles:DiscordRole[],
+  member:DiscordGuildMember
+):DiscordRole|null{
+  let highest:DiscordRole|null=null;
+  for(const role of roles){
+    if(!member.roles.includes(role.id)) continue;
+    if(!highest||compareRoleHierarchy(role,highest)>0) highest=role;
+  }
+  return highest;
+}
+
 function botChannelPermissions(
   guildId:string,
   botId:string,
@@ -1042,25 +1062,6 @@ async function handleInteraction(
         ));
       }
 
-      const botMember=await getBotGuildMember(env,challenge.guild_id,roles);
-      const permissions=botBasePermissions(challenge.guild_id,roles,botMember);
-      if((permissions&8n)!==8n&&(permissions&268435456n)!==268435456n){
-        return interactionResponse(ephemeral(
-          "BOTに「ロールの管理」権限がないため認証ロールを付与できません。"
-        ));
-      }
-      const botHighestRolePosition=Math.max(
-        0,
-        ...roles
-          .filter(role=>botMember.roles.includes(role.id))
-          .map(role=>role.position)
-      );
-      if(targetRole.position>=botHighestRolePosition){
-        return interactionResponse(ephemeral(
-          `認証ロール @${targetRole.name} がBOTの最高ロール以上にあるため付与できません。Discordのロール順でBOTロールより下へ移動してください。`
-        ));
-      }
-
       let member=await botJson<DiscordGuildMember>(
         env,
         `/guilds/${challenge.guild_id}/members/${challenge.user_id}`
@@ -1074,8 +1075,14 @@ async function handleInteraction(
           );
         }catch(error){
           if(error instanceof DiscordApiError&&error.status===403){
+            const botMember=await getBotGuildMember(env,challenge.guild_id,roles);
+            const highestBotRole=highestMemberRole(roles,botMember);
+            const hierarchyBlocked=
+              highestBotRole!==null&&compareRoleHierarchy(targetRole,highestBotRole)>=0;
             return interactionResponse(ephemeral(
-              "認証ロールの付与をDiscordに拒否されました。BOTの「ロールの管理」権限とロール順を確認してください。"
+              hierarchyBlocked
+                ? `Discordがロール付与を拒否しました。認証ロール @${targetRole.name} はBOTの最高ロール @${highestBotRole.name} と同等以上です。認証ロールをBOTロールより下へ移動してください。`
+                : "Discordが認証ロールの付与を拒否しました。BOTの「ロールの管理」権限とロール設定を確認してください。"
             ));
           }
           if(error instanceof DiscordApiError&&error.status===404){
@@ -1273,23 +1280,9 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         if(targetRole.managed){
           throw new HttpError(400,"Discord管理ロールは認証後ロールに指定できません");
         }
-        const botMember=await getBotGuildMember(env,guildId,roles);
-        const permissions=botBasePermissions(guildId,roles,botMember);
-        if((permissions&8n)!==8n&&(permissions&268435456n)!==268435456n){
-          throw new HttpError(403,"認証ロールを付与するにはBOTに「ロールの管理」権限が必要です");
-        }
-        const botHighestRolePosition=Math.max(
-          0,
-          ...roles
-            .filter(role=>botMember.roles.includes(role.id))
-            .map(role=>role.position)
-        );
-        if(targetRole.position>=botHighestRolePosition){
-          throw new HttpError(
-            400,
-            `認証後ロール @${targetRole.name} をBOTロールより下へ移動してください`
-          );
-        }
+        // Do not reject the setting based only on Discord's role position values.
+        // Discord is authoritative when the role is actually assigned, and equal
+        // numeric positions can still have a valid hierarchy order.
       }
 
       const saved=await saveGuildSettings(env,guildId,safe);
@@ -2132,7 +2125,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v27-verification-confirmed",
+          version:"dashboard-auth-v28-role-hierarchy-authoritative",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
