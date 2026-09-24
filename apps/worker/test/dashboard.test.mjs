@@ -72,8 +72,8 @@ async function runtime(t, options = {}) {
           return Response.json({message:'Missing Access',code:50001},{status:403});
         }
         const parts = url.pathname.split('/');
-        const channelId = parts[5];
-        const overwriteId = parts[7];
+        const channelId = parts[4];
+        const overwriteId = parts[6];
         if (channelId === chatChannelId) {
           const body = await request.clone().json();
           channelOverwrites = [
@@ -95,8 +95,8 @@ async function runtime(t, options = {}) {
         /^\/api\/v10\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)
       ) {
         const parts = url.pathname.split('/');
-        const channelId = parts[5];
-        const overwriteId = parts[7];
+        const channelId = parts[4];
+        const overwriteId = parts[6];
         if (channelId === chatChannelId) {
           channelOverwrites = channelOverwrites.filter(overwrite => overwrite.id !== overwriteId);
         }
