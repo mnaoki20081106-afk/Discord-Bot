@@ -71,7 +71,7 @@ import {
 } from "./utils";
 
 const BOT_PERMISSIONS=(
-  1n|1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n|
+  1n|32n|1024n|2048n|16384n|32768n|65536n|8192n|16n|134217728n|268435456n|
   2n|4n|1099511627776n|128n
 ).toString();
 
@@ -2161,7 +2161,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v31-recovery-permission",
+          version:"dashboard-auth-v32-backup-guild-state",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
