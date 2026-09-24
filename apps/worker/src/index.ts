@@ -198,6 +198,61 @@ function botChannelPermissions(
   return permissions;
 }
 
+async function writeBotChannelGuard(
+  env:Env,
+  channel:DiscordChannel,
+  allow:bigint,
+  deny:bigint
+):Promise<void>{
+  const botId=env.DISCORD_APPLICATION_ID.trim();
+  try{
+    await botJson<void>(
+      env,
+      `/channels/${channel.id}/permissions/${botId}`,
+      {
+        method:"PUT",
+        body:JSON.stringify({
+          type:1,
+          allow:allow.toString(),
+          deny:deny.toString()
+        })
+      }
+    );
+    return;
+  }catch(error){
+    if(!(error instanceof DiscordApiError)||error.status!==403) throw error;
+  }
+
+  // A bot that has just lost View Channel can receive Missing Access from the
+  // single-overwrite endpoint. As a recovery path, preserve every canonical
+  // overwrite from the guild channel list and replace only this bot member's
+  // overwrite through Modify Channel.
+  const repairedOverwrites=[
+    ...(channel.permission_overwrites??[])
+      .filter(overwrite=>!(overwrite.id===botId&&overwrite.type===1))
+      .map(overwrite=>({
+        id:overwrite.id,
+        type:overwrite.type,
+        allow:overwrite.allow,
+        deny:overwrite.deny
+      })),
+    {
+      id:botId,
+      type:1,
+      allow:allow.toString(),
+      deny:deny.toString()
+    }
+  ];
+  await botJson<DiscordChannel>(
+    env,
+    `/channels/${channel.id}`,
+    {
+      method:"PATCH",
+      body:JSON.stringify({permission_overwrites:repairedOverwrites})
+    }
+  );
+}
+
 async function protectBotChannelAccess(
   env:Env,
   guildId:string,
@@ -213,18 +268,7 @@ async function protectBotChannelAccess(
   deny&=~BOT_CHANNEL_GUARD_MASK;
 
   try{
-    await botJson<void>(
-      env,
-      `/channels/${channel.id}/permissions/${botId}`,
-      {
-        method:"PUT",
-        body:JSON.stringify({
-          type:1,
-          allow:allow.toString(),
-          deny:deny.toString()
-        })
-      }
-    );
+    await writeBotChannelGuard(env,channel,allow,deny);
   }catch(error){
     if(error instanceof DiscordApiError&&error.status===403){
       throw new HttpError(
@@ -277,18 +321,7 @@ async function repairBotChannelAccess(
     allow|=BOT_CHANNEL_GUARD_MASK;
     deny&=~BOT_CHANNEL_GUARD_MASK;
     try{
-      await botJson<void>(
-        env,
-        `/channels/${channel.id}/permissions/${botId}`,
-        {
-          method:"PUT",
-          body:JSON.stringify({
-            type:1,
-            allow:allow.toString(),
-            deny:deny.toString()
-          })
-        }
-      );
+      await writeBotChannelGuard(env,channel,allow,deny);
       repairedIds.add(channel.id);
       failedById.delete(channel.id);
     }catch(error){
