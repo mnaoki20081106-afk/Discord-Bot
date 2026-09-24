@@ -1386,6 +1386,75 @@ body.dsm-touch-reordering .discord-category {
   margin-top: 14px;
 }
 
+.bulk-apply-log {
+  margin-top: 10px;
+  padding: 10px 11px;
+  border: 1px solid #2a3553;
+  border-radius: 10px;
+  color: #8e9bb5;
+  background: #0d1627;
+}
+
+.bulk-apply-log-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bulk-apply-log-title > span {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  background: rgba(255,255,255,.06);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.bulk-apply-log-title strong {
+  color: inherit;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.bulk-apply-log small {
+  display: block;
+  margin-top: 5px;
+  padding-left: 28px;
+  color: #71809b;
+  font-size: 8px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.bulk-apply-log.saving {
+  border-color: #4f5d88;
+  color: #c6ceee;
+  background: #111a31;
+}
+
+.bulk-apply-log.success {
+  border-color: #2f6847;
+  color: #a4e6bd;
+  background: #0e2519;
+}
+
+.bulk-apply-log.success small {
+  color: #74b88d;
+}
+
+.bulk-apply-log.error {
+  border-color: #7c3540;
+  color: #f0a5ae;
+  background: #2b1217;
+}
+
+.bulk-apply-log.error small {
+  color: #ca7c86;
+}
+
 .channel-permission-editor {
   margin: 20px 0 4px;
   padding: 16px;
