@@ -1648,6 +1648,41 @@ export async function createVerificationRecoveryAuthorizeUrl(
   return recoveryAuthorizeUrl(env,origin,state,false);
 }
 
+async function grantVerifiedRoleAfterOAuth(
+  env:Env,guildId:string,userId:string
+):Promise<string>{
+  const settings=await getGuildSettings(env,guildId);
+  if(!settings.verifiedRoleId){
+    throw new BackupHttpError(409,"認証ロールが設定されていません");
+  }
+  const roles=await botJson<any[]>(env,"/guilds/"+guildId+"/roles");
+  const target=roles.find(role=>String(role.id)===settings.verifiedRoleId);
+  if(!target||String(target.id)===guildId||target.managed){
+    throw new BackupHttpError(
+      409,
+      "認証ロールが無効です。管理画面で通常ロールを設定し直してください"
+    );
+  }
+  const member=await botJson<any>(env,"/guilds/"+guildId+"/members/"+userId);
+  const assigned=Array.isArray(member.roles)&&member.roles.map(String).includes(String(target.id));
+  if(!assigned){
+    try{
+      await botJson(env,"/guilds/"+guildId+"/members/"+userId+"/roles/"+target.id,{
+        method:"PUT"
+      });
+    }catch(error){
+      if(error instanceof DiscordApiError&&error.status===403){
+        throw new BackupHttpError(
+          403,
+          "復旧登録は保存できましたが認証ロールを付与できませんでした。BOTのロール管理権限とロール順序を確認してください。"
+        );
+      }
+      throw error;
+    }
+  }
+  return String(target.name??"認証済み");
+}
+
 export async function handleRecoveryOAuth(
   request:Request,env:Env,url:URL
 ):Promise<Response|null>{
