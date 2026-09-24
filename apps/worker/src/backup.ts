@@ -2,7 +2,7 @@ import type { Env, GuildSettings, ProductRow } from "./types";
 import { botFetch, botJson, DiscordApiError, syncAutoMod, type DiscordChannel, type DiscordRole } from "./discord";
 import { getDashboardSession, getGuildSettings } from "./db";
 import { ensureVendingSchema } from "./vending-db";
-import { decrypt, encrypt, json, randomId, randomToken, sha256Hex } from "./utils";
+import { accountCreatedAt, decrypt, encrypt, json, randomId, randomToken, sha256Hex } from "./utils";
 import {
   cancelRestoreJob,
   countRecoveryMembers,
@@ -1686,6 +1686,15 @@ async function grantVerifiedRoleAfterOAuth(
 export async function handleRecoveryOAuth(
   request:Request,env:Env,url:URL
 ):Promise<Response|null>{
+  if(url.pathname==="/auth/verification/start"&&request.method==="GET"){
+    const guildId=String(url.searchParams.get("guild_id")??"");
+    if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
+    await botJson(env,"/guilds/"+guildId);
+    const state=randomToken(24);
+    await putRecoveryOAuthState(env,state,guildId,{purpose:"verification"});
+    return Response.redirect(recoveryAuthorizeUrl(env,url.origin,state,false),302);
+  }
+
   if(url.pathname==="/auth/recovery/start"&&request.method==="GET"){
     const guildId=String(url.searchParams.get("guild_id")??"");
     if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
@@ -1719,6 +1728,24 @@ export async function handleRecoveryOAuth(
         403,
         "Discord認証に使ったアカウントが、認証ボタンを押したアカウントと一致しません。元のアカウントでやり直してください。"
       );
+    }
+
+    if(recoveryState.purpose==="verification"){
+      const settings=await getGuildSettings(env,guildId);
+      if(!settings.verifiedRoleId){
+        throw new BackupHttpError(409,"認証ロールが設定されていません");
+      }
+      const minAccountAgeDays=Math.max(
+        0,
+        Math.min(36500,Math.trunc(Number(settings.minAccountAgeDays)||0))
+      );
+      if(Date.now()-accountCreatedAt(userId)<minAccountAgeDays*86400000){
+        throw new BackupHttpError(
+          403,
+          "このサーバーの認証条件を満たしていません。アカウント作成から"+
+          minAccountAgeDays+"日以上必要です。"
+        );
+      }
     }
 
     try{
