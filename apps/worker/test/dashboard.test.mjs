@@ -18,6 +18,7 @@ async function runtime(t, options = {}) {
   let rateLimitGuild = true;
   const botPermissions = options.botPermissions ?? nonAdminBotPermissions;
   const channelOverwrites = options.channelOverwrites ?? [];
+  const forceBotOverwrite403 = options.forceBotOverwrite403 ?? false;
   const mf = new Miniflare({
     modules: true,
     scriptPath: '.test-worker/index.js',
@@ -66,7 +67,19 @@ async function runtime(t, options = {}) {
       if (
         request.method === 'PUT' &&
         /^\/api\/v10\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)
-      ) return new Response(null,{status:204});
+      ) {
+        if (forceBotOverwrite403 && url.pathname.endsWith(`/permissions/${botId}`)) {
+          return Response.json({message:'Missing Access',code:50001},{status:403});
+        }
+        return new Response(null,{status:204});
+      }
+      if (
+        request.method === 'PATCH' &&
+        /^\/api\/v10\/channels\/\d+$/.test(url.pathname)
+      ) {
+        const id = url.pathname.split('/').at(-1);
+        return Response.json({id,name:id===chatChannelId?'chat':'General',type:id===chatChannelId?0:4});
+      }
       return Response.json({message:'Missing Access'}, {status:403});
     }
   });
@@ -230,5 +243,25 @@ test('editing @everyone protects the bot member before applying the deny', async
   assert.ok(
     botGuardIndex<everyoneIndex,
     'bot protection must be applied before @everyone is denied'
+  );
+});
+
+
+test('locked channel repair falls back to full channel overwrite patch', async t => {
+  const {mf,calls} = await runtime(t,{forceBotOverwrite403:true});
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+
+  const meta = await request(mf, `/api/guilds/${guildId}/meta`, login.body.token);
+  assert.equal(meta.status,200,JSON.stringify(meta.body));
+  assert.equal(meta.body.botAccessRepair.failed.length,0);
+  assert.ok(
+    calls.some(call=>
+      call.method==='PATCH' &&
+      call.path===`/api/v10/channels/${chatChannelId}`
+    ),
+    'locked channel should use the full-overwrite PATCH recovery path'
   );
 });
