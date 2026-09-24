@@ -11,6 +11,7 @@ import {
   deleteBackupRecord,
   ensureBackupSchema,
   getBackupRecord,
+  getBackupPayload,
   getRecoveryMember,
   getRestoreJob,
   listBackupRecords,
@@ -464,7 +465,9 @@ async function loadSnapshot(env:Env,backupId:string):Promise<GuildSnapshot>{
   const row=await getBackupRecord(env,backupId);
   if(!row) throw new BackupHttpError(404,"バックアップが見つかりません");
   try{
-    return JSON.parse(await decrypt(env.SESSION_ENCRYPTION_KEY,row.payload_enc)) as GuildSnapshot;
+    return JSON.parse(
+      await decrypt(env.SESSION_ENCRYPTION_KEY,await getBackupPayload(env,row))
+    ) as GuildSnapshot;
   }catch(error){
     console.error("backup decrypt failed",error);
     throw new BackupHttpError(500,"バックアップの復号に失敗しました。暗号化キーが一致しているか確認してください");
