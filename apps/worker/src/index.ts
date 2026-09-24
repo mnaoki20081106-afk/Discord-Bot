@@ -3,7 +3,7 @@ import {
   DEFAULT_SETTINGS,
   dashboardSessionStorageReady,
   cleanExpired,
-  consumeChallenge,
+  deleteChallenge,
   consumeOAuthState,
   createDashboardSession,
   createPayment,
@@ -14,6 +14,7 @@ import {
   deleteSession,
   ensureSchema,
   getAuditCursor,
+  getChallenge,
   getDashboardSession,
   getGuildSettings,
   getPaymentByMerchantId,
@@ -54,7 +55,8 @@ import {
 } from "./vending";
 import {
   accountCreatedAt,
-  challengeCode,
+  normalizeVerificationAnswer,
+  verificationChallenge,
   corsHeaders,
   encrypt,
   json,
@@ -948,15 +950,15 @@ async function handleInteraction(
     if(id?.startsWith("verify:start:")){
       const guildId=id.split(":")[2]!;
       const challengeId=randomId();
-      const code=challengeCode();
-      await putChallenge(env,challengeId,guildId,interaction.member.user.id,code);
+      const challenge=verificationChallenge();
+      await putChallenge(env,challengeId,guildId,interaction.member.user.id,challenge.answer);
       return interactionResponse(ephemeral(
-        `下の確認コードを入力してください。5分で失効します。\n\n**${code.split("").join("  ")}**`,
+        `次の計算に答えてください。5分で失効します。\n\n**${challenge.question} = ?**`,
         [{
           type:1,
           components:[{
             type:2,custom_id:`verify:answer:${challengeId}`,
-            label:"コードを入力",style:1
+            label:"答えを入力",style:1
           }]
         }]
       ));
@@ -973,10 +975,10 @@ async function handleInteraction(
             components:[{
               type:4,
               custom_id:"code",
-              label:"確認コード",
+              label:"計算の答え",
               style:1,
-              min_length:6,
-              max_length:6,
+              min_length:2,
+              max_length:3,
               required:true
             }]
           }]
@@ -1029,13 +1031,20 @@ async function handleInteraction(
     const id=interaction.data?.custom_id as string;
     if(id?.startsWith("verify:modal:")){
       const challengeId=id.split(":")[2]!;
-      const challenge=await consumeChallenge(env,challengeId);
-      if(!challenge||challenge.expires_at<Date.now()) return interactionResponse(ephemeral("認証が失効しています。"));
+      const challenge=await getChallenge(env,challengeId);
+      if(!challenge) return interactionResponse(ephemeral("認証が失効しています。"));
+      if(challenge.expires_at<Date.now()){
+        await deleteChallenge(env,challengeId);
+        return interactionResponse(ephemeral("認証が失効しています。もう一度「認証する」から始めてください。"));
+      }
       if(challenge.user_id!==interaction.member.user.id||challenge.guild_id!==interaction.guild_id){
         return interactionResponse(ephemeral("認証情報が一致しません。"));
       }
-      const answer=interaction.data.components?.[0]?.components?.[0]?.value?.trim()?.toUpperCase();
-      if(answer!==challenge.code) return interactionResponse(ephemeral("コードが一致しません。"));
+      const rawAnswer=interaction.data.components?.[0]?.components?.[0]?.value;
+      const answer=normalizeVerificationAnswer(rawAnswer);
+      if(answer===null||answer!==challenge.code){
+        return interactionResponse(ephemeral("答えが違います。もう一度「答えを入力」から試してください。"));
+      }
       const settings=await getGuildSettings(env,challenge.guild_id);
       if(!settings.verifiedRoleId) return interactionResponse(ephemeral("認証ロールが設定されていません。"));
 
@@ -1112,6 +1121,8 @@ async function handleInteraction(
           ));
         }
       }
+
+      await deleteChallenge(env,challengeId);
 
       console.log("verification completed",{
         guildId:challenge.guild_id,
@@ -2125,7 +2136,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v28-role-hierarchy-authoritative",
+          version:"dashboard-auth-v29-verification-math",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
