@@ -111,7 +111,7 @@ type DiscordGuildMember={
 
 const PANEL_PERMISSION_MASK=1024n|2048n|16384n;
 const BOT_CHANNEL_GUARD_MASK=
-  PANEL_PERMISSION_MASK|32768n|65536n|8192n|16n|268435456n|64n|34359738368n;
+  PANEL_PERMISSION_MASK|32768n|65536n|8192n|16n|268435456n;
 
 function fallbackBotMember(
   botId:string,
@@ -229,7 +229,7 @@ async function protectBotChannelAccess(
     if(error instanceof DiscordApiError&&error.status===403){
       throw new HttpError(
         409,
-        "この変更を保存するとBOT自身がチャンネルから締め出される可能性があるため停止しました。上部の「BOT権限を更新」からAdministrator権限を反映してください"
+        "この変更を保存するとBOT自身がチャンネルから締め出される可能性があるため停止しました。対象カテゴリ/チャンネルでBOTの「チャンネルを見る」を許可し、BOTロールの「チャンネルの管理」「ロールの管理」を確認してください"
       );
     }
     throw error;
@@ -429,7 +429,7 @@ async function sendPanelMessage(
     if(error instanceof DiscordApiError&&error.status===403){
       throw new HttpError(
         403,
-        "BOTがこのチャンネルから締め出されています。通常権限を全てONにしていてもチャンネル側の拒否は優先されます。管理画面上部の「BOT権限を更新」からAdministrator権限を反映すると、このチャンネルにも設置できます"
+        "BOTがこのチャンネルから締め出されています。対象カテゴリ/チャンネルの権限にBOTを追加して「チャンネルを見る」を一度許可し、管理画面を再読み込みしてください。以後はBOTアクセス保護を自動適用します。Administratorは必須ではありません"
       );
     }
     throw error;
@@ -997,14 +997,14 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
                 name,
                 type:2,
                 parent_id:input.parentId||undefined,
-                permission_overwrites:botOverwrite
+                ...(input.parentId?{}:{permission_overwrites:botOverwrite})
               }
             :{
                 name,
                 type:0,
                 parent_id:input.parentId||undefined,
                 topic:input.topic||undefined,
-                permission_overwrites:botOverwrite
+                ...(input.parentId?{}:{permission_overwrites:botOverwrite})
               }
       )
     });
@@ -1399,7 +1399,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       if(error instanceof DiscordApiError&&error.status===403){
         throw new HttpError(
           403,
-          "Discordがこのチャンネルの権限変更を拒否しました。BOT権限を更新してAdministratorを反映するか、Discord側でBOTにこのチャンネルへのアクセスを許可してください"
+          "Discordがこのチャンネルの権限変更を拒否しました。対象カテゴリ/チャンネルでBOTの「チャンネルを見る」を許可し、BOTロールの「チャンネルの管理」「ロールの管理」を確認してください"
         );
       }
       throw error;
@@ -1810,7 +1810,7 @@ export default {
       const message=
         error instanceof DiscordApiError&&error.status===403
           ?error.message.includes('"code":50001')||error.message.includes('"code": 50001')
-            ?"BOTが対象にアクセスできません。BOTのサーバーロールにAdministratorを付けているか確認し、管理画面の「BOT権限を更新」で再認証してください。プライベートチャンネルではBOT個別の閲覧許可も確認してください"
+            ?"BOTが対象にアクセスできません。対象カテゴリ/チャンネルでBOT個別の「チャンネルを見る」を許可し、BOTロールの「チャンネルの管理」「ロールの管理」を確認してください。Administratorは必須ではありません"
             :error.message.includes('"code":50013')||error.message.includes('"code": 50013')
               ?"BOTにこの操作の権限がありません。BOTのサーバーロールとロールの並び順、チャンネル個別の権限を確認してください"
               :"DiscordがBOTの操作を拒否しました。BOTのサーバーロールと対象チャンネルの権限を確認してください"
