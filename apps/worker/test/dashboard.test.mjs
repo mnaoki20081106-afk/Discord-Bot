@@ -4,13 +4,16 @@ import { Miniflare } from 'miniflare';
 
 const guildId = '123456789012345678';
 const botId = '223456789012345678';
+const botRoleId = '623456789012345678';
 const targetRoleId = '523456789012345678';
 const chatChannelId = '423456789012345678';
 const guild = { id: guildId, name: 'Regression server', icon: null };
 
-async function runtime(t) {
+async function runtime(t, options = {}) {
   const calls = [];
   let rateLimitGuild = true;
+  const botPermissions = options.botPermissions ?? '8';
+  const channelOverwrites = options.channelOverwrites ?? [];
   const mf = new Miniflare({
     modules: true,
     scriptPath: '.test-worker/index.js',
@@ -41,24 +44,24 @@ async function runtime(t) {
           type:0,
           parent_id:'323456789012345678',
           position:1,
-          permission_overwrites:[]
+          permission_overwrites:channelOverwrites
         }
       ]);
       if (url.pathname.endsWith('/roles')) return Response.json([
         {id:guildId,name:'@everyone',position:0,managed:false,permissions:'0'},
         {id:targetRoleId,name:'Customer',position:1,managed:false,permissions:'0'},
         {
-          id:'623456789012345678',
+          id:botRoleId,
           name:'Test bot',
           position:2,
           managed:true,
-          permissions:'8',
+          permissions:botPermissions,
           tags:{bot_id:botId}
         }
       ]);
       if (
         request.method === 'PUT' &&
-        url.pathname === `/api/v10/channels/${chatChannelId}/permissions/${targetRoleId}`
+        /^\/api\/v10\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)
       ) return new Response(null,{status:204});
       return Response.json({message:'Missing Access'}, {status:403});
     }
@@ -161,5 +164,68 @@ test('channel permission edit does not require direct channel access', async t =
     ),
     true,
     'permission overwrite should still be written'
+  );
+});
+
+
+test('non-admin bot role allow overrides @everyone channel deny', async t => {
+  const botPermissions = (
+    1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n
+  ).toString();
+  const {mf} = await runtime(t, {
+    botPermissions,
+    channelOverwrites:[
+      {id:guildId,type:0,allow:'0',deny:'1024'},
+      {id:botRoleId,type:0,allow:'1024',deny:'0'}
+    ]
+  });
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const meta = await request(mf, `/api/guilds/${guildId}/meta`, login.body.token);
+  assert.equal(meta.status,200,JSON.stringify(meta.body));
+  const chat = meta.body.channels.find(channel=>channel.id===chatChannelId);
+  assert.ok(chat);
+  assert.equal(chat.botCanView,true);
+  assert.equal(meta.body.botAdministrator,false);
+  assert.equal(meta.body.botAccessRepair.failed.length,0);
+});
+
+test('editing @everyone protects the bot member before applying the deny', async t => {
+  const botPermissions = (
+    1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n
+  ).toString();
+  const {mf,calls} = await runtime(t,{botPermissions});
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+
+  const result = await request(
+    mf,
+    `/api/guilds/${guildId}/channels/${chatChannelId}/permissions/${guildId}`,
+    login.body.token,
+    'PATCH',
+    {
+      targetType:'role',
+      permissions:{view:'deny'}
+    }
+  );
+  assert.equal(result.status,200,JSON.stringify(result.body));
+
+  const botGuardIndex = calls.findIndex(call=>
+    call.method==='PUT' &&
+    call.path===`/api/v10/channels/${chatChannelId}/permissions/${botId}`
+  );
+  const everyoneIndex = calls.findIndex(call=>
+    call.method==='PUT' &&
+    call.path===`/api/v10/channels/${chatChannelId}/permissions/${guildId}`
+  );
+  assert.ok(botGuardIndex>=0,'bot member overwrite must be written');
+  assert.ok(everyoneIndex>=0,'@everyone overwrite must be written');
+  assert.ok(
+    botGuardIndex<everyoneIndex,
+    'bot protection must be applied before @everyone is denied'
   );
 });
