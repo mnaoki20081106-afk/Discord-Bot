@@ -311,11 +311,13 @@ async function repairBotChannelAccess(
     await ensureGuard(category);
   }
 
-  const refreshed=await botJson<DiscordChannel[]>(
-    env,
-    `/guilds/${guildId}/channels`
-  );
-  for(const channel of refreshed.filter(
+  // Only refetch after a category was actually changed. In steady state this
+  // keeps the scheduled guard lightweight, while still preserving category
+  // synchronization when a repair propagates to child channels.
+  const channelsForChildren=repairedIds.size>0
+    ?await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`)
+    :initialChannels;
+  for(const channel of channelsForChildren.filter(
     item=>supported(item)&&item.type!==4
   )){
     await ensureGuard(channel);
@@ -323,10 +325,35 @@ async function repairBotChannelAccess(
 
   return {
     administrator:false,
-    checked:refreshed.filter(supported).length,
+    checked:channelsForChildren.filter(supported).length,
     repaired:repairedIds.size,
     failed:[...failedById.values()]
   };
+}
+
+async function botAccessGuardSweep(env:Env):Promise<void>{
+  let guilds:Array<{id:string}>;
+  try{
+    guilds=await botJson<Array<{id:string}>>(env,"/users/@me/guilds?limit=200");
+  }catch(error){
+    console.error("bot access guard: guild list failed",error);
+    return;
+  }
+
+  for(const guild of guilds){
+    try{
+      const result=await repairBotChannelAccess(env,guild.id);
+      if(result.failed.length>0){
+        console.warn(
+          "bot access guard: repair incomplete",
+          guild.id,
+          result.failed
+        );
+      }
+    }catch(error){
+      console.error("bot access guard: guild repair failed",guild.id,error);
+    }
+  }
 }
 
 async function discordMeta(env:Env,guildId:string){
@@ -1827,7 +1854,8 @@ export default {
       cleanExpired(env),
       auditWatch(env),
       paymentSweep(env),
-      vendingSweep(env)
+      vendingSweep(env),
+      botAccessGuardSweep(env)
     ]).then(()=>undefined));
   }
 } satisfies ExportedHandler<Env>;
