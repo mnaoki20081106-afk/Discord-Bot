@@ -1739,11 +1739,21 @@ export async function handleRecoveryOAuth(
       tokenExpiresAt:Date.now()+Number(tokens.expires_in)*1000
     });
 
+    let title="復旧登録完了";
+    let heading="復旧登録が完了しました";
+    let detail="このサーバーが失われた場合、管理者が復元を開始するとDiscordの公式OAuth権限を使って再参加できます。";
+    if(recoveryState.purpose==="verification"){
+      const roleName=await grantVerifiedRoleAfterOAuth(env,guildId,userId);
+      title="認証完了";
+      heading="認証が完了しました";
+      detail="認証ロール @"+roleName+" を付与し、同時にサーバー復旧対象メンバーとして登録しました。";
+    }
+
     return new Response(
       "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"+
-      "<title>復旧登録完了</title><body style='font-family:system-ui;background:#070b14;color:#eef3ff;padding:40px'>"+
+      "<title>"+title+"</title><body style='font-family:system-ui;background:#070b14;color:#eef3ff;padding:40px'>"+
       "<main style='max-width:560px;margin:auto;background:#10172a;border:1px solid #202943;border-radius:20px;padding:28px'>"+
-      "<h1>復旧登録が完了しました</h1><p>このサーバーが万が一失われた場合、管理者が復元を開始するとDiscordの公式OAuth権限を使って再参加できます。</p>"+
+      "<h1>"+heading+"</h1><p>"+detail+"</p>"+
       "<p>このページは閉じて大丈夫です。</p></main></body>",
       {headers:{"Content-Type":"text/html; charset=utf-8"}}
     );
