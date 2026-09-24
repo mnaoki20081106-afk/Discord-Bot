@@ -76,6 +76,13 @@ type SnapshotMember = {
   nick:string|null;
   roles:string[];
   joined_at?:string|null;
+  communication_disabled_until?:string|null;
+};
+
+type SnapshotBan = {
+  user_id:string;
+  username:string;
+  reason:string|null;
 };
 
 type PanelSnapshot = {
@@ -86,7 +93,7 @@ type PanelSnapshot = {
 };
 
 type GuildSnapshot = {
-  version:1;
+  version:1|2;
   createdAt:number;
   sourceGuild:{
     id:string;
@@ -103,10 +110,14 @@ type GuildSnapshot = {
     rules_channel_id?:string|null;
     public_updates_channel_id?:string|null;
     preferred_locale?:string;
+    features?:string[];
   };
   roles:SnapshotRole[];
   channels:SnapshotChannel[];
   members:SnapshotMember[];
+  bans?:SnapshotBan[];
+  welcomeScreen?:Record<string,unknown>|null;
+  widgetSettings?:Record<string,unknown>|null;
   emojis:unknown[];
   stickers:unknown[];
   bot:{
@@ -124,6 +135,7 @@ type GuildSnapshot = {
   };
   capture:{
     membersComplete:boolean;
+    bansComplete?:boolean;
     panelDiscoveryComplete:boolean;
     warnings:string[];
   };
@@ -139,6 +151,9 @@ type RestoreStats = {
   membersSkippedNoConsent:number;
   membersRevoked:number;
   membersFailed:number;
+  memberTimeoutsRestored:number;
+  bansRestored:number;
+  guildExtrasRestored:number;
   panelsRestored:number;
   productsRestored:number;
   vendingMachinesRestored:number;
@@ -148,7 +163,8 @@ type RestoreStats = {
 const EMPTY_STATS:RestoreStats = {
   rolesCreated:0,rolesUpdated:0,channelsCreated:0,channelsUpdated:0,
   membersAdded:0,membersAlreadyPresent:0,membersSkippedNoConsent:0,
-  membersRevoked:0,membersFailed:0,panelsRestored:0,productsRestored:0,
+  membersRevoked:0,membersFailed:0,memberTimeoutsRestored:0,bansRestored:0,
+  guildExtrasRestored:0,panelsRestored:0,productsRestored:0,
   vendingMachinesRestored:0,warnings:[]
 };
 
@@ -214,7 +230,8 @@ async function captureMembers(
         username:String(item.user.global_name||item.user.username||item.user.id),
         nick:item.nick??null,
         roles:Array.isArray(item.roles)?item.roles.map(String):[],
-        joined_at:item.joined_at??null
+        joined_at:item.joined_at??null,
+        communication_disabled_until:item.communication_disabled_until??null
       });
     }
     if(chunk.length<1000) break;
@@ -226,6 +243,45 @@ async function captureMembers(
     }
   }
   return {members,complete};
+}
+
+async function captureBans(
+  env:Env,guildId:string,warnings:string[]
+):Promise<{bans:SnapshotBan[];complete:boolean}>{
+  const bans:SnapshotBan[]=[];
+  let after="";
+  let complete=true;
+  for(let page=0;page<100;page++){
+    const path="/guilds/"+guildId+"/bans?limit=1000"+(after?"&after="+after:"");
+    let chunk:any[];
+    try{
+      chunk=await botJson<any[]>(env,path);
+    }catch(error){
+      complete=false;
+      warnings.push(
+        error instanceof DiscordApiError&&error.status===403
+          ?"BAN一覧を取得できませんでした。BOTに「メンバーをBAN」権限が必要です。"
+          :"BAN一覧の取得が途中で失敗しました。取得済み分のみ保存しました。"
+      );
+      break;
+    }
+    for(const item of chunk){
+      if(!item.user?.id) continue;
+      bans.push({
+        user_id:String(item.user.id),
+        username:String(item.user.global_name||item.user.username||item.user.id),
+        reason:item.reason??null
+      });
+    }
+    if(chunk.length<1000) break;
+    after=String(chunk[chunk.length-1]?.user?.id??"");
+    if(!after){complete=false;break;}
+    if(page===99){
+      complete=false;
+      warnings.push("BAN数が100,000件を超えたため、今回のバックアップでは先頭100,000件まで保存しました。");
+    }
+  }
+  return {bans,complete};
 }
 
 function findCustomIds(message:any):string[]{
@@ -382,13 +438,24 @@ async function createSnapshot(env:Env,guildId:string,label?:string|null){
         :[]
     }));
 
-  const memberCapture=await captureMembers(env,guildId,warnings);
-  const panelCapture=await discoverPanels(env,guildId,channels,warnings);
+  const [memberCapture,banCapture,panelCapture,welcomeScreen,widgetSettings]=await Promise.all([
+    captureMembers(env,guildId,warnings),
+    captureBans(env,guildId,warnings),
+    discoverPanels(env,guildId,channels,warnings),
+    botJson<Record<string,unknown>>(env,"/guilds/"+guildId+"/welcome-screen").catch(()=>{
+      warnings.push("Welcome Screenを取得できませんでした。BOTの「サーバー管理」権限を確認してください。");
+      return null;
+    }),
+    botJson<Record<string,unknown>>(env,"/guilds/"+guildId+"/widget").catch(()=>{
+      warnings.push("Server Widget設定を取得できませんでした。BOTの「サーバー管理」権限を確認してください。");
+      return null;
+    })
+  ]);
   const recoveryMemberCount=await countRecoveryMembers(env,guildId);
   const bot=await captureBotData(env,guildId,panelCapture.panels);
 
   const snapshot:GuildSnapshot={
-    version:1,
+    version:2,
     createdAt:Date.now(),
     sourceGuild:{
       id:String(guild.id),
@@ -404,11 +471,14 @@ async function createSnapshot(env:Env,guildId:string,label?:string|null){
       system_channel_flags:guild.system_channel_flags,
       rules_channel_id:guild.rules_channel_id??null,
       public_updates_channel_id:guild.public_updates_channel_id??null,
-      preferred_locale:guild.preferred_locale
+      preferred_locale:guild.preferred_locale,
+      features:Array.isArray(guild.features)?guild.features.map(String):[]
     },
-    roles,channels,members:memberCapture.members,emojis,stickers,bot,
+    roles,channels,members:memberCapture.members,bans:banCapture.bans,
+    welcomeScreen,widgetSettings,emojis,stickers,bot,
     capture:{
       membersComplete:memberCapture.complete,
+      bansComplete:banCapture.complete,
       panelDiscoveryComplete:panelCapture.complete,
       warnings
     }
