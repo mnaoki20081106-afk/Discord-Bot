@@ -290,6 +290,40 @@ export default function BackupManager({
         </button>
       </div>
 
+      <article className="card backup-coverage">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">RECOVERY COVERAGE</span>
+            <h3>復元できる範囲とDiscord側の制約</h3>
+          </div>
+        </div>
+        <div className="backup-callout">
+          <strong>復元対象</strong>
+          <span>
+            サーバー基本設定、@everyoneを含むロール権限、カテゴリ/チャンネル配置と権限、
+            メンバーID・ロール・ニックネーム・有効なタイムアウト、BAN一覧、
+            Welcome Screen / Server Widget、DSMの認証・商品・自販機・在庫・クーポン・パネル設定を復元します。
+          </span>
+        </div>
+        <div className="backup-callout">
+          <strong>メンバー自動復元の条件</strong>
+          <span>
+            メンバー一覧の取得にはDiscord Developer Portalの Server Members Intent
+            （GUILD_MEMBERS）が必要です。自動再参加は、障害発生前に本人が復旧登録で
+            guilds.join を許可したメンバーだけが対象です。
+          </span>
+        </div>
+        <div className="backup-callout">
+          <strong>Discord API上、そのまま復元できないもの</strong>
+          <span>
+            過去メッセージを元の投稿者・元のMessage IDのまま戻すこと、外部Integrationや他社Botを
+            本人/提供元の再認証なしで再導入すること、Server Boost・所有権・監査ログ・元の招待コードを
+            そのまま再現することはできません。現時点の絵文字・ステッカーはメタデータ保存までで、
+            画像実体の再アップロードは復元対象外です。
+          </span>
+        </div>
+      </article>
+
       <div className="backup-grid">
         <article className="card">
           <div className="section-head">
