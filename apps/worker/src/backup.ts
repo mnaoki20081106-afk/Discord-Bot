@@ -786,7 +786,114 @@ async function applyPositionsAndGuild(
     return updateRestoreJob(env,job.id,{result_json:JSON.stringify(stats)});
   });
 
-  await updateRestoreJob(env,job.id,{phase:"bot-settings",cursor:0,status:"running",error:null});
+  await updateRestoreJob(env,job.id,{phase:"guild-extras",cursor:0,status:"running",error:null});
+}
+
+async function restoreGuildExtras(
+  env:Env,job:RestoreJobRow,snapshot:GuildSnapshot
+):Promise<void>{
+  const channelMap=parseObject<Record<string,string>>(job.channel_map_json,{});
+  const stats=parseStats(job.result_json);
+
+  if(snapshot.widgetSettings){
+    try{
+      const source=snapshot.widgetSettings as any;
+      await botJson(env,"/guilds/"+job.target_guild_id+"/widget",{
+        method:"PATCH",
+        body:JSON.stringify({
+          enabled:Boolean(source.enabled),
+          channel_id:source.channel_id?channelMap[String(source.channel_id)]??null:null
+        })
+      });
+      stats.guildExtrasRestored++;
+    }catch(error){
+      stats.warnings.push(
+        "Server Widget設定の復元に失敗しました: "+
+        String((error as Error)?.message??error).slice(0,140)
+      );
+    }
+  }
+
+  if(snapshot.welcomeScreen){
+    try{
+      const source=snapshot.welcomeScreen as any;
+      const welcomeChannels=(Array.isArray(source.welcome_channels)?source.welcome_channels:[])
+        .map((item:any)=>{
+          const mapped=channelMap[String(item.channel_id??"")];
+          if(!mapped) return null;
+          return {
+            channel_id:mapped,
+            description:String(item.description??"").slice(0,140),
+            emoji_id:null,
+            emoji_name:item.emoji_id?null:(item.emoji_name??null)
+          };
+        })
+        .filter(Boolean);
+      await botJson(env,"/guilds/"+job.target_guild_id+"/welcome-screen",{
+        method:"PATCH",
+        body:JSON.stringify({
+          enabled:Array.isArray(snapshot.sourceGuild.features)
+            ?snapshot.sourceGuild.features.includes("WELCOME_SCREEN_ENABLED")
+            :undefined,
+          description:source.description??null,
+          welcome_channels:welcomeChannels
+        })
+      });
+      stats.guildExtrasRestored++;
+    }catch(error){
+      stats.warnings.push(
+        "Welcome Screenの復元に失敗しました: "+
+        String((error as Error)?.message??error).slice(0,140)
+      );
+    }
+  }
+
+  await updateRestoreJob(env,job.id,{
+    phase:"bans",cursor:0,result_json:JSON.stringify(stats),status:"running",error:null
+  });
+}
+
+async function restoreBanBatch(
+  env:Env,job:RestoreJobRow,snapshot:GuildSnapshot,batch=10
+):Promise<void>{
+  const bans=snapshot.bans??[];
+  const stats=parseStats(job.result_json);
+  if(job.cursor>=bans.length){
+    await updateRestoreJob(env,job.id,{
+      phase:"bot-settings",cursor:0,result_json:JSON.stringify(stats),status:"running",error:null
+    });
+    return;
+  }
+
+  let cursor=job.cursor;
+  const stop=Math.min(bans.length,cursor+batch);
+  while(cursor<stop){
+    const ban=bans[cursor]!;
+    try{
+      const reason=ban.reason?.trim()
+        ?encodeURIComponent(("バックアップ復元: "+ban.reason).slice(0,480))
+        :encodeURIComponent("バックアップからBAN状態を復元");
+      await botJson(env,"/guilds/"+job.target_guild_id+"/bans/"+ban.user_id,{
+        method:"PUT",
+        headers:{"X-Audit-Log-Reason":reason},
+        body:JSON.stringify({delete_message_seconds:0})
+      });
+      stats.bansRestored++;
+    }catch(error){
+      stats.warnings.push(
+        "BAN復元失敗 "+ban.user_id+": "+
+        String((error as Error)?.message??error).slice(0,120)
+      );
+    }
+    cursor++;
+    if(cursor<stop) await new Promise(resolve=>setTimeout(resolve,350));
+  }
+
+  await updateRestoreJob(env,job.id,{
+    cursor,
+    ...(cursor>=bans.length?{phase:"bot-settings",cursor:0}:{}),
+    result_json:JSON.stringify(stats),status:"running",error:null
+  });
 }
 
 function mapId(id:string|null|undefined,map:Record<string,string>):string|null{
@@ -1220,6 +1327,20 @@ async function restoreOneMember(
         method:"PATCH",body:JSON.stringify({nick:member.nick})
       }).catch(()=>undefined);
     }
+    if(member.communication_disabled_until){
+      const timeoutAt=Date.parse(member.communication_disabled_until);
+      if(Number.isFinite(timeoutAt)&&timeoutAt>Date.now()){
+        try{
+          await botJson(env,"/guilds/"+job.target_guild_id+"/members/"+member.user_id,{
+            method:"PATCH",
+            body:JSON.stringify({communication_disabled_until:member.communication_disabled_until})
+          });
+          stats.memberTimeoutsRestored++;
+        }catch{
+          stats.warnings.push("メンバー "+member.user_id+" のタイムアウト状態を復元できませんでした。");
+        }
+      }
+    }
   }catch(error){
     if(error instanceof BackupHttpError&&error.status===410){
       stats.membersRevoked++;
@@ -1255,6 +1376,8 @@ async function processRestoreJob(env:Env,job:RestoreJobRow):Promise<void>{
   if(job.phase==="categories") return restoreChannelBatch(env,job,snapshot,true);
   if(job.phase==="channels") return restoreChannelBatch(env,job,snapshot,false);
   if(job.phase==="positions") return applyPositionsAndGuild(env,job,snapshot);
+  if(job.phase==="guild-extras") return restoreGuildExtras(env,job,snapshot);
+  if(job.phase==="bans") return restoreBanBatch(env,job,snapshot);
   if(job.phase==="bot-settings") return restoreBotSettings(env,job,snapshot);
   if(job.phase==="legacy-products") return restoreLegacyProducts(env,job,snapshot);
   if(job.phase==="vending") return restoreVending(env,job,snapshot);
@@ -1361,6 +1484,7 @@ async function restorePreview(env:Env,backupId:string,targetGuildId:string){
       channels:snapshot.channels.length,
       missingChannels,
       members:snapshot.members.length,
+      bans:(snapshot.bans??[]).length,
       recoveryRegistered:recoveryCount,
       botPanels:snapshot.bot.panels.length,
       vendingMachines:snapshot.bot.vending.machines.length
