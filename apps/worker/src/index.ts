@@ -110,6 +110,8 @@ type DiscordGuildMember={
 };
 
 const PANEL_PERMISSION_MASK=1024n|2048n|16384n;
+const BOT_CHANNEL_GUARD_MASK=
+  PANEL_PERMISSION_MASK|32768n|65536n|8192n|16n|268435456n|64n|34359738368n;
 
 function fallbackBotMember(
   botId:string,
@@ -207,8 +209,8 @@ async function protectBotChannelAccess(
   );
   let allow=BigInt(current?.allow??"0");
   let deny=BigInt(current?.deny??"0");
-  allow|=PANEL_PERMISSION_MASK;
-  deny&=~PANEL_PERMISSION_MASK;
+  allow|=BOT_CHANNEL_GUARD_MASK;
+  deny&=~BOT_CHANNEL_GUARD_MASK;
 
   try{
     await botJson<void>(
@@ -232,6 +234,99 @@ async function protectBotChannelAccess(
     }
     throw error;
   }
+}
+
+type BotAccessRepairResult={
+  administrator:boolean;
+  checked:number;
+  repaired:number;
+  failed:Array<{id:string;name:string;status:number}>;
+};
+
+async function repairBotChannelAccess(
+  env:Env,
+  guildId:string
+):Promise<BotAccessRepairResult>{
+  const [roles,initialChannels]=await Promise.all([
+    botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`),
+    botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`)
+  ]);
+  const member=await getBotGuildMember(env,guildId,roles);
+  const administrator=(botBasePermissions(guildId,roles,member)&8n)===8n;
+  const supported=(channel:DiscordChannel)=>[0,2,4,5,13,15,16].includes(channel.type);
+  const initialSupported=initialChannels.filter(supported);
+  if(administrator){
+    return {administrator:true,checked:initialSupported.length,repaired:0,failed:[]};
+  }
+
+  const botId=env.DISCORD_APPLICATION_ID.trim();
+  const repairedIds=new Set<string>();
+  const failedById=new Map<string,{id:string;name:string;status:number}>();
+
+  const ensureGuard=async(channel:DiscordChannel)=>{
+    const current=(channel.permission_overwrites??[]).find(
+      overwrite=>overwrite.id===botId&&overwrite.type===1
+    );
+    let allow=BigInt(current?.allow??"0");
+    let deny=BigInt(current?.deny??"0");
+    const alreadyProtected=
+      (allow&BOT_CHANNEL_GUARD_MASK)===BOT_CHANNEL_GUARD_MASK&&
+      (deny&BOT_CHANNEL_GUARD_MASK)===0n;
+    if(alreadyProtected) return;
+
+    allow|=BOT_CHANNEL_GUARD_MASK;
+    deny&=~BOT_CHANNEL_GUARD_MASK;
+    try{
+      await botJson<void>(
+        env,
+        `/channels/${channel.id}/permissions/${botId}`,
+        {
+          method:"PUT",
+          body:JSON.stringify({
+            type:1,
+            allow:allow.toString(),
+            deny:deny.toString()
+          })
+        }
+      );
+      repairedIds.add(channel.id);
+      failedById.delete(channel.id);
+    }catch(error){
+      if(error instanceof DiscordApiError){
+        failedById.set(channel.id,{
+          id:channel.id,
+          name:channel.name,
+          status:error.status
+        });
+        return;
+      }
+      throw error;
+    }
+  };
+
+  // Protect categories first. Discord propagates category permission changes to
+  // channels that are still synchronized with that category. We then refetch so
+  // synchronized children are not unnecessarily given their own overwrite.
+  for(const category of initialSupported.filter(channel=>channel.type===4)){
+    await ensureGuard(category);
+  }
+
+  const refreshed=await botJson<DiscordChannel[]>(
+    env,
+    `/guilds/${guildId}/channels`
+  );
+  for(const channel of refreshed.filter(
+    item=>supported(item)&&item.type!==4
+  )){
+    await ensureGuard(channel);
+  }
+
+  return {
+    administrator:false,
+    checked:refreshed.filter(supported).length,
+    repaired:repairedIds.size,
+    failed:[...failedById.values()]
+  };
 }
 
 async function discordMeta(env:Env,guildId:string){
@@ -443,7 +538,16 @@ async function ensureCategory(env:Env,guildId:string,name:string):Promise<Discor
   const existing=channels.find(c=>c.type===4&&c.name===name);
   if(existing) return existing;
   return botJson(env,`/guilds/${guildId}/channels`,{
-    method:"POST",body:JSON.stringify({name,type:4})
+    method:"POST",
+    body:JSON.stringify({
+      name,
+      type:4,
+      permission_overwrites:[{
+        id:env.DISCORD_APPLICATION_ID.trim(),
+        type:1,
+        allow:BOT_CHANNEL_GUARD_MASK.toString()
+      }]
+    })
   });
 }
 
@@ -453,15 +557,18 @@ async function ensureText(
 ):Promise<void>{
   const channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
   if(channels.some(c=>c.type===0&&c.name===name&&c.parent_id===parentId)) return;
-  const overwrites:Array<Record<string,unknown>>=[];
+  const overwrites:Array<Record<string,unknown>>=[{
+    id:env.DISCORD_APPLICATION_ID.trim(),
+    type:1,
+    allow:BOT_CHANNEL_GUARD_MASK.toString()
+  }];
   if(options?.readOnly){
     overwrites.push({id:guildId,type:0,deny:"2048"});
   }
   if(options?.privateRoleId){
     overwrites.push(
       {id:guildId,type:0,deny:"1024"},
-      {id:options.privateRoleId,type:0,allow:(1024n|2048n|65536n).toString()},
-      {id:env.DISCORD_APPLICATION_ID.trim(),type:1,allow:PANEL_PERMISSION_MASK.toString()}
+      {id:options.privateRoleId,type:0,allow:(1024n|2048n|65536n).toString()}
     );
   }
   await botJson(env,`/guilds/${guildId}/channels`,{
@@ -572,7 +679,7 @@ async function createTicketFromInteraction(env:Env,interaction:any):Promise<Resp
   const overwrites:Array<Record<string,unknown>>=[
     {id:guildId,type:0,deny:"1024"},
     {id:userId,type:1,allow:(1024n|2048n|65536n|32768n).toString()},
-    {id:env.DISCORD_APPLICATION_ID.trim(),type:1,allow:PANEL_PERMISSION_MASK.toString()}
+    {id:env.DISCORD_APPLICATION_ID.trim(),type:1,allow:BOT_CHANNEL_GUARD_MASK.toString()}
   ];
   for(const role of supportRoles){
     overwrites.push({
@@ -832,7 +939,12 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(meta&&request.method==="GET"){
     const guildId=meta[1]!;
     const {guild}=await requireGuild(request,env,guildId);
-    return json(env,{...guild,...await discordMeta(env,guildId)});
+    const botAccessRepair=await repairBotChannelAccess(env,guildId);
+    return json(env,{
+      ...guild,
+      ...await discordMeta(env,guildId),
+      botAccessRepair
+    });
   }
 
   const settingsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/settings$/);
@@ -870,14 +982,30 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const input=await bodyObject<{name:string;type:"text"|"voice"|"category";parentId?:string|null;topic?:string}>(request);
     const name=input.name?.trim();
     if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
+    const botOverwrite=[{
+      id:env.DISCORD_APPLICATION_ID.trim(),
+      type:1,
+      allow:BOT_CHANNEL_GUARD_MASK.toString()
+    }];
     const created=await botJson<DiscordChannel>(env,`/guilds/${guildId}/channels`,{
       method:"POST",
       body:JSON.stringify(
         input.type==="category"
-          ?{name,type:4}
+          ?{name,type:4,permission_overwrites:botOverwrite}
           :input.type==="voice"
-            ?{name,type:2,parent_id:input.parentId||undefined}
-            :{name,type:0,parent_id:input.parentId||undefined,topic:input.topic||undefined}
+            ?{
+                name,
+                type:2,
+                parent_id:input.parentId||undefined,
+                permission_overwrites:botOverwrite
+              }
+            :{
+                name,
+                type:0,
+                parent_id:input.parentId||undefined,
+                topic:input.topic||undefined,
+                permission_overwrites:botOverwrite
+              }
       )
     });
     return json(env,{id:created.id,name:created.name,type:input.type});
