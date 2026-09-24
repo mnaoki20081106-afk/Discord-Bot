@@ -2,7 +2,7 @@ import type { Env, GuildSettings, ProductRow } from "./types";
 import { botFetch, botJson, DiscordApiError, syncAutoMod, type DiscordChannel, type DiscordRole } from "./discord";
 import { getDashboardSession, getGuildSettings } from "./db";
 import { ensureVendingSchema } from "./vending-db";
-import { decrypt, encrypt, json, randomId, randomToken, sha256Hex } from "./utils";
+import { accountCreatedAt, decrypt, encrypt, json, randomId, randomToken, sha256Hex } from "./utils";
 import {
   cancelRestoreJob,
   countRecoveryMembers,
@@ -20,7 +20,8 @@ import {
   markRecoveryMemberRevoked,
   nextRestoreJob,
   putRecoveryState,
-  consumeRecoveryState,
+  putRecoveryOAuthState,
+  consumeRecoveryOAuthState,
   recordPanelDeployment,
   rotateRecoveryMember,
   updateRestoreJob,
@@ -1616,21 +1617,84 @@ export async function handleBackupApi(
   return null;
 }
 
-function recoveryAuthorizeUrl(env:Env,origin:string,state:string):string{
+function recoveryAuthorizeUrl(
+  env:Env,origin:string,state:string,forceConsent=true
+):string{
   const params=new URLSearchParams({
     client_id:env.DISCORD_APPLICATION_ID,
     response_type:"code",
     redirect_uri:origin+"/auth/discord/callback",
     scope:"identify guilds.join",
-    state,
-    prompt:"consent"
+    state
   });
+  if(forceConsent) params.set("prompt","consent");
   return "https://discord.com/oauth2/authorize?"+params.toString();
+}
+
+export async function createVerificationRecoveryAuthorizeUrl(
+  env:Env,
+  origin:string,
+  guildId:string,
+  userId:string
+):Promise<string>{
+  if(!/^\d+$/.test(guildId)||!/^\d+$/.test(userId)){
+    throw new BackupHttpError(400,"認証情報が不正です");
+  }
+  const state=randomToken(24);
+  await putRecoveryOAuthState(env,state,guildId,{
+    expectedUserId:userId,
+    purpose:"verification"
+  });
+  return recoveryAuthorizeUrl(env,origin,state,false);
+}
+
+async function grantVerifiedRoleAfterOAuth(
+  env:Env,guildId:string,userId:string
+):Promise<string>{
+  const settings=await getGuildSettings(env,guildId);
+  if(!settings.verifiedRoleId){
+    throw new BackupHttpError(409,"認証ロールが設定されていません");
+  }
+  const roles=await botJson<any[]>(env,"/guilds/"+guildId+"/roles");
+  const target=roles.find(role=>String(role.id)===settings.verifiedRoleId);
+  if(!target||String(target.id)===guildId||target.managed){
+    throw new BackupHttpError(
+      409,
+      "認証ロールが無効です。管理画面で通常ロールを設定し直してください"
+    );
+  }
+  const member=await botJson<any>(env,"/guilds/"+guildId+"/members/"+userId);
+  const assigned=Array.isArray(member.roles)&&member.roles.map(String).includes(String(target.id));
+  if(!assigned){
+    try{
+      await botJson(env,"/guilds/"+guildId+"/members/"+userId+"/roles/"+target.id,{
+        method:"PUT"
+      });
+    }catch(error){
+      if(error instanceof DiscordApiError&&error.status===403){
+        throw new BackupHttpError(
+          403,
+          "復旧登録は保存できましたが認証ロールを付与できませんでした。BOTのロール管理権限とロール順序を確認してください。"
+        );
+      }
+      throw error;
+    }
+  }
+  return String(target.name??"認証済み");
 }
 
 export async function handleRecoveryOAuth(
   request:Request,env:Env,url:URL
 ):Promise<Response|null>{
+  if(url.pathname==="/auth/verification/start"&&request.method==="GET"){
+    const guildId=String(url.searchParams.get("guild_id")??"");
+    if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
+    await botJson(env,"/guilds/"+guildId);
+    const state=randomToken(24);
+    await putRecoveryOAuthState(env,state,guildId,{purpose:"verification"});
+    return Response.redirect(recoveryAuthorizeUrl(env,url.origin,state,false),302);
+  }
+
   if(url.pathname==="/auth/recovery/start"&&request.method==="GET"){
     const guildId=String(url.searchParams.get("guild_id")??"");
     if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
@@ -1644,8 +1708,9 @@ export async function handleRecoveryOAuth(
     const code=url.searchParams.get("code");
     const state=url.searchParams.get("state");
     if(!code||!state) return null;
-    const guildId=await consumeRecoveryState(env,state);
-    if(!guildId) return null;
+    const recoveryState=await consumeRecoveryOAuthState(env,state);
+    if(!recoveryState) return null;
+    const guildId=recoveryState.guildId;
 
     const tokens=await oauthTokenRequest(env,new URLSearchParams({
       grant_type:"authorization_code",
@@ -1657,6 +1722,31 @@ export async function handleRecoveryOAuth(
     });
     if(!userResponse.ok) throw new BackupHttpError(502,"Discordユーザー情報を取得できませんでした");
     const user=await userResponse.json() as any;
+    const userId=String(user.id??"");
+    if(recoveryState.expectedUserId&&userId!==recoveryState.expectedUserId){
+      throw new BackupHttpError(
+        403,
+        "Discord認証に使ったアカウントが、認証ボタンを押したアカウントと一致しません。元のアカウントでやり直してください。"
+      );
+    }
+
+    if(recoveryState.purpose==="verification"){
+      const settings=await getGuildSettings(env,guildId);
+      if(!settings.verifiedRoleId){
+        throw new BackupHttpError(409,"認証ロールが設定されていません");
+      }
+      const minAccountAgeDays=Math.max(
+        0,
+        Math.min(36500,Math.trunc(Number(settings.minAccountAgeDays)||0))
+      );
+      if(Date.now()-accountCreatedAt(userId)<minAccountAgeDays*86400000){
+        throw new BackupHttpError(
+          403,
+          "このサーバーの認証条件を満たしていません。アカウント作成から"+
+          minAccountAgeDays+"日以上必要です。"
+        );
+      }
+    }
 
     try{
       await botJson(env,"/guilds/"+guildId+"/members/"+user.id);
@@ -1669,18 +1759,28 @@ export async function handleRecoveryOAuth(
 
     await upsertRecoveryMember(env,{
       guildId,
-      userId:String(user.id),
+      userId,
       username:String(user.global_name||user.username||user.id),
       accessTokenEnc:await encrypt(env.SESSION_ENCRYPTION_KEY,tokens.access_token),
       refreshTokenEnc:await encrypt(env.SESSION_ENCRYPTION_KEY,tokens.refresh_token),
       tokenExpiresAt:Date.now()+Number(tokens.expires_in)*1000
     });
 
+    let title="復旧登録完了";
+    let heading="復旧登録が完了しました";
+    let detail="このサーバーが失われた場合、管理者が復元を開始するとDiscordの公式OAuth権限を使って再参加できます。";
+    if(recoveryState.purpose==="verification"){
+      const roleName=await grantVerifiedRoleAfterOAuth(env,guildId,userId);
+      title="認証完了";
+      heading="認証が完了しました";
+      detail="認証ロール @"+roleName+" を付与し、同時にサーバー復旧対象メンバーとして登録しました。";
+    }
+
     return new Response(
       "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"+
-      "<title>復旧登録完了</title><body style='font-family:system-ui;background:#070b14;color:#eef3ff;padding:40px'>"+
+      "<title>"+title+"</title><body style='font-family:system-ui;background:#070b14;color:#eef3ff;padding:40px'>"+
       "<main style='max-width:560px;margin:auto;background:#10172a;border:1px solid #202943;border-radius:20px;padding:28px'>"+
-      "<h1>復旧登録が完了しました</h1><p>このサーバーが万が一失われた場合、管理者が復元を開始するとDiscordの公式OAuth権限を使って再参加できます。</p>"+
+      "<h1>"+heading+"</h1><p>"+detail+"</p>"+
       "<p>このページは閉じて大丈夫です。</p></main></body>",
       {headers:{"Content-Type":"text/html; charset=utf-8"}}
     );

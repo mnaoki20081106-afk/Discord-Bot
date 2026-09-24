@@ -100,6 +100,13 @@ const schema = [
     guild_id TEXT NOT NULL,
     expires_at INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS member_recovery_oauth_states (
+    state TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    expected_user_id TEXT,
+    purpose TEXT NOT NULL DEFAULT 'manual',
+    expires_at INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS member_recovery_tokens (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -219,21 +226,72 @@ export async function deleteBackupRecord(env:Env,id:string):Promise<boolean>{
   return (result.meta.changes??0)>0;
 }
 
-export async function putRecoveryState(env:Env,state:string,guildId:string):Promise<void>{
+export type RecoveryOAuthState = {
+  guildId:string;
+  expectedUserId:string|null;
+  purpose:"manual"|"verification";
+};
+
+export async function putRecoveryOAuthState(
+  env:Env,
+  state:string,
+  guildId:string,
+  options?:{expectedUserId?:string|null;purpose?:"manual"|"verification"}
+):Promise<void>{
   await ensureBackupSchema(env);
   await env.DB.prepare(
-    "INSERT INTO member_recovery_states(state,guild_id,expires_at) VALUES (?,?,?)"
-  ).bind(state,guildId,Date.now()+10*60_000).run();
+    `INSERT INTO member_recovery_oauth_states(
+      state,guild_id,expected_user_id,purpose,expires_at
+    ) VALUES (?,?,?,?,?)`
+  ).bind(
+    state,
+    guildId,
+    options?.expectedUserId??null,
+    options?.purpose??"manual",
+    Date.now()+10*60_000
+  ).run();
+}
+
+export async function consumeRecoveryOAuthState(
+  env:Env,state:string
+):Promise<RecoveryOAuthState|null>{
+  await ensureBackupSchema(env);
+  const row=await env.DB.prepare(
+    `SELECT guild_id,expected_user_id,purpose
+     FROM member_recovery_oauth_states
+     WHERE state=? AND expires_at>?`
+  ).bind(state,Date.now()).first<{
+    guild_id:string;
+    expected_user_id:string|null;
+    purpose:string;
+  }>();
+  if(row){
+    await env.DB.prepare(
+      "DELETE FROM member_recovery_oauth_states WHERE state=?"
+    ).bind(state).run();
+    return {
+      guildId:row.guild_id,
+      expectedUserId:row.expected_user_id,
+      purpose:row.purpose==="verification"?"verification":"manual"
+    };
+  }
+
+  // Backward compatibility for recovery links created before this schema.
+  const legacy=await env.DB.prepare(
+    "SELECT guild_id FROM member_recovery_states WHERE state=? AND expires_at>?"
+  ).bind(state,Date.now()).first<{guild_id:string}>();
+  if(!legacy) return null;
+  await env.DB.prepare("DELETE FROM member_recovery_states WHERE state=?").bind(state).run();
+  return {guildId:legacy.guild_id,expectedUserId:null,purpose:"manual"};
+}
+
+export async function putRecoveryState(env:Env,state:string,guildId:string):Promise<void>{
+  return putRecoveryOAuthState(env,state,guildId,{purpose:"manual"});
 }
 
 export async function consumeRecoveryState(env:Env,state:string):Promise<string|null>{
-  await ensureBackupSchema(env);
-  const row=await env.DB.prepare(
-    "SELECT guild_id FROM member_recovery_states WHERE state=? AND expires_at>?"
-  ).bind(state,Date.now()).first<{guild_id:string}>();
-  if(!row) return null;
-  await env.DB.prepare("DELETE FROM member_recovery_states WHERE state=?").bind(state).run();
-  return row.guild_id;
+  const row=await consumeRecoveryOAuthState(env,state);
+  return row?.guildId??null;
 }
 
 export async function upsertRecoveryMember(

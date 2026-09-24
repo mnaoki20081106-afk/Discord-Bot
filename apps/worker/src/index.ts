@@ -3,7 +3,6 @@ import {
   DEFAULT_SETTINGS,
   dashboardSessionStorageReady,
   cleanExpired,
-  deleteChallenge,
   consumeOAuthState,
   createDashboardSession,
   createPayment,
@@ -14,7 +13,6 @@ import {
   deleteSession,
   ensureSchema,
   getAuditCursor,
-  getChallenge,
   getDashboardSession,
   getGuildSettings,
   getPaymentByMerchantId,
@@ -24,7 +22,6 @@ import {
   listPendingPayments,
   listProducts,
   markDelivered,
-  putChallenge,
   putOAuthState,
   saveGuildSettings,
   setAuditCursor,
@@ -47,7 +44,13 @@ import {
   type DiscordUser
 } from "./discord";
 import { createPayPayQr, getPayPayStatus, payPayConfigured } from "./paypay";
-import { BackupHttpError, backupRestoreSweep, handleBackupApi, handleRecoveryOAuth } from "./backup";
+import {
+  BackupHttpError,
+  backupRestoreSweep,
+  createVerificationRecoveryAuthorizeUrl,
+  handleBackupApi,
+  handleRecoveryOAuth
+} from "./backup";
 import { recordPanelDeployment } from "./backup-db";
 import {
   handleVendingApi,
@@ -57,8 +60,6 @@ import {
 } from "./vending";
 import {
   accountCreatedAt,
-  normalizeVerificationAnswer,
-  verificationChallenge,
   corsHeaders,
   encrypt,
   json,
@@ -654,20 +655,22 @@ async function sendPanelMessage(
   }
 }
 
-async function publishVerificationPanel(env:Env,guildId:string,channelId:string){
+async function publishVerificationPanel(
+  env:Env,guildId:string,channelId:string,workerOrigin:string
+){
   const message=await sendPanelMessage(env,guildId,channelId,{
     embeds:[{
       title:"サーバー認証",
-      description:"下のボタンから認証を完了してください。",
+      description:"下のボタンから認証を開始してください。認証完了時に、万が一のサーバー復旧に必要なDiscord連携も同時に登録されます。",
       color:5793266
     }],
     components:[{
       type:1,
       components:[{
         type:2,
-        custom_id:`verify:start:${guildId}`,
+        style:5,
         label:"認証する",
-        style:3
+        url:workerOrigin+"/auth/verification/start?guild_id="+encodeURIComponent(guildId)
       }]
     }]
   });
@@ -962,41 +965,32 @@ async function handleInteraction(
     const id=interaction.data?.custom_id as string;
     if(id?.startsWith("verify:start:")){
       const guildId=id.split(":")[2]!;
-      const challengeId=randomId();
-      const challenge=verificationChallenge();
-      await putChallenge(env,challengeId,guildId,interaction.member.user.id,challenge.answer);
+      const userId=String(interaction.member?.user?.id??"");
+      const settings=await getGuildSettings(env,guildId);
+      if(!settings.verifiedRoleId){
+        return interactionResponse(ephemeral("認証ロールが設定されていません。"));
+      }
+      const minAccountAgeDays=Math.max(
+        0,
+        Math.min(36500,Math.trunc(Number(settings.minAccountAgeDays)||0))
+      );
+      if(Date.now()-accountCreatedAt(userId)<minAccountAgeDays*86400000){
+        return interactionResponse(ephemeral(
+          `作成から${minAccountAgeDays}日未満のアカウントは認証できません。`
+        ));
+      }
+      const verificationUrl=await createVerificationRecoveryAuthorizeUrl(
+        env,new URL(request.url).origin,guildId,userId
+      );
       return interactionResponse(ephemeral(
-        `次の計算に答えてください。5分で失効します。\n\n**${challenge.question} = ?**`,
+        "下のボタンからDiscord認証を完了してください。認証ロール付与と復旧用メンバー登録が同時に行われます。",
         [{
           type:1,
           components:[{
-            type:2,custom_id:`verify:answer:${challengeId}`,
-            label:"答えを入力",style:1
+            type:2,style:5,label:"Discordで認証",url:verificationUrl
           }]
         }]
       ));
-    }
-    if(id?.startsWith("verify:answer:")){
-      const challengeId=id.split(":")[2]!;
-      return interactionResponse({
-        type:9,
-        data:{
-          custom_id:`verify:modal:${challengeId}`,
-          title:"サーバー認証",
-          components:[{
-            type:1,
-            components:[{
-              type:4,
-              custom_id:"code",
-              label:"計算の答え",
-              style:1,
-              min_length:2,
-              max_length:3,
-              required:true
-            }]
-          }]
-        }
-      });
     }
     if(id==="ticket:create") return createTicketFromInteraction(env,interaction);
     if(id==="ticket:close"){
@@ -1035,127 +1029,6 @@ async function handleInteraction(
         [{
           type:1,
           components:[{type:2,style:5,label:"PayPayで支払う",url:qr.url}]
-        }]
-      ));
-    }
-  }
-
-  if(interaction.type===5){
-    const id=interaction.data?.custom_id as string;
-    if(id?.startsWith("verify:modal:")){
-      const challengeId=id.split(":")[2]!;
-      const challenge=await getChallenge(env,challengeId);
-      if(!challenge) return interactionResponse(ephemeral("認証が失効しています。"));
-      if(challenge.expires_at<Date.now()){
-        await deleteChallenge(env,challengeId);
-        return interactionResponse(ephemeral("認証が失効しています。もう一度「認証する」から始めてください。"));
-      }
-      if(challenge.user_id!==interaction.member.user.id||challenge.guild_id!==interaction.guild_id){
-        return interactionResponse(ephemeral("認証情報が一致しません。"));
-      }
-      const rawAnswer=interaction.data.components?.[0]?.components?.[0]?.value;
-      const answer=normalizeVerificationAnswer(rawAnswer);
-      if(answer===null||answer!==challenge.code){
-        return interactionResponse(ephemeral("答えが違います。もう一度「答えを入力」から試してください。"));
-      }
-      const settings=await getGuildSettings(env,challenge.guild_id);
-      if(!settings.verifiedRoleId) return interactionResponse(ephemeral("認証ロールが設定されていません。"));
-
-      const minAccountAgeDays=Math.max(
-        0,
-        Math.min(36500,Math.trunc(Number(settings.minAccountAgeDays)||0))
-      );
-      if(Date.now()-accountCreatedAt(challenge.user_id)<minAccountAgeDays*86400000){
-        return interactionResponse(ephemeral(
-          `作成から${minAccountAgeDays}日未満のアカウントは認証できません。`
-        ));
-      }
-
-      const roles=await botJson<DiscordRole[]>(env,`/guilds/${challenge.guild_id}/roles`);
-      const targetRole=roles.find(role=>role.id===settings.verifiedRoleId);
-      if(!targetRole||targetRole.id===challenge.guild_id){
-        return interactionResponse(ephemeral(
-          "認証ロールが見つからないか、@everyone が選択されています。管理画面で認証ロールを設定し直してください。"
-        ));
-      }
-      if(targetRole.managed){
-        return interactionResponse(ephemeral(
-          "この認証ロールはDiscord管理ロールのためBOTから付与できません。別の通常ロールを選択してください。"
-        ));
-      }
-
-      let member=await botJson<DiscordGuildMember>(
-        env,
-        `/guilds/${challenge.guild_id}/members/${challenge.user_id}`
-      );
-      if(!member.roles.includes(targetRole.id)){
-        try{
-          await botJson<void>(
-            env,
-            `/guilds/${challenge.guild_id}/members/${challenge.user_id}/roles/${targetRole.id}`,
-            {method:"PUT"}
-          );
-        }catch(error){
-          if(error instanceof DiscordApiError&&error.status===403){
-            const botMember=await getBotGuildMember(env,challenge.guild_id,roles);
-            const highestBotRole=highestMemberRole(roles,botMember);
-            const hierarchyBlocked=
-              highestBotRole!==null&&compareRoleHierarchy(targetRole,highestBotRole)>=0;
-            return interactionResponse(ephemeral(
-              hierarchyBlocked
-                ? `Discordがロール付与を拒否しました。認証ロール @${targetRole.name} はBOTの最高ロール @${highestBotRole.name} と同等以上です。認証ロールをBOTロールより下へ移動してください。`
-                : "Discordが認証ロールの付与を拒否しました。BOTの「ロールの管理」権限とロール設定を確認してください。"
-            ));
-          }
-          if(error instanceof DiscordApiError&&error.status===404){
-            return interactionResponse(ephemeral(
-              "認証対象のメンバーまたはロールが見つかりませんでした。もう一度認証してください。"
-            ));
-          }
-          throw error;
-        }
-
-        const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
-        let confirmed=false;
-        for(const delay of [0,180,420]){
-          if(delay>0) await sleep(delay);
-          member=await botJson<DiscordGuildMember>(
-            env,
-            `/guilds/${challenge.guild_id}/members/${challenge.user_id}`
-          );
-          if(member.roles.includes(targetRole.id)){
-            confirmed=true;
-            break;
-          }
-        }
-        if(!confirmed){
-          return interactionResponse(ephemeral(
-            "Discordへロール付与を送信しましたが、付与済みであることを再確認できませんでした。もう一度認証するかBOTのロール権限を確認してください。"
-          ));
-        }
-      }
-
-      await deleteChallenge(env,challengeId);
-
-      console.log("verification completed",{
-        guildId:challenge.guild_id,
-        userId:challenge.user_id,
-        roleId:targetRole.id,
-        minAccountAgeDays
-      });
-      const recoveryUrl=
-        new URL(request.url).origin+
-        "/auth/recovery/start?guild_id="+encodeURIComponent(challenge.guild_id);
-      return interactionResponse(ephemeral(
-        `認証が完了しました。@${targetRole.name} を付与しました。\n\n万が一のサーバー復旧に備える場合は、下のボタンから復旧登録もできます。`,
-        [{
-          type:1,
-          components:[{
-            type:2,
-            style:5,
-            label:"復旧登録もする",
-            url:recoveryUrl
-          }]
         }]
       ));
     }
@@ -1892,7 +1765,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     if(!channelId) throw new HttpError(400,"設置先チャンネルを選択してください");
     await requireMessageChannel(env,guildId,channelId);
     try{
-      await publishVerificationPanel(env,guildId,channelId);
+      await publishVerificationPanel(env,guildId,channelId,new URL(request.url).origin);
     }catch(error){
       if(error instanceof DiscordApiError&&error.status===404){
         throw new HttpError(404,"設置先チャンネルが見つかりません。チャンネル一覧を再読み込みしてください");
@@ -2161,7 +2034,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v32-backup-guild-state",
+          version:"dashboard-auth-v33-verification-recovery",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
