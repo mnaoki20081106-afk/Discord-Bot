@@ -47,6 +47,8 @@ import {
   type DiscordUser
 } from "./discord";
 import { createPayPayQr, getPayPayStatus, payPayConfigured } from "./paypay";
+import { BackupHttpError, backupRestoreSweep, handleBackupApi, handleRecoveryOAuth } from "./backup";
+import { recordPanelDeployment } from "./backup-db";
 import {
   handleVendingApi,
   handleVendingInteraction,
@@ -624,8 +626,10 @@ async function discordMeta(env:Env,guildId:string){
   };
 }
 
-async function sendMessage(env:Env,channelId:string,payload:unknown):Promise<void>{
-  await botJson(env,`/channels/${channelId}/messages`,{
+async function sendMessage(
+  env:Env,channelId:string,payload:unknown
+):Promise<{id?:string}>{
+  return botJson<{id?:string}>(env,`/channels/${channelId}/messages`,{
     method:"POST",
     body:JSON.stringify(payload)
   });
@@ -636,9 +640,9 @@ async function sendPanelMessage(
   guildId:string,
   channelId:string,
   payload:unknown
-):Promise<void>{
+):Promise<{id?:string}>{
   try{
-    await sendMessage(env,channelId,payload);
+    return await sendMessage(env,channelId,payload);
   }catch(error){
     if(error instanceof DiscordApiError&&error.status===403){
       throw new HttpError(
@@ -651,7 +655,7 @@ async function sendPanelMessage(
 }
 
 async function publishVerificationPanel(env:Env,guildId:string,channelId:string){
-  await sendPanelMessage(env,guildId,channelId,{
+  const message=await sendPanelMessage(env,guildId,channelId,{
     embeds:[{
       title:"サーバー認証",
       description:"下のボタンから認証を完了してください。",
@@ -667,10 +671,13 @@ async function publishVerificationPanel(env:Env,guildId:string,channelId:string)
       }]
     }]
   });
+  await recordPanelDeployment(env,{
+    guildId,kind:"verification",channelId,messageId:message.id??null
+  });
 }
 
 async function publishTicketPanel(env:Env,guildId:string,channelId:string){
-  await sendPanelMessage(env,guildId,channelId,{
+  const message=await sendPanelMessage(env,guildId,channelId,{
     embeds:[{
       title:"サポート",
       description:"問い合わせ用チケットを作成します。",
@@ -685,6 +692,9 @@ async function publishTicketPanel(env:Env,guildId:string,channelId:string){
         style:1
       }]
     }]
+  });
+  await recordPanelDeployment(env,{
+    guildId,kind:"ticket",channelId,messageId:message.id??null
   });
 }
 
@@ -717,8 +727,8 @@ async function requireMessageChannel(env:Env,guildId:string,channelId:string):Pr
   }
 }
 
-async function publishProductPanel(env:Env,channelId:string,product:ProductRow){
-  await sendMessage(env,channelId,{
+async function publishProductPanel(env:Env,guildId:string,channelId:string,product:ProductRow){
+  const message=await sendMessage(env,channelId,{
     embeds:[{
       title:product.name,
       description:product.description||"購入ボタンからPayPay決済へ進めます。",
@@ -734,6 +744,9 @@ async function publishProductPanel(env:Env,channelId:string,product:ProductRow){
         style:3
       }]
     }]
+  });
+  await recordPanelDeployment(env,{
+    guildId,kind:"product",objectId:product.id,channelId,messageId:message.id??null
   });
 }
 
@@ -1949,7 +1962,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const product=await getProduct(env,productPanel[2]!);
     if(!product||product.guild_id!==productPanel[1]!||!product.active) throw new HttpError(404,"商品が見つかりません");
     const {channelId}=await bodyObject<{channelId:string}>(request);
-    await publishProductPanel(env,channelId,product);
+    await publishProductPanel(env,productPanel[1]!,channelId,product);
     return json(env,{ok:true});
   }
 
@@ -2136,7 +2149,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v29-verification-math",
+          version:"dashboard-auth-v30-disaster-backup",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -2161,6 +2174,9 @@ export default {
           }
         });
       }
+      const recoveryOAuth=await handleRecoveryOAuth(request,env,url);
+      if(recoveryOAuth) return recoveryOAuth;
+
       if(url.pathname==="/interactions"&&request.method==="POST"){
         return await handleInteraction(request,env,ctx);
       }
@@ -2190,6 +2206,8 @@ export default {
         return handlePayPayWebhook(request,env,ctx);
       }
       if(url.pathname.startsWith("/api/")){
+        const backupResponse=await handleBackupApi(request,env,url);
+        if(backupResponse) return backupResponse;
         const isVendingRoute=
           url.pathname.startsWith("/api/vending/")||
           /^\/api\/guilds\/\d+\/vending(?:\/|$)/.test(url.pathname);
@@ -2205,6 +2223,7 @@ export default {
       const status=
         error instanceof HttpError?error.status:
         error instanceof VendingHttpError?error.status:
+        error instanceof BackupHttpError?error.status:
         error instanceof DiscordApiError?(error.status===429?429:error.status===403?403:502):
         500;
       const message=
@@ -2214,7 +2233,7 @@ export default {
             :error.message.includes('"code":50013')||error.message.includes('"code": 50013')
               ?"BOTにこの操作の権限がありません。BOTのサーバーロールとロールの並び順、チャンネル個別の権限を確認してください"
               :"DiscordがBOTの操作を拒否しました。BOTのサーバーロールと対象チャンネルの権限を確認してください"
-          :error instanceof HttpError||error instanceof VendingHttpError||error instanceof DiscordApiError
+          :error instanceof HttpError||error instanceof VendingHttpError||error instanceof BackupHttpError||error instanceof DiscordApiError
             ?error.message
             :"サーバー処理に失敗しました";
       return json(env,{error:status>=500?"server_error":"request_error",message},status);
@@ -2228,7 +2247,8 @@ export default {
       auditWatch(env),
       paymentSweep(env),
       vendingSweep(env),
-      botAccessGuardSweep(env)
+      botAccessGuardSweep(env),
+      backupRestoreSweep(env)
     ]).then(()=>undefined));
   }
 } satisfies ExportedHandler<Env>;
