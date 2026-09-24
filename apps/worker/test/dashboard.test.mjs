@@ -191,6 +191,7 @@ test('non-admin bot role allow overrides @everyone channel deny', async t => {
   assert.ok(chat);
   assert.equal(chat.botCanView,true);
   assert.equal(meta.body.botAdministrator,false);
+  assert.ok(meta.body.botAccessRepair.repaired>=1);
   assert.equal(meta.body.botAccessRepair.failed.length,0);
 });
 
