@@ -469,13 +469,13 @@ export default function ServerEditor({
       await onRefresh();
 
       if (failures.length > 0) {
-        const names = failures
-          .slice(0, 5)
-          .map((failure) => `#${failure.name}`)
+        const details = failures
+          .slice(0, 3)
+          .map((failure) => `#${failure.name}: ${failure.message}`)
           .join(" / ");
-        const rest = failures.length > 5 ? ` ほか${failures.length - 5}件` : "";
+        const rest = failures.length > 3 ? ` / ほか${failures.length - 3}件` : "";
         throw new Error(
-          `${failures.length}チャンネルで権限を反映できませんでした: ${names}${rest}`
+          `${failures.length}チャンネルで権限を反映できませんでした。 ${details}${rest}`
         );
       }
 
