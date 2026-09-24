@@ -942,6 +942,7 @@ async function restorePanels(
   const vmMap=parseObject<Record<string,string>>(job.vm_map_json,{});
   const productMap=parseObject<Record<string,string>>(job.product_map_json,{});
   const stats=parseStats(job.result_json);
+  const existingDeployments=await listPanelDeployments(env,job.target_guild_id);
 
   for(const panel of snapshot.bot.panels){
     const channelId=channelMap[panel.channelId];
@@ -1013,6 +1014,19 @@ async function restorePanels(
         }
       }
       if(!payload) continue;
+
+      const prior=existingDeployments.find(row=>
+        row.kind===panel.kind&&row.object_id===objectId&&row.channel_id===channelId
+      );
+      if(prior?.message_id){
+        try{
+          await botJson(env,"/channels/"+channelId+"/messages/"+prior.message_id);
+          continue;
+        }catch{
+          // The recorded panel is gone; recreate it below.
+        }
+      }
+
       const message=await postMessage(env,channelId,payload);
       await recordPanelDeployment(env,{
         guildId:job.target_guild_id,kind:panel.kind,objectId,channelId,messageId:message.id??null
