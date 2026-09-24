@@ -199,6 +199,14 @@ export default function ServerEditor({
     done: number;
     total: number;
   } | null>(null);
+  const [bulkApplyLog, setBulkApplyLog] = useState<{
+    kind: "idle" | "saving" | "success" | "error";
+    message: string;
+    detail?: string;
+  }>({
+    kind: "idle",
+    message: "一括反映の結果がここに表示されます"
+  });
   const [showPermissionBadges, setShowPermissionBadges] = useState(
     () => localStorage.getItem("dsm_show_permission_badges") !== "0"
   );
@@ -322,6 +330,10 @@ export default function ServerEditor({
     setBulkSelectedIds([]);
     setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
     setBulkSavingProgress(null);
+    setBulkApplyLog({
+      kind: "idle",
+      message: "一括反映の結果がここに表示されます"
+    });
   }
 
   function toggleBulkChannel(channelId: string) {
@@ -372,8 +384,24 @@ export default function ServerEditor({
       }
     ].filter((group) => group.channels.length > 0);
 
+    const changedLabels = Object.entries(bulkPermissionDraft)
+      .filter(([, mode]) => mode !== "keep")
+      .map(([key, mode]) => {
+        const label =
+          [...TEXT_PERMISSION_ROWS, ...VOICE_PERMISSION_ROWS]
+            .find((row) => row.key === key)?.label ?? key;
+        const modeLabel =
+          mode === "inherit" ? "継承" : mode === "allow" ? "許可" : "拒否";
+        return `${label}=${modeLabel}`;
+      });
+
     setSaving(true);
     setBulkSavingProgress({ done: 0, total: bulkSelectedChannels.length });
+    setBulkApplyLog({
+      kind: "saving",
+      message: `${bulkSelectedChannels.length}チャンネルへ反映中…`,
+      detail: `${targetName} / ${changedLabels.join("・")}`
+    });
 
     try {
       let completed = 0;
@@ -417,6 +445,14 @@ export default function ServerEditor({
 
         failures.push(...result.failed);
         completed += group.channels.length;
+        setBulkApplyLog({
+          kind: result.failed.length > 0 ? "error" : "saving",
+          message:
+            result.failed.length > 0
+              ? `${completed}/${bulkSelectedChannels.length}件まで処理・${result.failed.length}件失敗`
+              : `${completed}/${bulkSelectedChannels.length}件をDiscordで確認済み`,
+          detail: `${targetName} / ${changedLabels.join("・")}`
+        });
         setBulkSavingProgress({
           done: completed,
           total: bulkSelectedChannels.length
@@ -437,6 +473,11 @@ export default function ServerEditor({
       }
 
       setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
+      setBulkApplyLog({
+        kind: "success",
+        message: `完了しました：${bulkSelectedChannels.length}/${bulkSelectedChannels.length}チャンネル反映済み`,
+        detail: `Discord再取得で確認済み / ${targetName} / ${changedLabels.join("・")}`
+      });
       onNotice(
         `${bulkSelectedChannels.length}チャンネルの${targetName}権限を更新しました`
       );
@@ -446,6 +487,12 @@ export default function ServerEditor({
       } catch {
         // The original error is more useful than a secondary refresh failure.
       }
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setBulkApplyLog({
+        kind: "error",
+        message: "一括反映に失敗しました",
+        detail: message
+      });
       onError(reason);
     } finally {
       setSaving(false);
@@ -1400,6 +1447,22 @@ export default function ServerEditor({
                     ? `反映中… ${bulkSavingProgress.done}/${bulkSavingProgress.total}`
                     : `${bulkSelectedIds.length}チャンネルへ一括反映`}
                 </button>
+
+                <div className={`bulk-apply-log ${bulkApplyLog.kind}`} role="status" aria-live="polite">
+                  <div className="bulk-apply-log-title">
+                    <span>
+                      {bulkApplyLog.kind === "saving"
+                        ? "⏳"
+                        : bulkApplyLog.kind === "success"
+                          ? "✓"
+                          : bulkApplyLog.kind === "error"
+                            ? "!"
+                            : "i"}
+                    </span>
+                    <strong>{bulkApplyLog.message}</strong>
+                  </div>
+                  {bulkApplyLog.detail && <small>{bulkApplyLog.detail}</small>}
+                </div>
               </div>
             </div>
           )}
