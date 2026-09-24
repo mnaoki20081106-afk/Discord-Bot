@@ -183,6 +183,43 @@ for (const legacy of [false, true]) {
   });
 }
 
+test('verification settings persist account age and role values', async t => {
+  const {mf} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const token = login.body.token;
+
+  const saved = await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    token,
+    'PUT',
+    {
+      verifiedRoleId:targetRoleId,
+      minAccountAgeDays:37
+    }
+  );
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.equal(saved.body.verifiedRoleId,targetRoleId);
+  assert.equal(saved.body.minAccountAgeDays,37);
+
+  const fresh = await request(mf,`/api/guilds/${guildId}/settings`,token);
+  assert.equal(fresh.status,200,JSON.stringify(fresh.body));
+  assert.equal(fresh.body.verifiedRoleId,targetRoleId);
+  assert.equal(fresh.body.minAccountAgeDays,37);
+
+  const invalid = await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    token,
+    'PUT',
+    {minAccountAgeDays:-1}
+  );
+  assert.equal(invalid.status,400,JSON.stringify(invalid.body));
+});
+
 test('D1 rejects multiline exec but migration uses complete prepared statements', async t => {
   const {db} = await runtime(t);
   await assert.rejects(db.exec('CREATE TABLE broken (\n id TEXT PRIMARY KEY\n);'), /incomplete input/);
