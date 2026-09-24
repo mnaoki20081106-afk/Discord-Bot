@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync, sign as signMessage } from 'node:crypto';
 import { test } from 'node:test';
 import { Miniflare } from 'miniflare';
 
 const guildId = '123456789012345678';
 const botId = '223456789012345678';
+const verificationUserId = '323456789012345679';
 const botRoleId = '623456789012345678';
 const targetRoleId = '523456789012345678';
 const chatChannelId = '423456789012345678';
@@ -15,6 +17,11 @@ const nonAdminBotPermissions = (
 
 async function runtime(t, options = {}) {
   const calls = [];
+  const {privateKey:interactionPrivateKey,publicKey:interactionPublicKey} =
+    generateKeyPairSync('ed25519');
+  const publicKeyDer = interactionPublicKey.export({format:'der',type:'spki'});
+  const discordPublicKey = Buffer.from(publicKeyDer).subarray(-32).toString('hex');
+  let verificationMemberRoles = [...(options.verificationMemberRoles ?? [])];
   let rateLimitGuild = true;
   const botPermissions = options.botPermissions ?? nonAdminBotPermissions;
   const botRolePosition = options.botRolePosition ?? 2;
@@ -30,6 +37,7 @@ async function runtime(t, options = {}) {
     d1Databases: ['DB'],
     bindings: {
       DISCORD_BOT_TOKEN: 'local-test-token', DISCORD_APPLICATION_ID: botId,
+      DISCORD_PUBLIC_KEY: discordPublicKey,
       DASHBOARD_PASSWORD: 'local-test-password', SESSION_ENCRYPTION_KEY: 'local-test-key-not-for-production',
       WEB_ORIGIN: 'https://dashboard.example', WEB_PUBLIC_URL: 'https://dashboard.example/', PAYPAY_ENV: 'sandbox'
     },
@@ -66,6 +74,21 @@ async function runtime(t, options = {}) {
           tags:{bot_id:botId}
         }
       ]);
+      if (
+        request.method === 'GET' &&
+        url.pathname === `/api/v10/guilds/${guildId}/members/${verificationUserId}`
+      ) {
+        return Response.json({roles:[...verificationMemberRoles]});
+      }
+      if (
+        request.method === 'PUT' &&
+        url.pathname === `/api/v10/guilds/${guildId}/members/${verificationUserId}/roles/${targetRoleId}`
+      ) {
+        if (!verificationMemberRoles.includes(targetRoleId)) {
+          verificationMemberRoles.push(targetRoleId);
+        }
+        return new Response(null,{status:204});
+      }
       if (
         request.method === 'PUT' &&
         /^\/api\/v10\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)
@@ -129,7 +152,13 @@ async function runtime(t, options = {}) {
     }
   });
   t.after(() => mf.dispose());
-  return {mf, calls, db: await mf.getD1Database('DB')};
+  return {
+    mf,
+    calls,
+    db:await mf.getD1Database('DB'),
+    interactionPrivateKey,
+    verificationMemberRoles
+  };
 }
 
 async function request(mf, path, token, method = 'GET', body) {
@@ -139,6 +168,26 @@ async function request(mf, path, token, method = 'GET', body) {
     ...(body === undefined ? {} : {body: JSON.stringify(body)})
   });
   return { status: response.status, body: await response.json() };
+}
+
+async function signedInteraction(mf, privateKey, payload) {
+  const body = JSON.stringify(payload);
+  const timestamp = String(Math.floor(Date.now()/1000));
+  const signature = signMessage(
+    null,
+    Buffer.from(timestamp + body),
+    privateKey
+  ).toString('hex');
+  const response = await mf.dispatchFetch('https://worker.example/interactions', {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'X-Signature-Ed25519':signature,
+      'X-Signature-Timestamp':timestamp
+    },
+    body
+  });
+  return {status:response.status,body:await response.json()};
 }
 
 for (const legacy of [false, true]) {
@@ -184,6 +233,79 @@ for (const legacy of [false, true]) {
     assert.equal((await request(mf,'/api/me',token)).status,401);
   });
 }
+
+test('verification arithmetic assigns the configured Discord role and confirms it', async t => {
+  const {mf,calls,db,interactionPrivateKey,verificationMemberRoles} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+
+  const settings = await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    login.body.token,
+    'PUT',
+    {verifiedRoleId:targetRoleId,minAccountAgeDays:0}
+  );
+  assert.equal(settings.status,200,JSON.stringify(settings.body));
+
+  const start = await signedInteraction(mf,interactionPrivateKey,{
+    type:3,
+    guild_id:guildId,
+    member:{user:{id:verificationUserId,username:'Verifier'}},
+    data:{custom_id:`verify:start:${guildId}`}
+  });
+  assert.equal(start.status,200,JSON.stringify(start.body));
+  const answerButtonId = start.body.data.components[0].components[0].custom_id;
+  assert.match(answerButtonId,/^verify:answer:/);
+  const question = start.body.data.content.match(/\*\*(\d+) \+ (\d+) = \?\*\*/);
+  assert.ok(question,'verification response must contain an addition question');
+  const answer = Number(question[1]) + Number(question[2]);
+
+  const openModal = await signedInteraction(mf,interactionPrivateKey,{
+    type:3,
+    guild_id:guildId,
+    member:{user:{id:verificationUserId,username:'Verifier'}},
+    data:{custom_id:answerButtonId}
+  });
+  assert.equal(openModal.status,200,JSON.stringify(openModal.body));
+  assert.equal(openModal.body.type,9);
+  const modalId = openModal.body.data.custom_id;
+
+  const completed = await signedInteraction(mf,interactionPrivateKey,{
+    type:5,
+    guild_id:guildId,
+    member:{user:{id:verificationUserId,username:'Verifier'}},
+    data:{
+      custom_id:modalId,
+      components:[{components:[{custom_id:'code',value:String(answer)}]}]
+    }
+  });
+  assert.equal(completed.status,200,JSON.stringify(completed.body));
+  assert.match(completed.body.data.content,/認証が完了しました/);
+  assert.ok(
+    verificationMemberRoles.includes(targetRoleId),
+    'Discord member state must contain the configured verification role'
+  );
+
+  const grantPath =
+    `/api/v10/guilds/${guildId}/members/${verificationUserId}/roles/${targetRoleId}`;
+  const grantIndex = calls.findIndex(call=>call.method==='PUT'&&call.path===grantPath);
+  assert.ok(grantIndex>=0,'worker must call Discord role assignment endpoint');
+  assert.ok(
+    calls.slice(grantIndex+1).some(call=>
+      call.method==='GET' &&
+      call.path===`/api/v10/guilds/${guildId}/members/${verificationUserId}`
+    ),
+    'worker must re-fetch the member after role assignment to confirm persistence'
+  );
+
+  const remaining = await db.prepare(
+    'SELECT COUNT(*) AS count FROM verification_challenges'
+  ).first();
+  assert.equal(remaining.count,0,'successful verification must consume its challenge');
+});
 
 test('verification settings persist account age and role values', async t => {
   const {mf} = await runtime(t);
