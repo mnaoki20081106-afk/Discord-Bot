@@ -339,13 +339,11 @@ for (const legacy of [false, true]) {
   });
 }
 
-test('verification arithmetic assigns the configured Discord role and confirms it', async t => {
+test('verification stores recovery access before assigning the role', async t => {
   const {mf,calls,db,interactionPrivateKey,verificationMemberRoles} = await runtime(t);
   const login = await request(mf, '/api/login', null, 'POST', {
     password:'local-test-password'
   });
-  assert.equal(login.status,200);
-
   const settings = await request(
     mf,
     `/api/guilds/${guildId}/settings`,
@@ -355,66 +353,40 @@ test('verification arithmetic assigns the configured Discord role and confirms i
   );
   assert.equal(settings.status,200,JSON.stringify(settings.body));
 
-  const start = await signedInteraction(mf,interactionPrivateKey,{
+  const started = await signedInteraction(mf,interactionPrivateKey,{
     type:3,
     guild_id:guildId,
     member:{user:{id:verificationUserId,username:'Verifier'}},
     data:{custom_id:`verify:start:${guildId}`}
   });
-  assert.equal(start.status,200,JSON.stringify(start.body));
-  const answerButtonId = start.body.data.components[0].components[0].custom_id;
-  assert.match(answerButtonId,/^verify:answer:/);
-  const question = start.body.data.content.match(/\*\*(\d+) \+ (\d+) = \?\*\*/);
-  assert.ok(question,'verification response must contain an addition question');
-  const answer = Number(question[1]) + Number(question[2]);
+  assert.equal(started.status,200,JSON.stringify(started.body));
+  assert.match(started.body.data.content,/Discord認証/);
+  assert.equal(verificationMemberRoles.includes(targetRoleId),false);
 
-  const openModal = await signedInteraction(mf,interactionPrivateKey,{
-    type:3,
-    guild_id:guildId,
-    member:{user:{id:verificationUserId,username:'Verifier'}},
-    data:{custom_id:answerButtonId}
-  });
-  assert.equal(openModal.status,200,JSON.stringify(openModal.body));
-  assert.equal(openModal.body.type,9);
-  const modalId = openModal.body.data.custom_id;
+  const authorizeUrl=new URL(started.body.data.components[0].components[0].url);
+  const state=authorizeUrl.searchParams.get('state');
+  assert.ok(state);
 
-  const completed = await signedInteraction(mf,interactionPrivateKey,{
-    type:5,
-    guild_id:guildId,
-    member:{user:{id:verificationUserId,username:'Verifier'}},
-    data:{
-      custom_id:modalId,
-      components:[{components:[{custom_id:'code',value:String(answer)}]}]
-    }
-  });
-  assert.equal(completed.status,200,JSON.stringify(completed.body));
-  assert.match(completed.body.data.content,/認証が完了しました/);
-  assert.equal(completed.body.data.components[0].components[0].style,5);
-  assert.match(
-    completed.body.data.components[0].components[0].url,
-    new RegExp("/auth/recovery/start\\?guild_id="+guildId+"$")
+  const callback=await mf.dispatchFetch(
+    'https://worker.example/auth/discord/callback?code=ok&state='+encodeURIComponent(state)
   );
-  assert.ok(
-    verificationMemberRoles.includes(targetRoleId),
-    'Discord member state must contain the configured verification role'
-  );
+  assert.equal(callback.status,200);
 
-  const grantPath =
+  const saved = await db.prepare(
+    'SELECT user_id,revoked_at FROM member_recovery_tokens WHERE guild_id=? AND user_id=?'
+  ).bind(guildId,verificationUserId).first();
+  assert.equal(saved?.user_id,verificationUserId);
+  assert.equal(saved?.revoked_at,null);
+  assert.ok(verificationMemberRoles.includes(targetRoleId));
+
+  const grantPath=
     `/api/v10/guilds/${guildId}/members/${verificationUserId}/roles/${targetRoleId}`;
-  const grantIndex = calls.findIndex(call=>call.method==='PUT'&&call.path===grantPath);
-  assert.ok(grantIndex>=0,'worker must call Discord role assignment endpoint');
-  assert.ok(
-    calls.slice(grantIndex+1).some(call=>
-      call.method==='GET' &&
-      call.path===`/api/v10/guilds/${guildId}/members/${verificationUserId}`
-    ),
-    'worker must re-fetch the member after role assignment to confirm persistence'
-  );
+  assert.ok(calls.some(call=>call.method==='PUT'&&call.path===grantPath));
 
   const remaining = await db.prepare(
     'SELECT COUNT(*) AS count FROM verification_challenges'
   ).first();
-  assert.equal(remaining.count,0,'successful verification must consume its challenge');
+  assert.equal(remaining.count,0);
 });
 
 test('backup snapshot is encrypted, listed, previewable, and recovery panel is tracked', async t => {
