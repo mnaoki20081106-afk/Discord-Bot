@@ -1617,16 +1617,35 @@ export async function handleBackupApi(
   return null;
 }
 
-function recoveryAuthorizeUrl(env:Env,origin:string,state:string):string{
+function recoveryAuthorizeUrl(
+  env:Env,origin:string,state:string,forceConsent=true
+):string{
   const params=new URLSearchParams({
     client_id:env.DISCORD_APPLICATION_ID,
     response_type:"code",
     redirect_uri:origin+"/auth/discord/callback",
     scope:"identify guilds.join",
-    state,
-    prompt:"consent"
+    state
   });
+  if(forceConsent) params.set("prompt","consent");
   return "https://discord.com/oauth2/authorize?"+params.toString();
+}
+
+export async function createVerificationRecoveryAuthorizeUrl(
+  env:Env,
+  origin:string,
+  guildId:string,
+  userId:string
+):Promise<string>{
+  if(!/^\d+$/.test(guildId)||!/^\d+$/.test(userId)){
+    throw new BackupHttpError(400,"認証情報が不正です");
+  }
+  const state=randomToken(24);
+  await putRecoveryOAuthState(env,state,guildId,{
+    expectedUserId:userId,
+    purpose:"verification"
+  });
+  return recoveryAuthorizeUrl(env,origin,state,false);
 }
 
 export async function handleRecoveryOAuth(
