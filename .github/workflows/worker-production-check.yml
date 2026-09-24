@@ -1,0 +1,35 @@
+name: Verify production Worker
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "apps/worker/**"
+      - ".github/workflows/worker-production-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Wait for Cloudflare production Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(grep -o 'version:"[^"]*"' apps/worker/src/index.ts | head -n1 | cut -d'"' -f2)"
+          echo "Expected Worker version: $expected"
+          for attempt in $(seq 1 24); do
+            body="$(curl -fsS --max-time 10 https://discord-bot.c53gftun651-tiktok.workers.dev/health || true)"
+            echo "Attempt $attempt: $body"
+            if printf '%s' "$body" | grep -Fq "\"version\":\"$expected\""; then
+              echo "Production Worker is up to date."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Production Worker did not reach expected version: $expected" >&2
+          exit 1
