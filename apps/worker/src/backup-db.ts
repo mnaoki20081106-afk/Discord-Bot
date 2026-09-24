@@ -71,6 +71,13 @@ const schema = [
     warnings_json TEXT NOT NULL DEFAULT '[]'
   )`,
   "CREATE INDEX IF NOT EXISTS guild_backups_source_idx ON guild_backups(source_guild_id,created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS guild_backup_chunks (
+    backup_id TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    payload_chunk TEXT NOT NULL,
+    PRIMARY KEY(backup_id,chunk_index)
+  )`,
+  "CREATE INDEX IF NOT EXISTS guild_backup_chunks_backup_idx ON guild_backup_chunks(backup_id,chunk_index)",
   `CREATE TABLE IF NOT EXISTS guild_restore_jobs (
     id TEXT PRIMARY KEY,
     backup_id TEXT NOT NULL,
@@ -149,17 +156,42 @@ export async function createBackupRecord(
   await ensureBackupSchema(env);
   const id=randomId();
   const now=Date.now();
+  const marker="chunked:v1";
   await env.DB.prepare(`
     INSERT INTO guild_backups(
       id,source_guild_id,source_guild_name,label,created_at,schema_version,payload_enc,
       role_count,channel_count,member_count,recovery_member_count,warnings_json
     ) VALUES (?,?,?,?,?,1,?,?,?,?,?,?)
   `).bind(
-    id,input.sourceGuildId,input.sourceGuildName,input.label??null,now,input.payloadEnc,
+    id,input.sourceGuildId,input.sourceGuildName,input.label??null,now,marker,
     input.roleCount,input.channelCount,input.memberCount,input.recoveryMemberCount,
     JSON.stringify(input.warnings)
   ).run();
+
+  try{
+    const chunkSize=120_000;
+    for(let offset=0,index=0;offset<input.payloadEnc.length;offset+=chunkSize,index++){
+      await env.DB.prepare(
+        "INSERT INTO guild_backup_chunks(backup_id,chunk_index,payload_chunk) VALUES (?,?,?)"
+      ).bind(id,index,input.payloadEnc.slice(offset,offset+chunkSize)).run();
+    }
+  }catch(error){
+    await env.DB.prepare("DELETE FROM guild_backup_chunks WHERE backup_id=?").bind(id).run().catch(()=>undefined);
+    await env.DB.prepare("DELETE FROM guild_backups WHERE id=?").bind(id).run().catch(()=>undefined);
+    throw error;
+  }
+
   return (await getBackupRecord(env,id))!;
+}
+
+export async function getBackupPayload(env:Env,row:BackupRow):Promise<string>{
+  await ensureBackupSchema(env);
+  if(row.payload_enc!=="chunked:v1") return row.payload_enc;
+  const chunks=(await env.DB.prepare(
+    "SELECT payload_chunk FROM guild_backup_chunks WHERE backup_id=? ORDER BY chunk_index ASC"
+  ).bind(row.id).all<{payload_chunk:string}>()).results;
+  if(!chunks.length) throw new Error("Backup payload chunks are missing");
+  return chunks.map(chunk=>chunk.payload_chunk).join("");
 }
 
 export async function listBackupRecords(env:Env,guildId?:string):Promise<BackupRow[]>{
@@ -182,6 +214,7 @@ export async function getBackupRecord(env:Env,id:string):Promise<BackupRow|null>
 
 export async function deleteBackupRecord(env:Env,id:string):Promise<boolean>{
   await ensureBackupSchema(env);
+  await env.DB.prepare("DELETE FROM guild_backup_chunks WHERE backup_id=?").bind(id).run();
   const result=await env.DB.prepare("DELETE FROM guild_backups WHERE id=?").bind(id).run();
   return (result.meta.changes??0)>0;
 }
