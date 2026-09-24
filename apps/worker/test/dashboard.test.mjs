@@ -17,7 +17,7 @@ async function runtime(t, options = {}) {
   const calls = [];
   let rateLimitGuild = true;
   const botPermissions = options.botPermissions ?? nonAdminBotPermissions;
-  const channelOverwrites = options.channelOverwrites ?? [];
+  let channelOverwrites = [...(options.channelOverwrites ?? [])];
   const forceBotOverwrite403 = options.forceBotOverwrite403 ?? false;
   const mf = new Miniflare({
     modules: true,
@@ -71,6 +71,35 @@ async function runtime(t, options = {}) {
         if (forceBotOverwrite403 && url.pathname.endsWith(`/permissions/${botId}`)) {
           return Response.json({message:'Missing Access',code:50001},{status:403});
         }
+        const parts = url.pathname.split('/');
+        const channelId = parts[5];
+        const overwriteId = parts[7];
+        if (channelId === chatChannelId) {
+          const body = await request.clone().json();
+          channelOverwrites = [
+            ...channelOverwrites.filter(
+              overwrite => !(overwrite.id === overwriteId && overwrite.type === body.type)
+            ),
+            {
+              id: overwriteId,
+              type: body.type,
+              allow: String(body.allow ?? '0'),
+              deny: String(body.deny ?? '0')
+            }
+          ];
+        }
+        return new Response(null,{status:204});
+      }
+      if (
+        request.method === 'DELETE' &&
+        /^\/api\/v10\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)
+      ) {
+        const parts = url.pathname.split('/');
+        const channelId = parts[5];
+        const overwriteId = parts[7];
+        if (channelId === chatChannelId) {
+          channelOverwrites = channelOverwrites.filter(overwrite => overwrite.id !== overwriteId);
+        }
         return new Response(null,{status:204});
       }
       if (
@@ -78,7 +107,21 @@ async function runtime(t, options = {}) {
         /^\/api\/v10\/channels\/\d+$/.test(url.pathname)
       ) {
         const id = url.pathname.split('/').at(-1);
-        return Response.json({id,name:id===chatChannelId?'chat':'General',type:id===chatChannelId?0:4});
+        const body = await request.clone().json().catch(() => ({}));
+        if (id === chatChannelId && Array.isArray(body.permission_overwrites)) {
+          channelOverwrites = body.permission_overwrites.map(overwrite => ({
+            id:String(overwrite.id),
+            type:Number(overwrite.type),
+            allow:String(overwrite.allow ?? '0'),
+            deny:String(overwrite.deny ?? '0')
+          }));
+        }
+        return Response.json({
+          id,
+          name:id===chatChannelId?'chat':'General',
+          type:id===chatChannelId?0:4,
+          permission_overwrites:id===chatChannelId?channelOverwrites:[]
+        });
       }
       return Response.json({message:'Missing Access'}, {status:403});
     }
@@ -263,5 +306,38 @@ test('locked channel repair falls back to full channel overwrite patch', async t
       call.path===`/api/v10/channels/${chatChannelId}`
     ),
     'locked channel should use the full-overwrite PATCH recovery path'
+  );
+});
+
+
+test('bulk channel permission update persists and verifies the selected role overwrite', async t => {
+  const {mf,calls} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+
+  const result = await request(
+    mf,
+    `/api/guilds/${guildId}/channels/permissions/bulk`,
+    login.body.token,
+    'PATCH',
+    {
+      channelIds:[chatChannelId],
+      targetId:targetRoleId,
+      permissions:{view:'allow',send:'deny'}
+    }
+  );
+
+  assert.equal(result.status,200,JSON.stringify(result.body));
+  assert.equal(result.body.ok,true,JSON.stringify(result.body));
+  assert.equal(result.body.updated,1,JSON.stringify(result.body));
+  assert.deepEqual(result.body.failed,[]);
+  assert.ok(
+    calls.some(call=>
+      call.method==='PUT' &&
+      call.path===`/api/v10/channels/${chatChannelId}/permissions/${targetRoleId}`
+    ),
+    'bulk endpoint must write the selected role overwrite'
   );
 });
