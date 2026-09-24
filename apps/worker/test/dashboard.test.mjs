@@ -683,8 +683,16 @@ test('backup snapshot is encrypted, listed, previewable, and recovery panel is t
   const stored = await db.prepare(
     'SELECT payload_enc FROM guild_backups WHERE id=?'
   ).bind(created.body.id).first();
-  assert.ok(stored?.payload_enc);
-  assert.equal(stored.payload_enc.includes('Regression server'),false,'snapshot must be encrypted at rest');
+  assert.equal(stored?.payload_enc,'chunked:v1');
+  const firstChunk = await db.prepare(
+    'SELECT payload_chunk FROM guild_backup_chunks WHERE backup_id=? ORDER BY chunk_index LIMIT 1'
+  ).bind(created.body.id).first();
+  assert.ok(firstChunk?.payload_chunk);
+  assert.equal(
+    firstChunk.payload_chunk.includes('Regression server'),
+    false,
+    'snapshot chunks must remain encrypted at rest'
+  );
 
   const listed = await request(
     mf,
