@@ -74,6 +74,37 @@ async function runtime(t, options = {}) {
           tags:{bot_id:botId}
         }
       ]);
+      if (url.pathname === `/api/v10/guilds/${guildId}/emojis`) return Response.json([]);
+      if (url.pathname === `/api/v10/guilds/${guildId}/stickers`) return Response.json([]);
+      if (
+        request.method === 'GET' &&
+        url.pathname === `/api/v10/guilds/${guildId}/members`
+      ) {
+        return Response.json([{
+          user:{id:verificationUserId,username:'Verifier',global_name:'Verifier',bot:false},
+          nick:'Recovery Tester',
+          roles:[targetRoleId],
+          joined_at:'2026-01-01T00:00:00.000Z'
+        }]);
+      }
+      if (
+        request.method === 'GET' &&
+        url.pathname === `/api/v10/channels/${chatChannelId}`
+      ) {
+        return Response.json({id:chatChannelId,guild_id:guildId,name:'chat',type:0});
+      }
+      if (
+        request.method === 'GET' &&
+        url.pathname === `/api/v10/channels/${chatChannelId}/messages`
+      ) {
+        return Response.json([]);
+      }
+      if (
+        request.method === 'POST' &&
+        url.pathname === `/api/v10/channels/${chatChannelId}/messages`
+      ) {
+        return Response.json({id:'723456789012345678',channel_id:chatChannelId},{status:200});
+      }
       if (
         request.method === 'GET' &&
         url.pathname === `/api/v10/guilds/${guildId}/members/${verificationUserId}`
@@ -284,6 +315,11 @@ test('verification arithmetic assigns the configured Discord role and confirms i
   });
   assert.equal(completed.status,200,JSON.stringify(completed.body));
   assert.match(completed.body.data.content,/認証が完了しました/);
+  assert.equal(completed.body.data.components[0].components[0].style,5);
+  assert.match(
+    completed.body.data.components[0].components[0].url,
+    new RegExp("/auth/recovery/start\\?guild_id="+guildId+"$")
+  );
   assert.ok(
     verificationMemberRoles.includes(targetRoleId),
     'Discord member state must contain the configured verification role'
@@ -305,6 +341,91 @@ test('verification arithmetic assigns the configured Discord role and confirms i
     'SELECT COUNT(*) AS count FROM verification_challenges'
   ).first();
   assert.equal(remaining.count,0,'successful verification must consume its challenge');
+});
+
+test('backup snapshot is encrypted, listed, previewable, and recovery panel is tracked', async t => {
+  const {mf,db,calls} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const token = login.body.token;
+
+  const created = await request(
+    mf,
+    `/api/guilds/${guildId}/backups`,
+    token,
+    'POST',
+    {label:'Before major change'}
+  );
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  assert.equal(created.body.sourceGuildId,guildId);
+  assert.equal(created.body.roleCount,3);
+  assert.equal(created.body.channelCount,2);
+  assert.equal(created.body.memberCount,1);
+
+  const stored = await db.prepare(
+    'SELECT payload_enc FROM guild_backups WHERE id=?'
+  ).bind(created.body.id).first();
+  assert.equal(stored?.payload_enc,'chunked:v1');
+  const firstChunk = await db.prepare(
+    'SELECT payload_chunk FROM guild_backup_chunks WHERE backup_id=? ORDER BY chunk_index LIMIT 1'
+  ).bind(created.body.id).first();
+  assert.ok(firstChunk?.payload_chunk);
+  assert.equal(
+    firstChunk.payload_chunk.includes('Regression server'),
+    false,
+    'snapshot chunks must remain encrypted at rest'
+  );
+
+  const listed = await request(
+    mf,
+    `/api/backups?sourceGuildId=${guildId}`,
+    token
+  );
+  assert.equal(listed.status,200,JSON.stringify(listed.body));
+  assert.equal(listed.body.length,1);
+  assert.equal(listed.body[0].id,created.body.id);
+
+  const preview = await request(
+    mf,
+    `/api/backups/${created.body.id}/restore/preview`,
+    token,
+    'POST',
+    {targetGuildId:guildId}
+  );
+  assert.equal(preview.status,200,JSON.stringify(preview.body));
+  assert.equal(preview.body.behavior.destructive,false);
+  assert.equal(preview.body.behavior.deletesExisting,false);
+  assert.equal(preview.body.counts.members,1);
+
+  const recovery = await request(
+    mf,
+    `/api/guilds/${guildId}/recovery/status`,
+    token
+  );
+  assert.equal(recovery.status,200,JSON.stringify(recovery.body));
+  assert.equal(recovery.body.registered,0);
+
+  const panel = await request(
+    mf,
+    `/api/guilds/${guildId}/recovery/panel`,
+    token,
+    'POST',
+    {channelId:chatChannelId}
+  );
+  assert.equal(panel.status,200,JSON.stringify(panel.body));
+  const deployment = await db.prepare(
+    "SELECT kind,channel_id,message_id FROM panel_deployments WHERE guild_id=? AND kind='recovery'"
+  ).bind(guildId).first();
+  assert.equal(deployment.channel_id,chatChannelId);
+  assert.ok(deployment.message_id);
+  assert.ok(
+    calls.some(call=>
+      call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
+    ),
+    'recovery panel must be posted through Discord API'
+  );
 });
 
 test('verification settings persist account age and role values', async t => {
