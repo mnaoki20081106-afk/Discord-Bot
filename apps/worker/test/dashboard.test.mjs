@@ -11,7 +11,7 @@ const targetRoleId = '523456789012345678';
 const chatChannelId = '423456789012345678';
 const guild = { id: guildId, name: 'Regression server', icon: null };
 const nonAdminBotPermissions = (
-  1n|1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n|
+  1n|32n|1024n|2048n|16384n|32768n|65536n|8192n|16n|134217728n|268435456n|
   2n|4n|1099511627776n|128n
 ).toString();
 
