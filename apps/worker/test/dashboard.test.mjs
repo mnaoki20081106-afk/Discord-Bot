@@ -8,11 +8,15 @@ const botRoleId = '623456789012345678';
 const targetRoleId = '523456789012345678';
 const chatChannelId = '423456789012345678';
 const guild = { id: guildId, name: 'Regression server', icon: null };
+const nonAdminBotPermissions = (
+  1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n|
+  2n|4n|1099511627776n|128n
+).toString();
 
 async function runtime(t, options = {}) {
   const calls = [];
   let rateLimitGuild = true;
-  const botPermissions = options.botPermissions ?? '8';
+  const botPermissions = options.botPermissions ?? nonAdminBotPermissions;
   const channelOverwrites = options.channelOverwrites ?? [];
   const mf = new Miniflare({
     modules: true,
@@ -169,9 +173,7 @@ test('channel permission edit does not require direct channel access', async t =
 
 
 test('non-admin bot role allow overrides @everyone channel deny', async t => {
-  const botPermissions = (
-    1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n
-  ).toString();
+  const botPermissions = nonAdminBotPermissions;
   const {mf} = await runtime(t, {
     botPermissions,
     channelOverwrites:[
