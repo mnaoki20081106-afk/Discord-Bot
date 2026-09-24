@@ -1699,8 +1699,9 @@ export async function handleRecoveryOAuth(
     const code=url.searchParams.get("code");
     const state=url.searchParams.get("state");
     if(!code||!state) return null;
-    const guildId=await consumeRecoveryState(env,state);
-    if(!guildId) return null;
+    const recoveryState=await consumeRecoveryOAuthState(env,state);
+    if(!recoveryState) return null;
+    const guildId=recoveryState.guildId;
 
     const tokens=await oauthTokenRequest(env,new URLSearchParams({
       grant_type:"authorization_code",
@@ -1712,6 +1713,13 @@ export async function handleRecoveryOAuth(
     });
     if(!userResponse.ok) throw new BackupHttpError(502,"Discordユーザー情報を取得できませんでした");
     const user=await userResponse.json() as any;
+    const userId=String(user.id??"");
+    if(recoveryState.expectedUserId&&userId!==recoveryState.expectedUserId){
+      throw new BackupHttpError(
+        403,
+        "Discord認証に使ったアカウントが、認証ボタンを押したアカウントと一致しません。元のアカウントでやり直してください。"
+      );
+    }
 
     try{
       await botJson(env,"/guilds/"+guildId+"/members/"+user.id);
@@ -1724,7 +1732,7 @@ export async function handleRecoveryOAuth(
 
     await upsertRecoveryMember(env,{
       guildId,
-      userId:String(user.id),
+      userId,
       username:String(user.global_name||user.username||user.id),
       accessTokenEnc:await encrypt(env.SESSION_ENCRYPTION_KEY,tokens.access_token),
       refreshTokenEnc:await encrypt(env.SESSION_ENCRYPTION_KEY,tokens.refresh_token),
