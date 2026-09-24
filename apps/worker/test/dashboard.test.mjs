@@ -46,7 +46,27 @@ async function runtime(t, options = {}) {
       const url = new URL(request.url);
       calls.push({ method: request.method, path: url.pathname });
       assert.equal(url.hostname, 'discord.com', 'tests must never contact payment providers');
-      if (url.pathname.endsWith('/users/@me')) return Response.json({id: botId, username: 'Test bot'});
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v10/oauth2/token'
+      ) {
+        return Response.json({
+          access_token:'verification-access-token',
+          refresh_token:'verification-refresh-token',
+          expires_in:3600
+        });
+      }
+      if (url.pathname.endsWith('/users/@me')) {
+        const auth=request.headers.get('Authorization') ?? '';
+        if (auth.startsWith('Bearer ')) {
+          return Response.json({
+            id:verificationUserId,
+            username:'Verifier',
+            global_name:'Verifier'
+          });
+        }
+        return Response.json({id:botId,username:'Test bot'});
+      }
       if (url.pathname.endsWith('/users/@me/guilds')) return Response.json([guild]);
       if (url.pathname === `/api/v10/guilds/${guildId}`) {
         if (rateLimitGuild) { rateLimitGuild = false; return Response.json({ retry_after: 0.001 }, {status: 429}); }
