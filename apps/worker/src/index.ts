@@ -1018,15 +1018,103 @@ async function handleInteraction(
       if(answer!==challenge.code) return interactionResponse(ephemeral("コードが一致しません。"));
       const settings=await getGuildSettings(env,challenge.guild_id);
       if(!settings.verifiedRoleId) return interactionResponse(ephemeral("認証ロールが設定されていません。"));
-      if(Date.now()-accountCreatedAt(challenge.user_id)<settings.minAccountAgeDays*86400000){
+
+      const minAccountAgeDays=Math.max(
+        0,
+        Math.min(36500,Math.trunc(Number(settings.minAccountAgeDays)||0))
+      );
+      if(Date.now()-accountCreatedAt(challenge.user_id)<minAccountAgeDays*86400000){
         return interactionResponse(ephemeral(
-          `作成から${settings.minAccountAgeDays}日未満のアカウントは認証できません。`
+          `作成から${minAccountAgeDays}日未満のアカウントは認証できません。`
         ));
       }
-      await botJson(env,`/guilds/${challenge.guild_id}/members/${challenge.user_id}/roles/${settings.verifiedRoleId}`,{
-        method:"PUT"
+
+      const roles=await botJson<DiscordRole[]>(env,`/guilds/${challenge.guild_id}/roles`);
+      const targetRole=roles.find(role=>role.id===settings.verifiedRoleId);
+      if(!targetRole||targetRole.id===challenge.guild_id){
+        return interactionResponse(ephemeral(
+          "認証ロールが見つからないか、@everyone が選択されています。管理画面で認証ロールを設定し直してください。"
+        ));
+      }
+      if(targetRole.managed){
+        return interactionResponse(ephemeral(
+          "この認証ロールはDiscord管理ロールのためBOTから付与できません。別の通常ロールを選択してください。"
+        ));
+      }
+
+      const botMember=await getBotGuildMember(env,challenge.guild_id,roles);
+      const permissions=botBasePermissions(challenge.guild_id,roles,botMember);
+      if((permissions&8n)!==8n&&(permissions&268435456n)!==268435456n){
+        return interactionResponse(ephemeral(
+          "BOTに「ロールの管理」権限がないため認証ロールを付与できません。"
+        ));
+      }
+      const botHighestRolePosition=Math.max(
+        0,
+        ...roles
+          .filter(role=>botMember.roles.includes(role.id))
+          .map(role=>role.position)
+      );
+      if(targetRole.position>=botHighestRolePosition){
+        return interactionResponse(ephemeral(
+          `認証ロール @${targetRole.name} がBOTの最高ロール以上にあるため付与できません。Discordのロール順でBOTロールより下へ移動してください。`
+        ));
+      }
+
+      let member=await botJson<DiscordGuildMember>(
+        env,
+        `/guilds/${challenge.guild_id}/members/${challenge.user_id}`
+      );
+      if(!member.roles.includes(targetRole.id)){
+        try{
+          await botJson<void>(
+            env,
+            `/guilds/${challenge.guild_id}/members/${challenge.user_id}/roles/${targetRole.id}`,
+            {method:"PUT"}
+          );
+        }catch(error){
+          if(error instanceof DiscordApiError&&error.status===403){
+            return interactionResponse(ephemeral(
+              "認証ロールの付与をDiscordに拒否されました。BOTの「ロールの管理」権限とロール順を確認してください。"
+            ));
+          }
+          if(error instanceof DiscordApiError&&error.status===404){
+            return interactionResponse(ephemeral(
+              "認証対象のメンバーまたはロールが見つかりませんでした。もう一度認証してください。"
+            ));
+          }
+          throw error;
+        }
+
+        const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+        let confirmed=false;
+        for(const delay of [0,180,420]){
+          if(delay>0) await sleep(delay);
+          member=await botJson<DiscordGuildMember>(
+            env,
+            `/guilds/${challenge.guild_id}/members/${challenge.user_id}`
+          );
+          if(member.roles.includes(targetRole.id)){
+            confirmed=true;
+            break;
+          }
+        }
+        if(!confirmed){
+          return interactionResponse(ephemeral(
+            "Discordへロール付与を送信しましたが、付与済みであることを再確認できませんでした。もう一度認証するかBOTのロール権限を確認してください。"
+          ));
+        }
+      }
+
+      console.log("verification completed",{
+        guildId:challenge.guild_id,
+        userId:challenge.user_id,
+        roleId:targetRole.id,
+        minAccountAgeDays
       });
-      return interactionResponse(ephemeral("認証が完了しました。"));
+      return interactionResponse(ephemeral(
+        `認証が完了しました。@${targetRole.name} を付与しました。`
+      ));
     }
   }
 
@@ -1154,6 +1242,20 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       if(safe.mentionLimit!==undefined) safe.mentionLimit=Math.max(2,Math.min(50,Number(safe.mentionLimit)));
       if(safe.nukeActions!==undefined) safe.nukeActions=Math.max(2,Math.min(30,Number(safe.nukeActions)));
       if(safe.nukeWindowSeconds!==undefined) safe.nukeWindowSeconds=Math.max(5,Math.min(300,Number(safe.nukeWindowSeconds)));
+      if(safe.minAccountAgeDays!==undefined){
+        const days=Number(safe.minAccountAgeDays);
+        if(!Number.isFinite(days)||days<0){
+          throw new HttpError(400,"最低アカウント日数は0以上の数値で指定してください");
+        }
+        safe.minAccountAgeDays=Math.max(0,Math.min(36500,Math.trunc(days)));
+      }
+      if(safe.verifiedRoleId!==undefined){
+        const roleId=safe.verifiedRoleId===null?null:String(safe.verifiedRoleId).trim();
+        if(roleId!==null&&roleId!==""&&!/^\d+$/.test(roleId)){
+          throw new HttpError(400,"認証ロールIDが不正です");
+        }
+        safe.verifiedRoleId=roleId||null;
+      }
       if(safe.ticketSupportRoleIds!==undefined){
         safe.ticketSupportRoleIds=[...new Set(
           safe.ticketSupportRoleIds
@@ -1161,9 +1263,51 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
             .filter(id=>/^\d+$/.test(id))
         )].slice(0,20);
       }
+
+      if(safe.verifiedRoleId){
+        const roles=await botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
+        const targetRole=roles.find(role=>role.id===safe.verifiedRoleId);
+        if(!targetRole||targetRole.id===guildId){
+          throw new HttpError(400,"認証後ロールには@everyone以外の有効なロールを選択してください");
+        }
+        if(targetRole.managed){
+          throw new HttpError(400,"Discord管理ロールは認証後ロールに指定できません");
+        }
+        const botMember=await getBotGuildMember(env,guildId,roles);
+        const permissions=botBasePermissions(guildId,roles,botMember);
+        if((permissions&8n)!==8n&&(permissions&268435456n)!==268435456n){
+          throw new HttpError(403,"認証ロールを付与するにはBOTに「ロールの管理」権限が必要です");
+        }
+        const botHighestRolePosition=Math.max(
+          0,
+          ...roles
+            .filter(role=>botMember.roles.includes(role.id))
+            .map(role=>role.position)
+        );
+        if(targetRole.position>=botHighestRolePosition){
+          throw new HttpError(
+            400,
+            `認証後ロール @${targetRole.name} をBOTロールより下へ移動してください`
+          );
+        }
+      }
+
       const saved=await saveGuildSettings(env,guildId,safe);
-      await syncAutoMod(env,guildId,saved);
-      return json(env,saved);
+      const persisted=await getGuildSettings(env,guildId);
+      if(
+        safe.minAccountAgeDays!==undefined&&
+        persisted.minAccountAgeDays!==safe.minAccountAgeDays
+      ){
+        throw new HttpError(500,"最低アカウント日数の保存確認に失敗しました");
+      }
+      if(
+        safe.verifiedRoleId!==undefined&&
+        persisted.verifiedRoleId!==safe.verifiedRoleId
+      ){
+        throw new HttpError(500,"認証ロールの保存確認に失敗しました");
+      }
+      await syncAutoMod(env,guildId,persisted);
+      return json(env,persisted);
     }
   }
 
