@@ -405,6 +405,8 @@ export default function ServerEditor({
 
     try {
       let completed = 0;
+      let verifiedUpdated = 0;
+      const operationIds: string[] = [];
       const failures: Array<{ id: string; name: string; message: string }> = [];
 
       for (const group of groups) {
@@ -426,6 +428,7 @@ export default function ServerEditor({
 
         const result = await api<{
           ok: boolean;
+          operationId?: string;
           requested: number;
           updated: number;
           updatedIds: string[];
@@ -444,14 +447,18 @@ export default function ServerEditor({
         );
 
         failures.push(...result.failed);
+        verifiedUpdated += result.updated;
+        if (result.operationId) operationIds.push(result.operationId);
         completed += group.channels.length;
         setBulkApplyLog({
           kind: result.failed.length > 0 ? "error" : "saving",
           message:
             result.failed.length > 0
-              ? `${completed}/${bulkSelectedChannels.length}件まで処理・${result.failed.length}件失敗`
-              : `${completed}/${bulkSelectedChannels.length}件をDiscordで確認済み`,
-          detail: `${targetName} / ${changedLabels.join("・")}`
+              ? `${verifiedUpdated}/${bulkSelectedChannels.length}件確認済み・${failures.length}件失敗`
+              : `${verifiedUpdated}/${bulkSelectedChannels.length}件をDiscordで確認済み`,
+          detail:
+            `${targetName} / ${changedLabels.join("・")}` +
+            (result.operationId ? ` / ID: ${result.operationId.slice(0, 8)}` : "")
         });
         setBulkSavingProgress({
           done: completed,
@@ -475,8 +482,10 @@ export default function ServerEditor({
       setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
       setBulkApplyLog({
         kind: "success",
-        message: `完了しました：${bulkSelectedChannels.length}/${bulkSelectedChannels.length}チャンネル反映済み`,
-        detail: `Discord再取得で確認済み / ${targetName} / ${changedLabels.join("・")}`
+        message: `完了しました：${verifiedUpdated}/${bulkSelectedChannels.length}チャンネル反映済み`,
+        detail:
+          `Discord再取得で確認済み / ${targetName} / ${changedLabels.join("・")}` +
+          (operationIds.length ? ` / ID: ${operationIds.map((id) => id.slice(0, 8)).join(", ")}` : "")
       });
       onNotice(
         `${bulkSelectedChannels.length}チャンネルの${targetName}権限を更新しました`
