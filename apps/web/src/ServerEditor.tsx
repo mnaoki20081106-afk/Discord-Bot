@@ -349,59 +349,103 @@ export default function ServerEditor({
       return;
     }
 
+    const targetId = permissionTargetId;
+    const targetName =
+      targetId === guildId
+        ? "@everyone"
+        : meta.roles.find((role) => role.id === targetId)
+          ? `@${meta.roles.find((role) => role.id === targetId)!.name}`
+          : permissionPreviewRoleName;
+
+    const groups = [
+      {
+        channels: bulkSelectedChannels.filter(
+          (channel) => channel.type !== "voice" && channel.type !== "stage"
+        ),
+        keys: new Set<PermissionKey>(TEXT_PERMISSION_ROWS.map((row) => row.key))
+      },
+      {
+        channels: bulkSelectedChannels.filter(
+          (channel) => channel.type === "voice" || channel.type === "stage"
+        ),
+        keys: new Set<PermissionKey>(VOICE_PERMISSION_ROWS.map((row) => row.key))
+      }
+    ].filter((group) => group.channels.length > 0);
+
     setSaving(true);
     setBulkSavingProgress({ done: 0, total: bulkSelectedChannels.length });
+
     try {
       let completed = 0;
-      for (const channel of bulkSelectedChannels) {
-        const relevantKeys = new Set<PermissionKey>(
-          (channel.type === "voice" || channel.type === "stage"
-            ? VOICE_PERMISSION_ROWS
-            : TEXT_PERMISSION_ROWS
-          ).map((row) => row.key)
-        );
+      const failures: Array<{ id: string; name: string; message: string }> = [];
 
+      for (const group of groups) {
         const permissions: Partial<Record<PermissionKey, PermissionMode>> = {};
         for (const [rawKey, mode] of Object.entries(bulkPermissionDraft)) {
           const key = rawKey as PermissionKey;
-          if (mode === "keep" || !relevantKeys.has(key)) continue;
+          if (mode === "keep" || !group.keys.has(key)) continue;
           permissions[key] = mode;
         }
 
-        if (Object.keys(permissions).length > 0) {
-          await api(
-            `/api/guilds/${guildId}/channels/${channel.id}/permissions/${permissionPreviewRoleId}`,
-            {
-              method: "PATCH",
-              body: JSON.stringify({
-                targetType: "role",
-                permissions
-              })
-            }
-          );
+        if (Object.keys(permissions).length === 0) {
+          completed += group.channels.length;
+          setBulkSavingProgress({
+            done: completed,
+            total: bulkSelectedChannels.length
+          });
+          continue;
         }
 
-        completed += 1;
+        const result = await api<{
+          ok: boolean;
+          requested: number;
+          updated: number;
+          updatedIds: string[];
+          failed: Array<{ id: string; name: string; message: string }>;
+        }>(
+          `/api/guilds/${guildId}/channels/permissions/bulk`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              channelIds: group.channels.map((channel) => channel.id),
+              targetId,
+              permissions
+            })
+          },
+          60_000
+        );
+
+        failures.push(...result.failed);
+        completed += group.channels.length;
         setBulkSavingProgress({
           done: completed,
           total: bulkSelectedChannels.length
         });
       }
 
-      setSaving(false);
-      setBulkSavingProgress(null);
+      await onRefresh();
+
+      if (failures.length > 0) {
+        const names = failures
+          .slice(0, 5)
+          .map((failure) => `#${failure.name}`)
+          .join(" / ");
+        const rest = failures.length > 5 ? ` ほか${failures.length - 5}件` : "";
+        throw new Error(
+          `${failures.length}チャンネルで権限を反映できませんでした: ${names}${rest}`
+        );
+      }
+
       setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
       onNotice(
-        `${bulkSelectedChannels.length}チャンネルの${permissionPreviewRoleName}権限を更新しました`
+        `${bulkSelectedChannels.length}チャンネルの${targetName}権限を更新しました`
       );
-      void onRefresh().catch(() => {
-        onError(
-          new Error(
-            "権限の保存は完了しましたが、最新表示の再取得に失敗しました。画面を再読み込みすると反映を確認できます"
-          )
-        );
-      });
     } catch (reason) {
+      try {
+        await onRefresh();
+      } catch {
+        // The original error is more useful than a secondary refresh failure.
+      }
       onError(reason);
     } finally {
       setSaving(false);
@@ -1284,11 +1328,11 @@ export default function ServerEditor({
                 <label>
                   <span>対象ロール</span>
                   <select
-                    value={permissionPreviewRoleId}
+                    value={permissionTargetId}
                     onChange={(event) => {
                       const roleId = event.target.value;
-                      setPermissionPreviewRoleId(roleId);
                       setPermissionTargetId(roleId);
+                      setPermissionPreviewRoleId(roleId);
                       setBulkPermissionDraft({ ...EMPTY_BULK_PERMISSION_DRAFT });
                       localStorage.setItem(
                         `dsm_permission_preview_role_${guildId}`,
