@@ -25,6 +25,9 @@ type RestoreStats = {
   membersSkippedNoConsent:number;
   membersRevoked:number;
   membersFailed:number;
+  memberTimeoutsRestored:number;
+  bansRestored:number;
+  guildExtrasRestored:number;
   panelsRestored:number;
   productsRestored:number;
   vendingMachinesRestored:number;
