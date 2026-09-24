@@ -333,6 +333,8 @@ test('bulk channel permission update persists and verifies the selected role ove
   assert.equal(result.body.ok,true,JSON.stringify(result.body));
   assert.equal(result.body.updated,1,JSON.stringify(result.body));
   assert.deepEqual(result.body.failed,[]);
+  assert.equal(typeof result.body.operationId,'string');
+  assert.ok(result.body.operationId.length>0);
   assert.ok(
     calls.some(call=>
       call.method==='PUT' &&
@@ -340,4 +342,15 @@ test('bulk channel permission update persists and verifies the selected role ove
     ),
     'bulk endpoint must write the selected role overwrite'
   );
+
+  const meta = await request(mf,`/api/guilds/${guildId}/meta`,login.body.token);
+  assert.equal(meta.status,200,JSON.stringify(meta.body));
+  const chat = meta.body.channels.find(channel=>channel.id===chatChannelId);
+  assert.ok(chat);
+  const overwrite = chat.permissionOverwrites.find(
+    item=>item.id===targetRoleId&&item.type===0
+  );
+  assert.ok(overwrite,'selected role overwrite must survive a fresh meta read');
+  assert.equal(BigInt(overwrite.allow)&1024n,1024n,'view must be allowed');
+  assert.equal(BigInt(overwrite.deny)&2048n,2048n,'send must be denied');
 });
