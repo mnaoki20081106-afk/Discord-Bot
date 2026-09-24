@@ -229,18 +229,14 @@ export async function syncAutoMod(
   env:Env,
   guildId:string,
   settings:GuildSettings
-):Promise<void>{
-  const existing=await botJson<Array<{id:string;name:string}>>(
+):Promise<string[]>{
+  const warnings:string[]=[];
+  let existing:Array<{id:string;name:string}>;
+  try{existing=await botJson<Array<{id:string;name:string}>>(
     env,`/guilds/${guildId}/auto-moderation/rules`
-  ).catch(()=>[]);
-  for(const rule of existing){
-    if(rule.name.startsWith("DSM ")){
-      await botFetch(env,`/guilds/${guildId}/auto-moderation/rules/${rule.id}`,{
-        method:"DELETE"
-      }).catch(()=>undefined);
-    }
+  );}catch{
+    return ["設定は保存しましたが、Discordの自動モデレーション設定を取得できず適用できませんでした。「サーバー管理」権限を確認して再保存してください。"];
   }
-  if(!settings.securityEnabled) return;
 
   const alertAction=settings.logChannelId
     ? [{type:2,metadata:{channel_id:settings.logChannelId}}]
@@ -250,7 +246,7 @@ export async function syncAutoMod(
     ...alertAction
   ];
 
-  const rules:unknown[]=[];
+  const rules:Array<Record<string,unknown>>=[];
   if(settings.antiSpam){
     rules.push({
       name:"DSM Anti-Spam",
@@ -286,10 +282,22 @@ export async function syncAutoMod(
     enabled:true
   });
 
-  for(const rule of rules){
-    await botJson(env,`/guilds/${guildId}/auto-moderation/rules`,{
-      method:"POST",
-      body:JSON.stringify(rule)
-    }).catch(()=>undefined);
+  const desired=settings.securityEnabled?rules:[];
+  for(const rule of desired){
+    const prior=existing.find(item=>item.name===rule.name);
+    const payload={...rule};
+    if(prior) delete payload.trigger_type;
+    await botJson(env,`/guilds/${guildId}/auto-moderation/rules${prior?"/"+prior.id:""}`,{
+      method:prior?"PATCH":"POST",
+      body:JSON.stringify(payload)
+    }).catch(()=>{warnings.push("設定は保存しましたが、"+String(rule.name)+" をDiscordへ適用できませんでした。権限・ルール上限を確認して再保存してください。");});
   }
+  for(const rule of existing){
+    if(rule.name.startsWith("DSM ")&&!desired.some(item=>item.name===rule.name)){
+      await botJson(env,`/guilds/${guildId}/auto-moderation/rules/${rule.id}`,{
+        method:"DELETE"
+      }).catch(()=>{warnings.push("設定は保存しましたが、"+rule.name+" の解除に失敗しました。権限を確認して再保存してください。");});
+    }
+  }
+  return warnings;
 }

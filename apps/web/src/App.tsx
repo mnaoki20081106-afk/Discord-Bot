@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE, api, clearSession, currentSession, login } from "./api";
 import ServerEditor from "./ServerEditor";
 import RoleManager from "./RoleManager";
@@ -155,6 +155,11 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"manage" | "backup">("manage");
   const [meta, setMeta] = useState<Meta | null>(null);
+  const selectedGuildRef = useRef<string | null>(null);
+  const loadSequence = useRef(0);
+  const savingSettings = useRef(false);
+  const [trustedUsersText,setTrustedUsersText] = useState("");
+  const [trustedRolesText,setTrustedRolesText] = useState("");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [status, setStatus] = useState<ServiceStatus | null>(null);
@@ -248,6 +253,8 @@ export default function App() {
   }
 
   async function selectGuild(guildId: string) {
+    const sequence=++loadSequence.current;
+    selectedGuildRef.current=guildId;
     setSelectedId(guildId);
     setMeta(null);
     setSettings(null);
@@ -274,8 +281,11 @@ export default function App() {
         throw new Error("サーバー設定の取得に失敗しました: " + message);
       }
 
+      if(sequence!==loadSequence.current) return;
       setMeta(serverMeta);
       setSettings(serverSettings);
+      setTrustedUsersText(serverSettings.trustedUserIds.join(","));
+      setTrustedRolesText(serverSettings.trustedRoleIds.join(","));
       if (serverMeta.botAccessRepair && !serverMeta.botAccessRepair.administrator) {
         const repair = serverMeta.botAccessRepair;
         if (repair.failed.length > 0) {
@@ -300,16 +310,18 @@ export default function App() {
       setProductPanelChannel(firstMessageChannel);
 
       try {
-        setProducts(await api<Product[]>(`/api/guilds/${guildId}/products`));
+        const rows=await api<Product[]>(`/api/guilds/${guildId}/products`);
+        if(sequence===loadSequence.current) setProducts(rows);
       } catch (reason) {
+        if(sequence!==loadSequence.current) return;
         const message = reason instanceof Error ? reason.message : String(reason);
         setProducts([]);
         setError("販売データの取得に失敗しました: " + message);
       }
     } catch (reason) {
-      fail(reason);
+      if(sequence===loadSequence.current) fail(reason);
     } finally {
-      setBusy(false);
+      if(sequence===loadSequence.current) setBusy(false);
     }
   }
 
@@ -318,19 +330,36 @@ export default function App() {
   }, [authenticated]);
 
   async function saveSettings(successMessage = "サーバー設定を保存しました") {
-    if (!selectedId || !settings) return;
+    if (!selectedId || !settings || savingSettings.current) return;
+    const guildId=selectedId;
+    const sequence=loadSequence.current;
+    const submitted=settings;
+    const payload={...settings,
+      trustedUserIds:trustedUsersText.split(/[,、\s]+/).filter(Boolean),
+      trustedRoleIds:trustedRolesText.split(/[,、\s]+/).filter(Boolean)
+    };
+    savingSettings.current=true;
     setBusy(true);
     try {
-      const saved = await api<Settings>(`/api/guilds/${selectedId}/settings`, {
-        method: "PUT",
-        body: JSON.stringify(settings)
+      const {applyWarnings=[],...saved} = await api<Settings & {applyWarnings?:string[]}>(`/api/guilds/${guildId}/settings`, {
+        method: "PUT", body: JSON.stringify(payload)
+      },60_000);
+      if(selectedGuildRef.current!==guildId||sequence!==loadSequence.current) return;
+      // Preserve edits made while the request was in flight.
+      setSettings(current=>{
+        if(!current) return current;
+        const newer=Object.fromEntries(Object.entries(current).filter(([key,value])=>
+          JSON.stringify(value)!==JSON.stringify(submitted[key as keyof Settings])
+        ));
+        return {...saved,...newer} as Settings;
       });
-      setSettings(saved);
-      flash(successMessage);
+      if(applyWarnings.length) fail(applyWarnings.join("\n"));
+      else flash(successMessage);
     } catch (reason) {
-      fail(reason);
+      if(selectedGuildRef.current===guildId&&sequence===loadSequence.current) fail(reason);
     } finally {
-      setBusy(false);
+      savingSettings.current=false;
+      if(selectedGuildRef.current===guildId&&sequence===loadSequence.current) setBusy(false);
     }
   }
 
@@ -656,11 +685,13 @@ export default function App() {
             {activeView === "manage" && settings && (
               <>
             <ServerEditor
+              key={"ServerEditor:"+selectedId}
               guildId={selectedId!}
               guildName={meta.name}
               meta={meta}
               onRefresh={async () => {
                 const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta`);
+                if(selectedGuildRef.current!==selectedId) return;
                 setMeta(serverMeta);
                 const messageChannels = serverMeta.channels.filter((channel) =>
                   channel.type === "text" || channel.type === "announcement"
@@ -680,10 +711,12 @@ export default function App() {
             />
 
             <RoleManager
+              key={"RoleManager:"+selectedId}
               guildId={selectedId!}
               roles={meta.roles}
               onRefresh={async () => {
                 const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta`);
+                if(selectedGuildRef.current!==selectedId) return;
                 setMeta(serverMeta);
               }}
               onNotice={flash}
@@ -720,7 +753,7 @@ export default function App() {
                     <span className="eyebrow">SECURITY</span>
                     <h2>セキュリティ</h2>
                   </div>
-                  <button className="primary" onClick={() => void saveSettings()}>
+                  <button className="primary" onClick={() => void saveSettings()} disabled={busy}>
                     設定を保存
                   </button>
                 </div>
@@ -807,24 +840,14 @@ export default function App() {
                   </Field>
                   <Field label="信頼ユーザーID" hint="カンマ区切り">
                     <input
-                      value={settings.trustedUserIds.join(",")}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          trustedUserIds: e.target.value.split(",").map((v) => v.trim()).filter(Boolean)
-                        })
-                      }
+                      value={trustedUsersText}
+                      onChange={(e) => setTrustedUsersText(e.target.value)}
                     />
                   </Field>
                   <Field label="信頼ロールID" hint="カンマ区切り">
                     <input
-                      value={settings.trustedRoleIds.join(",")}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          trustedRoleIds: e.target.value.split(",").map((v) => v.trim()).filter(Boolean)
-                        })
-                      }
+                      value={trustedRolesText}
+                      onChange={(e) => setTrustedRolesText(e.target.value)}
                     />
                   </Field>
                 </div>
@@ -1077,6 +1100,7 @@ export default function App() {
             </section>
 
             <VendingManager
+              key={"VendingManager:"+selectedId}
               guildId={selectedId!}
               channels={meta.channels}
               roles={meta.roles}
@@ -1088,6 +1112,7 @@ export default function App() {
 
             {activeView === "backup" && (
               <BackupManager
+              key={"BackupManager:"+selectedId}
                 guildId={selectedId!}
                 channels={meta.channels}
                 onNotice={flash}

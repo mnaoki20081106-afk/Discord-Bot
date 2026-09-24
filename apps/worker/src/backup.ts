@@ -179,7 +179,8 @@ function parseObject<T extends Record<string,unknown>>(raw:string,fallback:T):T{
 }
 
 function parseStats(raw:string):RestoreStats{
-  return {...EMPTY_STATS,...parseObject<Partial<RestoreStats>>(raw,{})} as RestoreStats;
+  const parsed=parseObject<Partial<RestoreStats>>(raw,{});
+  return {...EMPTY_STATS,...parsed,warnings:[...(parsed.warnings??[])]} as RestoreStats;
 }
 
 async function requireDashboard(request:Request,env:Env):Promise<void>{
@@ -194,13 +195,9 @@ async function requireDashboard(request:Request,env:Env):Promise<void>{
 async function queryAll<T=Record<string,unknown>>(
   env:Env,sql:string,bindings:unknown[]=[]
 ):Promise<T[]>{
-  try{
-    let statement=env.DB.prepare(sql);
-    if(bindings.length) statement=statement.bind(...bindings);
-    return (await statement.all<T>()).results;
-  }catch{
-    return [];
-  }
+  let statement=env.DB.prepare(sql);
+  if(bindings.length) statement=statement.bind(...bindings);
+  return (await statement.all<T>()).results;
 }
 
 async function captureMembers(
@@ -346,7 +343,7 @@ async function discoverPanels(
 }
 
 async function captureBotData(env:Env,guildId:string,panels:PanelSnapshot[]){
-  await ensureVendingSchema(env).catch(()=>undefined);
+  await ensureVendingSchema(env);
   const settings=await getGuildSettings(env,guildId);
   const legacyProducts=await queryAll<Record<string,unknown>>(
     env,"SELECT * FROM products WHERE guild_id=?",[guildId]
@@ -358,18 +355,24 @@ async function captureBotData(env:Env,guildId:string,panels:PanelSnapshot[]){
 
   const queryByIds=async(table:string,column:string)=>{
     if(!machineIds.length) return [] as Record<string,unknown>[];
-    const placeholders=machineIds.map(()=>"?").join(",");
-    return queryAll<Record<string,unknown>>(
-      env,`SELECT * FROM ${table} WHERE ${column} IN (${placeholders})`,machineIds
-    );
+    const rows:Record<string,unknown>[]=[];
+    for(let offset=0;offset<machineIds.length;offset+=80){
+      const ids=machineIds.slice(offset,offset+80);
+      rows.push(...await queryAll<Record<string,unknown>>(
+        env,`SELECT * FROM ${table} WHERE ${column} IN (${ids.map(()=>"?").join(",")})`,ids
+      ));
+    }
+    return rows;
   };
 
   const vendingProducts=await queryByIds("vending_products","vending_machine_id");
   const productIds=vendingProducts.map(row=>String(row.id??"")).filter(Boolean);
   let stock:Record<string,unknown>[]=[];
   if(productIds.length){
-    const placeholders=productIds.map(()=>"?").join(",");
-    stock=await queryAll(env,`SELECT * FROM vending_stock WHERE product_id IN (${placeholders})`,productIds);
+    for(let offset=0;offset<productIds.length;offset+=80){
+      const ids=productIds.slice(offset,offset+80);
+      stock.push(...await queryAll(env,`SELECT * FROM vending_stock WHERE product_id IN (${ids.map(()=>"?").join(",")})`,ids));
+    }
   }
 
   const [coupons,notifications,orders]=await Promise.all([
@@ -393,8 +396,8 @@ async function createSnapshot(env:Env,guildId:string,label?:string|null){
   const [rolesRaw,channelsRaw,emojis,stickers]=await Promise.all([
     botJson<any[]>(env,"/guilds/"+guildId+"/roles"),
     botJson<any[]>(env,"/guilds/"+guildId+"/channels"),
-    botJson<any[]>(env,"/guilds/"+guildId+"/emojis").catch(()=>[]),
-    botJson<any[]>(env,"/guilds/"+guildId+"/stickers").catch(()=>[])
+    botJson<any[]>(env,"/guilds/"+guildId+"/emojis").catch(()=>{warnings.push("絵文字のメタデータを取得できませんでした。");return [];}),
+    botJson<any[]>(env,"/guilds/"+guildId+"/stickers").catch(()=>{warnings.push("ステッカーのメタデータを取得できませんでした。");return [];})
   ]);
 
   const roles:SnapshotRole[]=rolesRaw.map(role=>({
@@ -575,7 +578,7 @@ function channelPayload(
       .filter(Boolean)
   };
   const parent=channel.parent_id?channelMap[channel.parent_id]:null;
-  if(parent) payload.parent_id=parent;
+  if(channel.type!==4) payload.parent_id=parent??null;
 
   if([0,5,15,16].includes(channel.type)){
     payload.topic=channel.topic??null;
@@ -624,10 +627,10 @@ async function restoreRoleBatch(
   let cursor=job.cursor;
   for(let processed=0;processed<batch&&cursor<editable.length;processed++,cursor++){
     const source=editable[cursor]!;
-    let targetId=roleMap[source.id];
+    let targetId=roleMap[source.id]??(snapshot.sourceGuild.id===job.target_guild_id?source.id:undefined);
     let target=targetId?targetRoles.find(role=>role.id===targetId):undefined;
     if(!target){
-      target=targetRoles.find(role=>!role.managed&&role.id!==job.target_guild_id&&role.name===source.name);
+      target=targetRoles.find(role=>!role.managed&&role.id!==job.target_guild_id&&role.name===source.name&&!Object.values(roleMap).includes(String(role.id)));
     }
     const body={
       name:source.name,
@@ -649,6 +652,8 @@ async function restoreRoleBatch(
       stats.rolesUpdated++;
     }
     roleMap[source.id]=String(target.id);
+    await updateRestoreJob(env,job.id,{cursor:cursor+1,role_map_json:JSON.stringify(roleMap),result_json:JSON.stringify(stats)});
+    if((await getRestoreJob(env,job.id))?.status==="cancelled") return;
   }
 
   if(cursor>=editable.length){
@@ -658,7 +663,7 @@ async function restoreRoleBatch(
     if(positions.length){
       await botJson(env,"/guilds/"+job.target_guild_id+"/roles",{
         method:"PATCH",body:JSON.stringify(positions)
-      }).catch(()=>undefined);
+      }).catch(()=>{stats.warnings.push("ロールの並び順を復元できませんでした。BOTのロール位置・権限を確認してください。");});
     }
     await updateRestoreJob(env,job.id,{
       phase:"categories",cursor:0,role_map_json:JSON.stringify(roleMap),
@@ -686,12 +691,13 @@ async function restoreChannelBatch(
   let cursor=job.cursor;
   for(let processed=0;processed<batch&&cursor<list.length;processed++,cursor++){
     const source=list[cursor]!;
-    let targetId=channelMap[source.id];
+    let targetId=channelMap[source.id]??(snapshot.sourceGuild.id===job.target_guild_id?source.id:undefined);
     let target=targetId?targetChannels.find(channel=>channel.id===targetId):undefined;
     const mappedParent=source.parent_id?channelMap[source.parent_id]??null:null;
 
     if(!target){
       target=targetChannels.find(channel=>
+        !Object.values(channelMap).includes(String(channel.id))&&
         Number(channel.type)===source.type&&
         String(channel.name)===source.name&&
         (categories||(channel.parent_id??null)===mappedParent)
@@ -716,6 +722,8 @@ async function restoreChannelBatch(
       stats.channelsUpdated++;
     }
     channelMap[source.id]=String(target.id);
+    await updateRestoreJob(env,job.id,{cursor:cursor+1,channel_map_json:JSON.stringify(channelMap),result_json:JSON.stringify(stats)});
+    if((await getRestoreJob(env,job.id))?.status==="cancelled") return;
   }
 
   if(cursor>=list.length){
@@ -738,6 +746,7 @@ async function applyPositionsAndGuild(
   env:Env,job:RestoreJobRow,snapshot:GuildSnapshot
 ):Promise<void>{
   const channelMap=parseObject<Record<string,string>>(job.channel_map_json,{});
+  const stats=parseStats(job.result_json);
   const payload=snapshot.channels
     .map(channel=>channelMap[channel.id]
       ?{
@@ -752,7 +761,7 @@ async function applyPositionsAndGuild(
   if(payload.length){
     await botJson(env,"/guilds/"+job.target_guild_id+"/channels",{
       method:"PATCH",body:JSON.stringify(payload)
-    }).catch(()=>undefined);
+    }).catch(()=>{stats.warnings.push("チャンネルの並び順を復元できませんでした。");});
   }
 
   const guildPatch:Record<string,unknown>={
@@ -782,12 +791,10 @@ async function applyPositionsAndGuild(
   await botJson(env,"/guilds/"+job.target_guild_id,{
     method:"PATCH",body:JSON.stringify(guildPatch)
   }).catch(error=>{
-    const stats=parseStats(job.result_json);
     stats.warnings.push("サーバー名・基本設定の一部はDiscord側の制約により復元できませんでした。");
-    return updateRestoreJob(env,job.id,{result_json:JSON.stringify(stats)});
   });
 
-  await updateRestoreJob(env,job.id,{phase:"guild-extras",cursor:0,status:"running",error:null});
+  await updateRestoreJob(env,job.id,{phase:"guild-extras",cursor:0,status:"running",error:null,result_json:JSON.stringify(stats)});
 }
 
 async function restoreGuildExtras(
@@ -920,9 +927,9 @@ async function restoreBotSettings(
     INSERT INTO guild_settings(guild_id,config,updated_at) VALUES (?,?,?)
     ON CONFLICT(guild_id) DO UPDATE SET config=excluded.config,updated_at=excluded.updated_at
   `).bind(job.target_guild_id,JSON.stringify(mapped),Date.now()).run();
-  await syncAutoMod(env,job.target_guild_id,mapped).catch(()=>undefined);
-
-  await updateRestoreJob(env,job.id,{phase:"legacy-products",cursor:0,status:"running",error:null});
+  const stats=parseStats(job.result_json);
+  stats.warnings.push(...await syncAutoMod(env,job.target_guild_id,mapped));
+  await updateRestoreJob(env,job.id,{phase:"legacy-products",cursor:0,status:"running",error:null,result_json:JSON.stringify(stats)});
 }
 
 async function restoreLegacyProducts(
@@ -1051,6 +1058,15 @@ async function restoreVending(
     const oldStockId=String(row.id??"");
     const productId=productMap[String(row.product_id??"")];
     if(!oldStockId||!productId) continue;
+    const original=await env.DB.prepare("SELECT state,product_id FROM vending_stock WHERE id=?")
+      .bind(oldStockId).first<{state:string;product_id:string}>();
+    if(original){
+      if(original.product_id!==productId&&original.state==="available"){
+        const warning="元の自販機に残っている在庫は、二重販売を防ぐため復元先へ複製していません。元在庫を確認してください。";
+        if(!stats.warnings.includes(warning)) stats.warnings.push(warning);
+      }
+      continue;
+    }
     const id=(await sha256Hex(
       "restore:vending-stock:"+job.target_guild_id+":"+oldStockId
     )).slice(0,32);
@@ -1303,17 +1319,28 @@ async function restoreOneMember(
   const stats=parseStats(job.result_json);
   const roleMap=parseObject<Record<string,string>>(job.role_map_json,{});
   const recovery=await getRecoveryMember(env,snapshot.sourceGuild.id,member.user_id);
-  if(!recovery||recovery.revoked_at){
+  let present=false;
+  try{
+    await botJson(env,"/guilds/"+job.target_guild_id+"/members/"+member.user_id);
+    present=true;
+  }catch(error){
+    if(!(error instanceof DiscordApiError&&error.status===404)) throw error;
+  }
+  if(!present&&(!recovery||recovery.revoked_at)){
     stats.membersSkippedNoConsent++;
     await updateRestoreJob(env,job.id,{result_json:JSON.stringify(stats)});
     return;
   }
 
   try{
-    const token=await accessTokenForRecoveryMember(env,snapshot.sourceGuild.id,recovery);
-    const result=await addGuildMember(env,job.target_guild_id,member.user_id,token);
-    if(result==="added") stats.membersAdded++;
-    else stats.membersAlreadyPresent++;
+    if(present){
+      stats.membersAlreadyPresent++;
+    }else{
+      const token=await accessTokenForRecoveryMember(env,snapshot.sourceGuild.id,recovery!);
+      const result=await addGuildMember(env,job.target_guild_id,member.user_id,token);
+      if(result==="added") stats.membersAdded++;
+      else stats.membersAlreadyPresent++;
+    }
 
     for(const oldRoleId of member.roles){
       const newRoleId=roleMap[oldRoleId];
@@ -1321,12 +1348,12 @@ async function restoreOneMember(
       await botJson(env,
         "/guilds/"+job.target_guild_id+"/members/"+member.user_id+"/roles/"+newRoleId,
         {method:"PUT"}
-      ).catch(()=>undefined);
+      ).catch(()=>{stats.warnings.push("メンバー "+member.user_id+" のロール "+newRoleId+" を復元できませんでした。");});
     }
-    if(member.nick){
+    if(member.nick!==undefined){
       await botJson(env,"/guilds/"+job.target_guild_id+"/members/"+member.user_id,{
         method:"PATCH",body:JSON.stringify({nick:member.nick})
-      }).catch(()=>undefined);
+      }).catch(()=>{stats.warnings.push("メンバー "+member.user_id+" のニックネームを復元できませんでした。");});
     }
     if(member.communication_disabled_until){
       const timeoutAt=Date.parse(member.communication_disabled_until);
@@ -1399,6 +1426,8 @@ async function processRestoreJob(env:Env,job:RestoreJobRow):Promise<void>{
       cursor++;
       const refreshed=await getRestoreJob(env,job.id);
       if(refreshed) current=refreshed;
+      if(current.status==="cancelled") return;
+      await updateRestoreJob(env,job.id,{cursor});
       if(cursor<stop){
         await new Promise(resolve=>setTimeout(resolve,900));
       }
@@ -1413,6 +1442,18 @@ async function processRestoreJob(env:Env,job:RestoreJobRow):Promise<void>{
 
 export async function backupRestoreSweep(env:Env):Promise<void>{
   await ensureBackupSchema(env);
+  const owner=randomId();
+  const lease=await env.DB.prepare(`
+    INSERT INTO backup_sweep_lease(id,owner,expires_at) VALUES (1,?,?)
+    ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at
+    WHERE backup_sweep_lease.expires_at<?
+  `).bind(owner,Date.now()+20*60_000,Date.now()).run();
+  if(!lease.meta.changes) return;
+  try{await runBackupRestoreSweep(env);}
+  finally{await env.DB.prepare("DELETE FROM backup_sweep_lease WHERE id=1 AND owner=?").bind(owner).run();}
+}
+
+async function runBackupRestoreSweep(env:Env):Promise<void>{
   const job=await nextRestoreJob(env);
   if(job){
     try{
@@ -1420,7 +1461,8 @@ export async function backupRestoreSweep(env:Env):Promise<void>{
     }catch(error){
       const message=error instanceof Error?error.message:String(error);
       const fatal=
-        error instanceof BackupHttpError&&[400,401,403,404,500].includes(error.status);
+        (error instanceof BackupHttpError&&[400,401,403,404,500].includes(error.status))||
+        (error instanceof DiscordApiError&&error.status>=400&&error.status<500&&error.status!==429);
       await updateRestoreJob(env,job.id,{
         status:fatal?"failed":"queued",
         error:message.slice(0,500)
@@ -1466,16 +1508,28 @@ async function restorePreview(env:Env,backupId:string,targetGuildId:string){
     countRecoveryMembers(env,snapshot.sourceGuild.id)
   ]);
   const editableRoles=snapshot.roles.filter(role=>!role.managed&&role.id!==snapshot.sourceGuild.id);
-  const missingRoles=editableRoles.filter(
-    role=>!targetRoles.some(item=>!item.managed&&item.name===role.name)
-  ).length;
-  const missingChannels=snapshot.channels.filter(source=>{
-    if(source.type===4){
-      return !targetChannels.some(item=>Number(item.type)===4&&item.name===source.name);
-    }
-    return !targetChannels.some(item=>Number(item.type)===source.type&&item.name===source.name);
-  }).length;
-  const recoverableMembers=snapshot.members.filter(member=>member.user_id).length;
+  const usedRoles=new Set<string>();
+  let missingRoles=0;
+  for(const role of editableRoles){
+    const match=targetRoles.find(item=>!item.managed&&!usedRoles.has(item.id)&&(
+      (targetGuildId===snapshot.sourceGuild.id&&item.id===role.id)||item.name===role.name
+    ));
+    if(match) usedRoles.add(match.id);else missingRoles++;
+  }
+  const usedChannels=new Set<string>();
+  const parents:Record<string,string>={};
+  let missingChannels=0;
+  const ordered=[...snapshot.channels.filter(item=>item.type===4),...snapshot.channels.filter(item=>item.type!==4)];
+  for(const channel of ordered){
+    const match=targetChannels.find(item=>!usedChannels.has(item.id)&&(
+      (targetGuildId===snapshot.sourceGuild.id&&item.id===channel.id)||(
+        Number(item.type)===channel.type&&item.name===channel.name&&
+        (channel.type===4||(item.parent_id??null)===(channel.parent_id?parents[channel.parent_id]:null))
+      )
+    ));
+    if(match){usedChannels.add(match.id);parents[channel.id]=match.id;}
+    else{missingChannels++;parents[channel.id]="missing:"+channel.id;}
+  }
   return {
     source:{id:snapshot.sourceGuild.id,name:snapshot.sourceGuild.name},
     target:{id:targetGuildId,name:targetGuild.name},
@@ -1568,6 +1622,8 @@ export async function handleBackupApi(
   }
   if(backupMatch&&request.method==="DELETE"){
     await requireDashboard(request,env);
+    const active=await env.DB.prepare("SELECT id FROM guild_restore_jobs WHERE backup_id=? AND status IN ('queued','running') LIMIT 1").bind(backupMatch[1]!).first();
+    if(active) throw new BackupHttpError(409,"復元中のバックアップは削除できません。先に復元を停止してください。");
     if(!(await deleteBackupRecord(env,backupMatch[1]!))){
       throw new BackupHttpError(404,"バックアップが見つかりません");
     }
@@ -1590,7 +1646,10 @@ export async function handleBackupApi(
     const target=String(body.targetGuildId??"");
     if(!/^\d+$/.test(target)) throw new BackupHttpError(400,"復元先サーバーが不正です");
     await restorePreview(env,restore[1]!,target);
-    return json(env,publicJob(await createRestoreJob(env,restore[1]!,target)),202);
+    const job=await createRestoreJob(env,restore[1]!,target);
+    if(!job) throw new BackupHttpError(404,"バックアップが削除されたため復元を開始できませんでした。");
+    if(job.backup_id!==restore[1]) throw new BackupHttpError(409,"このサーバーでは別のバックアップを復元中です。完了または停止してから再試行してください。");
+    return json(env,publicJob(job),202);
   }
 
   if(url.pathname==="/api/restore-jobs"&&request.method==="GET"){

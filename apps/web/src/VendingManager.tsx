@@ -63,6 +63,8 @@ export default function VendingManager({
   const productEditorRef=useRef<HTMLDivElement>(null);
   const [machines,setMachines]=useState<Machine[]>([]);
   const [selectedId,setSelectedId]=useState<string|null>(null);
+  const detailRequest=useRef(0);
+  const [detailLoading,setDetailLoading]=useState(false);
   const [detail,setDetail]=useState<MachineDetail|null>(null);
   const [newMachineName,setNewMachineName]=useState("");
   const [busy,setBusy]=useState(false);
@@ -171,25 +173,32 @@ export default function VendingManager({
   }
 
   async function loadDetail(id:string){
-    const [data,notification]=await Promise.all([
-      api<MachineDetail>(`/api/guilds/${guildId}/vending/${id}`),
-      api<{channel_id:string;role_id:string}|null>(
-        `/api/guilds/${guildId}/vending/${id}/stock-notification`
-      )
-    ]);
-    setDetail(data);
-    setNotifyChannel(notification?.channel_id??"");
-    setNotifyRole(notification?.role_id??"");
-    setMachineForm({
-      name:data.name,
-      publicLogChannelId:data.public_log_channel_id??"",
-      localLogChannelId:data.local_log_channel_id??"",
-      privateLogChannelId:data.private_log_channel_id??"",
-      roleId:data.role_id??"",
-      panelTitle:data.panel_title??"",
-      panelDescription:data.panel_description??"",
-      panelImageUrl:data.panel_image_url??""
-    });
+    const request=++detailRequest.current;
+    setDetailLoading(true);
+    try{
+      const [data,notification]=await Promise.all([
+        api<MachineDetail>(`/api/guilds/${guildId}/vending/${id}`),
+        api<{channel_id:string;role_id:string}|null>(
+          `/api/guilds/${guildId}/vending/${id}/stock-notification`
+        )
+      ]);
+      if(request!==detailRequest.current) return;
+      setDetail(data);
+      setNotifyChannel(notification?.channel_id??"");
+      setNotifyRole(notification?.role_id??"");
+      setMachineForm({
+        name:data.name,
+        publicLogChannelId:data.public_log_channel_id??"",
+        localLogChannelId:data.local_log_channel_id??"",
+        privateLogChannelId:data.private_log_channel_id??"",
+        roleId:data.role_id??"",
+        panelTitle:data.panel_title??"",
+        panelDescription:data.panel_description??"",
+        panelImageUrl:data.panel_image_url??""
+      });
+    }finally{
+      if(request===detailRequest.current) setDetailLoading(false);
+    }
   }
 
   async function loadPaymentStatus(){
@@ -543,7 +552,7 @@ export default function VendingManager({
   }
 
   return (
-    <section className="card vending-manager">
+    <section className="card vending-manager" inert={busy||detailLoading} aria-busy={busy||detailLoading}>
       <div className="section-head">
         <div>
           <span className="eyebrow">VENDING MACHINE</span>
@@ -573,7 +582,13 @@ export default function VendingManager({
               <button
                 key={machine.id}
                 className={`vending-machine-button ${machine.id===selectedId?"active":""}`}
-                onClick={()=>{setSelectedId(machine.id);void loadDetail(machine.id);}}
+                disabled={busy||detailLoading}
+                onClick={()=>{
+                  setSelectedId(machine.id);
+                  setDetail(null);
+                  setEditingProduct(null);
+                  void loadDetail(machine.id).catch(onError);
+                }}
               >
                 <span className="vending-machine-icon">▣</span>
                 <span>

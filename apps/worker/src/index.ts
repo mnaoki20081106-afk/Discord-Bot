@@ -1153,31 +1153,42 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     await requireGuild(request,env,guildId);
     if(request.method==="PUT"){
       const patch=await bodyObject<Partial<GuildSettings>>(request);
-      const safe:Partial<GuildSettings>={...patch};
-      if(safe.spamMax!==undefined) safe.spamMax=Math.max(2,Math.min(50,Number(safe.spamMax)));
-      if(safe.mentionLimit!==undefined) safe.mentionLimit=Math.max(2,Math.min(50,Number(safe.mentionLimit)));
-      if(safe.nukeActions!==undefined) safe.nukeActions=Math.max(2,Math.min(30,Number(safe.nukeActions)));
-      if(safe.nukeWindowSeconds!==undefined) safe.nukeWindowSeconds=Math.max(5,Math.min(300,Number(safe.nukeWindowSeconds)));
-      if(safe.minAccountAgeDays!==undefined){
-        const days=Number(safe.minAccountAgeDays);
-        if(!Number.isFinite(days)||days<0){
-          throw new HttpError(400,"最低アカウント日数は0以上の数値で指定してください");
-        }
-        safe.minAccountAgeDays=Math.max(0,Math.min(36500,Math.trunc(days)));
+      const safe:Partial<GuildSettings>={};
+      for(const key of ["securityEnabled","antiSpam","blockInvites","antiRaid","antiNuke"] as const){
+        if(patch[key]===undefined) continue;
+        if(typeof patch[key]!=="boolean") throw new HttpError(400,key+" はオン/オフで指定してください");
+        safe[key]=patch[key];
       }
-      if(safe.verifiedRoleId!==undefined){
-        const roleId=safe.verifiedRoleId===null?null:String(safe.verifiedRoleId).trim();
-        if(roleId!==null&&roleId!==""&&!/^\d+$/.test(roleId)){
-          throw new HttpError(400,"認証ロールIDが不正です");
+      const limits={spamMax:[2,50],spamWindowSeconds:[1,300],mentionLimit:[2,50],
+        raidJoins:[2,1000],raidWindowSeconds:[1,300],nukeActions:[2,30],
+        nukeWindowSeconds:[5,300],minAccountAgeDays:[0,36500]} as const;
+      for(const key of Object.keys(limits) as Array<keyof typeof limits>){
+        if(patch[key]===undefined) continue;
+        const value=patch[key];
+        const [min,max]=limits[key];
+        if(typeof value!=="number"||!Number.isInteger(value)||value<min||value>max){
+          throw new HttpError(400,key+" は "+min+"〜"+max+" の整数で指定してください");
         }
-        safe.verifiedRoleId=roleId||null;
+        safe[key]=value;
       }
-      if(safe.ticketSupportRoleIds!==undefined){
-        safe.ticketSupportRoleIds=[...new Set(
-          safe.ticketSupportRoleIds
-            .map(id=>String(id).trim())
-            .filter(id=>/^\d+$/.test(id))
-        )].slice(0,20);
+      for(const key of ["verifiedRoleId","logChannelId"] as const){
+        if(patch[key]===undefined) continue;
+        const value=patch[key];
+        if(value!==null&&(typeof value!=="string"||!/^\d+$/.test(value.trim()))){
+          throw new HttpError(400,key+" が不正です");
+        }
+        safe[key]=value?.trim()??null;
+      }
+      for(const key of ["ticketSupportRoleIds","trustedUserIds","trustedRoleIds"] as const){
+        const value=patch[key];
+        if(value===undefined) continue;
+        if(!Array.isArray(value)||value.some(id=>typeof id!=="string"||!/^\d+$/.test(id.trim()))){
+          throw new HttpError(400,key+" は有効なIDの配列で指定してください");
+        }
+        if(value.length>100||(key==="ticketSupportRoleIds"&&value.length>20)){
+          throw new HttpError(400,key+" の件数が上限を超えています");
+        }
+        safe[key]=[...new Set(value.map(id=>id.trim()))];
       }
 
       if(safe.verifiedRoleId){
@@ -1208,8 +1219,8 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       ){
         throw new HttpError(500,"認証ロールの保存確認に失敗しました");
       }
-      await syncAutoMod(env,guildId,persisted);
-      return json(env,persisted);
+      const applyWarnings=await syncAutoMod(env,guildId,persisted);
+      return json(env,{...persisted,applyWarnings});
     }
   }
 
@@ -2034,7 +2045,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v33-verification-recovery",
+          version:"dashboard-auth-v34-backup-audit",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),

@@ -56,6 +56,7 @@ export type PanelDeploymentRow = {
 };
 
 const schema = [
+  "CREATE TABLE IF NOT EXISTS backup_sweep_lease (id INTEGER PRIMARY KEY,owner TEXT NOT NULL,expires_at INTEGER NOT NULL)",
   `CREATE TABLE IF NOT EXISTS guild_backups (
     id TEXT PRIMARY KEY,
     source_guild_id TEXT NOT NULL,
@@ -164,29 +165,24 @@ export async function createBackupRecord(
   const id=randomId();
   const now=Date.now();
   const marker="chunked:v1";
-  await env.DB.prepare(`
+  const statements:D1PreparedStatement[]=[env.DB.prepare(`
     INSERT INTO guild_backups(
       id,source_guild_id,source_guild_name,label,created_at,schema_version,payload_enc,
       role_count,channel_count,member_count,recovery_member_count,warnings_json
-    ) VALUES (?,?,?,?,?,1,?,?,?,?,?,?)
+    ) VALUES (?,?,?,?,?,2,?,?,?,?,?,?)
   `).bind(
     id,input.sourceGuildId,input.sourceGuildName,input.label??null,now,marker,
     input.roleCount,input.channelCount,input.memberCount,input.recoveryMemberCount,
     JSON.stringify(input.warnings)
-  ).run();
-
-  try{
-    const chunkSize=120_000;
-    for(let offset=0,index=0;offset<input.payloadEnc.length;offset+=chunkSize,index++){
-      await env.DB.prepare(
+  )];
+  const chunkSize=120_000;
+  for(let offset=0,index=0;offset<input.payloadEnc.length;offset+=chunkSize,index++){
+    statements.push(env.DB.prepare(
         "INSERT INTO guild_backup_chunks(backup_id,chunk_index,payload_chunk) VALUES (?,?,?)"
-      ).bind(id,index,input.payloadEnc.slice(offset,offset+chunkSize)).run();
-    }
-  }catch(error){
-    await env.DB.prepare("DELETE FROM guild_backup_chunks WHERE backup_id=?").bind(id).run().catch(()=>undefined);
-    await env.DB.prepare("DELETE FROM guild_backups WHERE id=?").bind(id).run().catch(()=>undefined);
-    throw error;
+    ).bind(id,index,input.payloadEnc.slice(offset,offset+chunkSize)));
   }
+  // A failed chunk must not leave a visible, incomplete backup.
+  await env.DB.batch(statements);
 
   return (await getBackupRecord(env,id))!;
 }
@@ -221,9 +217,13 @@ export async function getBackupRecord(env:Env,id:string):Promise<BackupRow|null>
 
 export async function deleteBackupRecord(env:Env,id:string):Promise<boolean>{
   await ensureBackupSchema(env);
-  await env.DB.prepare("DELETE FROM guild_backup_chunks WHERE backup_id=?").bind(id).run();
-  const result=await env.DB.prepare("DELETE FROM guild_backups WHERE id=?").bind(id).run();
-  return (result.meta.changes??0)>0;
+  const active=await env.DB.prepare("SELECT id FROM guild_restore_jobs WHERE backup_id=? AND status IN ('queued','running') LIMIT 1").bind(id).first();
+  if(active) return false;
+  const results=await env.DB.batch([
+    env.DB.prepare("DELETE FROM guild_backups WHERE id=? AND NOT EXISTS (SELECT 1 FROM guild_restore_jobs WHERE backup_id=? AND status IN ('queued','running'))").bind(id,id),
+    env.DB.prepare("DELETE FROM guild_backup_chunks WHERE backup_id=? AND NOT EXISTS (SELECT 1 FROM guild_backups WHERE id=?)").bind(id,id)
+  ]);
+  return (results[0]!.meta.changes??0)>0;
 }
 
 export type RecoveryOAuthState = {
@@ -389,7 +389,7 @@ export async function markRecoveryMemberRevoked(
 
 export async function createRestoreJob(
   env:Env,backupId:string,targetGuildId:string
-):Promise<RestoreJobRow>{
+):Promise<RestoreJobRow|null>{
   await ensureBackupSchema(env);
   const existing=await env.DB.prepare(`
     SELECT * FROM guild_restore_jobs
@@ -403,9 +403,11 @@ export async function createRestoreJob(
     INSERT INTO guild_restore_jobs(
       id,backup_id,target_guild_id,status,phase,cursor,role_map_json,channel_map_json,
       vm_map_json,product_map_json,result_json,error,created_at,updated_at
-    ) VALUES (?,?,?,'queued','preflight',0,'{}','{}','{}','{}','{}',NULL,?,?)
-  `).bind(id,backupId,targetGuildId,now,now).run();
-  return (await getRestoreJob(env,id))!;
+    ) SELECT ?,?,?,'queued','preflight',0,'{}','{}','{}','{}','{}',NULL,?,?
+    WHERE EXISTS (SELECT 1 FROM guild_backups WHERE id=?)
+      AND NOT EXISTS (SELECT 1 FROM guild_restore_jobs WHERE target_guild_id=? AND status IN ('queued','running'))
+  `).bind(id,backupId,targetGuildId,now,now,backupId,targetGuildId).run();
+  return (await env.DB.prepare("SELECT * FROM guild_restore_jobs WHERE target_guild_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1").bind(targetGuildId).first<RestoreJobRow>())!;
 }
 
 export async function getRestoreJob(env:Env,id:string):Promise<RestoreJobRow|null>{
@@ -451,7 +453,7 @@ export async function updateRestoreJob(
     UPDATE guild_restore_jobs SET
       status=?,phase=?,cursor=?,role_map_json=?,channel_map_json=?,
       vm_map_json=?,product_map_json=?,result_json=?,error=?,updated_at=?
-    WHERE id=?
+    WHERE id=? AND status IN ('queued','running')
   `).bind(
     patch.status??current.status,
     patch.phase??current.phase,

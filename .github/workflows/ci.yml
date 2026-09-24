@@ -24,6 +24,8 @@ jobs:
         run: npm run build --workspace @dsm/worker
       - name: Test worker
         run: npm run test --workspace @dsm/worker
+      - name: Test dashboard input and saving
+        run: npm test --workspace @dsm/web
       - name: Build dashboard
         run: npm run build --workspace @dsm/web
         env:

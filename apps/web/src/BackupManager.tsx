@@ -430,7 +430,7 @@ export default function BackupManager({
                 <div className={"backup-job "+job.status} key={job.id}>
                   <div>
                     <strong>
-                      {job.status==="completed"?"復元完了":
+                      {job.status==="completed"?(job.result.warnings?.length||job.result.membersFailed?"復元完了（注意あり）":"復元完了"):
                         job.status==="failed"?"復元失敗":
                         job.status==="cancelled"?"停止済み":"復元中"}
                     </strong>
