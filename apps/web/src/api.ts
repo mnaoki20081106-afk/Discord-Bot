@@ -84,7 +84,11 @@ export async function login(password: string): Promise<void> {
   storeSession(payload.token);
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function api<T>(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = 20_000
+): Promise<T> {
   if (!API_BASE) throw new Error("API URL が未設定です");
   const token = currentSession();
   const headers = new Headers(init.headers);
@@ -92,7 +96,6 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
   const controller = new AbortController();
-  const timeoutMs = 20_000;
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   const externalSignal = init.signal;
   const abortFromExternal = () => controller.abort();
@@ -112,7 +115,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     return payload as T;
   } catch (reason) {
     if (controller.signal.aborted && !externalSignal?.aborted) {
-      throw new Error("APIの応答が20秒以内に返りませんでした。保存状態を確認して再試行してください");
+      throw new Error(`APIの応答が${Math.round(timeoutMs / 1000)}秒以内に返りませんでした。保存状態を確認して再試行してください`);
     }
     throw reason;
   } finally {
