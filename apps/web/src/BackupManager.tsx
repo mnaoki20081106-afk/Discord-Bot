@@ -369,14 +369,15 @@ export default function BackupManager({
           <div className="section-head">
             <div>
               <span className="eyebrow">MEMBER RECOVERY</span>
-              <h3>メンバー自動復元の準備</h3>
+              <h3>メンバー自動復元</h3>
             </div>
             <span className="backup-count">{recovery?.registered??0} 登録</span>
           </div>
           <p className="muted">
-            Discordの仕様上、メンバー本人が事前に公式OAuthで
-            <code>guilds.join</code> を許可した場合のみ自動再参加できます。
-            復旧登録済みのメンバーは、復元ジョブで自動追加されます。
+            現在の認証フローでは、認証完了と同時に公式OAuthの
+            <code>guilds.join</code> も登録されます。つまり新しく認証済みになったメンバーは
+            そのまま自動復元対象です。下のパネルは、旧認証方式ですでに認証済みのメンバーを
+            復旧登録へ移行する用途にも使えます。
           </p>
           <label className="field">
             <span>復旧登録パネル設置先</span>
