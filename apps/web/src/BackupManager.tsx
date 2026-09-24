@@ -302,6 +302,13 @@ export default function BackupManager({
             />
           </label>
           <div className="backup-callout">
+            <strong>自動保護</strong>
+            <span>
+              手動バックアップに加えて、24時間以上新しいバックアップが無いサーバーは自動取得します。
+              自動バックアップは各サーバー14世代を保持します。
+            </span>
+          </div>
+          <div className="backup-callout">
             <strong>取得対象</strong>
             <span>
               サーバー基本設定、ロール・権限・並び順、カテゴリ/チャンネル、
