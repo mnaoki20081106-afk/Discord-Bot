@@ -1534,30 +1534,88 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       }
     }
 
-    const confirmed=await botJson<DiscordChannel[]>(
-      env,
-      `/guilds/${guildId}/channels`
-    );
-    const confirmedById=new Map(confirmed.map(channel=>[channel.id,channel]));
-    for(const channelId of [...updated]){
-      const channel=confirmedById.get(channelId);
-      if(!channel||!channelPermissionPatchMatches(channel,targetId,permissions)){
-        const original=channelById.get(channelId);
-        failed.push({
-          id:channelId,
-          name:original?.name??channelId,
-          message:"Discordから再取得した権限が指定内容と一致しませんでした"
+    const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+    const verify=async(ids:string[])=>{
+      let remaining=[...ids];
+      let confirmedById=new Map<string,DiscordChannel>();
+      for(const delay of [0,180,420]){
+        if(delay>0) await sleep(delay);
+        const confirmed=await botJson<DiscordChannel[]>(
+          env,
+          `/guilds/${guildId}/channels`
+        );
+        confirmedById=new Map(confirmed.map(channel=>[channel.id,channel]));
+        remaining=remaining.filter(channelId=>{
+          const channel=confirmedById.get(channelId);
+          return !channel||!channelPermissionPatchMatches(channel,targetId,permissions);
         });
-        updated.splice(updated.indexOf(channelId),1);
+        if(remaining.length===0) break;
       }
+      return {remaining,confirmedById};
+    };
+
+    let verification=await verify(updated);
+    if(verification.remaining.length>0){
+      // Retry only the channels whose overwrite was not visible after the first
+      // write. This handles transient Discord propagation without duplicating
+      // successful writes across the whole selection.
+      for(const channelId of verification.remaining){
+        const channel=channelById.get(channelId);
+        if(!channel) continue;
+        try{
+          await applyChannelRolePermissions(
+            env,
+            guildId,
+            channel,
+            targetId,
+            roles,
+            member,
+            permissions
+          );
+        }catch(error){
+          failed.push({
+            id:channel.id,
+            name:channel.name,
+            message:"再試行に失敗: "+(error instanceof Error?error.message:String(error))
+          });
+        }
+      }
+      verification=await verify(
+        verification.remaining.filter(
+          id=>!failed.some(failure=>failure.id===id)
+        )
+      );
     }
+
+    for(const channelId of verification.remaining){
+      const original=channelById.get(channelId);
+      failed.push({
+        id:channelId,
+        name:original?.name??channelId,
+        message:"Discordから再取得した権限が指定内容と一致しませんでした"
+      });
+    }
+
+    const failedIds=new Set(failed.map(item=>item.id));
+    const updatedIds=updated.filter(id=>!failedIds.has(id));
+    const operationId=randomId();
+
+    console.log("bulk channel permissions",{
+      operationId,
+      guildId,
+      targetId,
+      requested:channelIds.length,
+      updated:updatedIds.length,
+      failed:failed.length
+    });
 
     return json(env,{
       ok:failed.length===0,
+      operationId,
       targetId,
       requested:channelIds.length,
-      updated:updated.length,
-      updatedIds:updated,
+      updated:updatedIds.length,
+      updatedIds,
       failed
     });
   }
@@ -1930,7 +1988,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v25-bulk-permissions",
+          version:"dashboard-auth-v26-bulk-permissions-verified",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
