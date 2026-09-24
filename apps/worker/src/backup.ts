@@ -537,6 +537,16 @@ async function restoreRoleBatch(
   const stats=parseStats(job.result_json);
   const targetRoles=await botJson<any[]>(env,"/guilds/"+job.target_guild_id+"/roles");
 
+  if(job.cursor===0){
+    const sourceEveryone=snapshot.roles.find(role=>role.id===snapshot.sourceGuild.id);
+    if(sourceEveryone){
+      await botJson(env,"/guilds/"+job.target_guild_id+"/roles/"+job.target_guild_id,{
+        method:"PATCH",
+        body:JSON.stringify({permissions:sourceEveryone.permissions})
+      });
+    }
+  }
+
   let cursor=job.cursor;
   for(let processed=0;processed<batch&&cursor<editable.length;processed++,cursor++){
     const source=editable[cursor]!;
@@ -738,19 +748,29 @@ async function restoreLegacyProducts(
   env:Env,job:RestoreJobRow,snapshot:GuildSnapshot
 ):Promise<void>{
   const roleMap=parseObject<Record<string,string>>(job.role_map_json,{});
+  const productMap=parseObject<Record<string,string>>(job.product_map_json,{});
   const stats=parseStats(job.result_json);
 
   for(const row of snapshot.bot.legacyProducts){
+    const oldId=String(row.id??"");
     const name=String(row.name??"");
     if(!name) continue;
+
     const existing=await env.DB.prepare(
       "SELECT id FROM products WHERE guild_id=? AND name=? AND active=1 LIMIT 1"
     ).bind(job.target_guild_id,name).first<{id:string}>();
-    if(existing) continue;
-    const id=randomId();
+    if(existing){
+      if(oldId) productMap[oldId]=existing.id;
+      continue;
+    }
+
+    const stableKey=oldId||name;
+    const id=(await sha256Hex(
+      "restore:legacy-product:"+job.target_guild_id+":"+stableKey
+    )).slice(0,32);
     const roleId=row.role_id?roleMap[String(row.role_id)]??null:null;
-    await env.DB.prepare(`
-      INSERT INTO products(
+    const result=await env.DB.prepare(`
+      INSERT OR IGNORE INTO products(
         id,guild_id,name,description,price_yen,active,delivery_type,role_id,delivery_text,created_at
       ) VALUES (?,?,?,?,?,?,?,?,?,?)
     `).bind(
@@ -758,11 +778,13 @@ async function restoreLegacyProducts(
       Number(row.price_yen??1),Number(row.active??1),String(row.delivery_type??"text"),
       roleId,row.delivery_text??null,Date.now()
     ).run();
-    stats.productsRestored++;
+    if(oldId) productMap[oldId]=id;
+    if((result.meta.changes??0)>0) stats.productsRestored++;
   }
 
   await updateRestoreJob(env,job.id,{
-    phase:"vending",cursor:0,result_json:JSON.stringify(stats),status:"running",error:null
+    phase:"vending",cursor:0,product_map_json:JSON.stringify(productMap),
+    result_json:JSON.stringify(stats),status:"running",error:null
   });
 }
 
@@ -778,17 +800,29 @@ async function restoreVending(
 
   for(const row of snapshot.bot.vending.machines){
     const oldId=String(row.id??"");
+    const name=String(row.name??"自販機");
     if(!oldId) continue;
     if(vmMap[oldId]) continue;
-    const id=randomId();
-    await env.DB.prepare(`
-      INSERT INTO vending_machines(
+
+    const existing=await env.DB.prepare(
+      "SELECT id FROM vending_machines WHERE guild_id=? AND name=? AND active=1 LIMIT 1"
+    ).bind(job.target_guild_id,name).first<{id:string}>();
+    if(existing){
+      vmMap[oldId]=existing.id;
+      continue;
+    }
+
+    const id=(await sha256Hex(
+      "restore:vending-machine:"+job.target_guild_id+":"+oldId
+    )).slice(0,32);
+    const result=await env.DB.prepare(`
+      INSERT OR IGNORE INTO vending_machines(
         id,guild_id,owner_id,name,public_log_channel_id,local_log_channel_id,
         private_log_channel_id,role_id,panel_title,panel_description,panel_image_url,
         active,created_at,updated_at
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
-      id,job.target_guild_id,String(row.owner_id??"shared-dashboard"),String(row.name??"自販機"),
+      id,job.target_guild_id,String(row.owner_id??"shared-dashboard"),name,
       mapId(row.public_log_channel_id as string|null,channelMap),
       mapId(row.local_log_channel_id as string|null,channelMap),
       mapId(row.private_log_channel_id as string|null,channelMap),
@@ -797,21 +831,33 @@ async function restoreVending(
       Number(row.active??1),Date.now(),Date.now()
     ).run();
     vmMap[oldId]=id;
-    stats.vendingMachinesRestored++;
+    if((result.meta.changes??0)>0) stats.vendingMachinesRestored++;
   }
 
   for(const row of snapshot.bot.vending.products){
     const oldId=String(row.id??"");
     const vmId=vmMap[String(row.vending_machine_id??"")];
+    const name=String(row.name??"商品");
     if(!oldId||!vmId||productMap[oldId]) continue;
-    const id=randomId();
+
+    const existing=await env.DB.prepare(
+      "SELECT id FROM vending_products WHERE vending_machine_id=? AND name=? AND active=1 LIMIT 1"
+    ).bind(vmId,name).first<{id:string}>();
+    if(existing){
+      productMap[oldId]=existing.id;
+      continue;
+    }
+
+    const id=(await sha256Hex(
+      "restore:vending-product:"+job.target_guild_id+":"+oldId
+    )).slice(0,32);
     await env.DB.prepare(`
-      INSERT INTO vending_products(
+      INSERT OR IGNORE INTO vending_products(
         id,vending_machine_id,name,description,price_paypay,price_kyash,emoji,
         infinite_stock,infinite_content,sales_count,active,created_at,updated_at
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
-      id,vmId,String(row.name??"商品"),String(row.description??""),
+      id,vmId,name,String(row.description??""),
       Number(row.price_paypay??0),Number(row.price_kyash??0),row.emoji??null,
       Number(row.infinite_stock??0),row.infinite_content??null,Number(row.sales_count??0),
       Number(row.active??1),Date.now(),Date.now()
@@ -821,12 +867,17 @@ async function restoreVending(
 
   for(const row of snapshot.bot.vending.stock){
     if(String(row.state??"available")!=="available") continue;
+    const oldStockId=String(row.id??"");
     const productId=productMap[String(row.product_id??"")];
-    if(!productId) continue;
+    if(!oldStockId||!productId) continue;
+    const id=(await sha256Hex(
+      "restore:vending-stock:"+job.target_guild_id+":"+oldStockId
+    )).slice(0,32);
     await env.DB.prepare(`
-      INSERT INTO vending_stock(id,product_id,content,state,order_id,reserved_until,created_at,sold_at)
-      VALUES (?,?,?,'available',NULL,NULL,?,NULL)
-    `).bind(randomId(),productId,String(row.content??""),Date.now()).run();
+      INSERT OR IGNORE INTO vending_stock(
+        id,product_id,content,state,order_id,reserved_until,created_at,sold_at
+      ) VALUES (?,?,?,'available',NULL,NULL,?,NULL)
+    `).bind(id,productId,String(row.content??""),Date.now()).run();
   }
 
   for(const row of snapshot.bot.vending.coupons){
@@ -834,10 +885,17 @@ async function restoreVending(
     if(!vmId||Number(row.active??1)!==1) continue;
     const code=String(row.code??"");
     if(!code) continue;
-    const exists=await env.DB.prepare(
-      "SELECT code FROM vending_coupons WHERE code=?"
-    ).bind(code).first();
-    if(exists) continue;
+    const existing=await env.DB.prepare(
+      "SELECT vending_machine_id FROM vending_coupons WHERE code=?"
+    ).bind(code).first<{vending_machine_id:string}>();
+    if(existing){
+      if(existing.vending_machine_id!==vmId){
+        stats.warnings.push(
+          "クーポン "+code+" は既存の別自販機で使用中のため、重複防止のため復元をスキップしました。"
+        );
+      }
+      continue;
+    }
     await env.DB.prepare(`
       INSERT INTO vending_coupons(code,vending_machine_id,owner_id,discount,active,created_at)
       VALUES (?,?,?,?,1,?)
@@ -859,7 +917,9 @@ async function restoreVending(
   }
 
   if(snapshot.bot.vending.orders.length){
-    stats.warnings.push("自販機の過去注文履歴はバックアップ内に保持していますが、二重配送防止のため稼働DBには再投入していません。");
+    stats.warnings.push(
+      "自販機の過去注文履歴はバックアップ内に保持していますが、二重配送防止のため稼働DBには再投入していません。"
+    );
   }
 
   await updateRestoreJob(env,job.id,{
@@ -1119,9 +1179,20 @@ async function processRestoreJob(env:Env,job:RestoreJobRow):Promise<void>{
       });
       return;
     }
-    // One OAuth member per cron tick. This is intentionally gentle during disaster recovery.
-    await restoreOneMember(env,job,snapshot,job.cursor);
-    await updateRestoreJob(env,job.id,{cursor:job.cursor+1,status:"running",error:null});
+
+    let current:RestoreJobRow=job;
+    let cursor=job.cursor;
+    const stop=Math.min(snapshot.members.length,cursor+10);
+    while(cursor<stop){
+      await restoreOneMember(env,current,snapshot,cursor);
+      cursor++;
+      const refreshed=await getRestoreJob(env,job.id);
+      if(refreshed) current=refreshed;
+      if(cursor<stop){
+        await new Promise(resolve=>setTimeout(resolve,900));
+      }
+    }
+    await updateRestoreJob(env,job.id,{cursor,status:"running",error:null});
     return;
   }
   await updateRestoreJob(env,job.id,{
@@ -1132,17 +1203,46 @@ async function processRestoreJob(env:Env,job:RestoreJobRow):Promise<void>{
 export async function backupRestoreSweep(env:Env):Promise<void>{
   await ensureBackupSchema(env);
   const job=await nextRestoreJob(env);
-  if(!job) return;
+  if(job){
+    try{
+      await processRestoreJob(env,job);
+    }catch(error){
+      const message=error instanceof Error?error.message:String(error);
+      const fatal=
+        error instanceof BackupHttpError&&[400,401,403,404,500].includes(error.status);
+      await updateRestoreJob(env,job.id,{
+        status:fatal?"failed":"queued",
+        error:message.slice(0,500)
+      });
+    }
+    return;
+  }
+
+  // With the worker cron running every minute, create at most one stale guild snapshot
+  // per tick. Manual snapshots also postpone the next automatic snapshot for 24 hours.
+  let guilds:any[]=[];
   try{
-    await processRestoreJob(env,job);
-  }catch(error){
-    const message=error instanceof Error?error.message:String(error);
-    const fatal=
-      error instanceof BackupHttpError&&[400,401,403,404,500].includes(error.status);
-    await updateRestoreJob(env,job.id,{
-      status:fatal?"failed":"queued",
-      error:message.slice(0,500)
-    });
+    guilds=await botJson<any[]>(env,"/users/@me/guilds?limit=200");
+  }catch{
+    return;
+  }
+  for(const guild of guilds){
+    const guildId=String(guild.id??"");
+    if(!guildId) continue;
+    const rows=await listBackupRecords(env,guildId);
+    const latest=rows[0];
+    if(latest&&Date.now()-latest.created_at<24*60*60_000) continue;
+    try{
+      await createSnapshot(env,guildId,"自動バックアップ");
+      const updated=await listBackupRecords(env,guildId);
+      const automatic=updated.filter(row=>row.label==="自動バックアップ");
+      for(const stale of automatic.slice(14)){
+        await deleteBackupRecord(env,stale.id);
+      }
+    }catch(error){
+      console.error("automatic guild backup failed",guildId,error);
+    }
+    return;
   }
 }
 
