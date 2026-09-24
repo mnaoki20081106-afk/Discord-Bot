@@ -47,7 +47,13 @@ import {
   type DiscordUser
 } from "./discord";
 import { createPayPayQr, getPayPayStatus, payPayConfigured } from "./paypay";
-import { BackupHttpError, backupRestoreSweep, handleBackupApi, handleRecoveryOAuth } from "./backup";
+import {
+  BackupHttpError,
+  backupRestoreSweep,
+  createVerificationRecoveryAuthorizeUrl,
+  handleBackupApi,
+  handleRecoveryOAuth
+} from "./backup";
 import { recordPanelDeployment } from "./backup-db";
 import {
   handleVendingApi,
@@ -2161,7 +2167,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v32-backup-guild-state",
+          version:"dashboard-auth-v33-verification-recovery",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
