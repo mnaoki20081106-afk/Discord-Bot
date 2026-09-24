@@ -6,12 +6,13 @@ import { Miniflare } from 'miniflare';
 const guildId = '123456789012345678';
 const botId = '223456789012345678';
 const verificationUserId = '323456789012345679';
+const bannedUserId = '323456789012345680';
 const botRoleId = '623456789012345678';
 const targetRoleId = '523456789012345678';
 const chatChannelId = '423456789012345678';
 const guild = { id: guildId, name: 'Regression server', icon: null };
 const nonAdminBotPermissions = (
-  1n|1024n|2048n|16384n|32768n|65536n|8192n|16n|268435456n|
+  1n|32n|1024n|2048n|16384n|32768n|65536n|8192n|16n|134217728n|268435456n|
   2n|4n|1099511627776n|128n
 ).toString();
 
@@ -78,13 +79,66 @@ async function runtime(t, options = {}) {
       if (url.pathname === `/api/v10/guilds/${guildId}/stickers`) return Response.json([]);
       if (
         request.method === 'GET' &&
+        url.pathname === `/api/v10/guilds/${guildId}/bans`
+      ) {
+        return Response.json([{
+          user:{id:bannedUserId,username:'BlockedUser',global_name:'Blocked User'},
+          reason:'Regression ban'
+        }]);
+      }
+      if (
+        request.method === 'PUT' &&
+        url.pathname === `/api/v10/guilds/${guildId}/bans/${bannedUserId}`
+      ) {
+        return new Response(null,{status:204});
+      }
+      if (url.pathname === `/api/v10/guilds/${guildId}/welcome-screen`) {
+        if (request.method === 'PATCH') {
+          return Response.json(await request.clone().json());
+        }
+        return Response.json({
+          description:'Welcome to the regression server',
+          welcome_channels:[{
+            channel_id:chatChannelId,
+            description:'Start here',
+            emoji_id:null,
+            emoji_name:'👋'
+          }]
+        });
+      }
+      if (url.pathname === `/api/v10/guilds/${guildId}/widget`) {
+        if (request.method === 'PATCH') {
+          return Response.json(await request.clone().json());
+        }
+        return Response.json({enabled:true,channel_id:chatChannelId});
+      }
+      if (
+        request.method === 'PATCH' &&
+        /^\/api\/v10\/guilds\/\d+\/roles\/\d+$/.test(url.pathname)
+      ) {
+        const id=url.pathname.split('/').at(-1);
+        const body=await request.clone().json().catch(()=>({}));
+        return Response.json({
+          id,
+          name:id===targetRoleId?'Customer':'@everyone',
+          position:id===targetRoleId?targetRolePosition:0,
+          managed:false,
+          permissions:String(body.permissions??'0'),
+          color:Number(body.color??0),
+          hoist:Boolean(body.hoist),
+          mentionable:Boolean(body.mentionable)
+        });
+      }
+      if (
+        request.method === 'GET' &&
         url.pathname === `/api/v10/guilds/${guildId}/members`
       ) {
         return Response.json([{
           user:{id:verificationUserId,username:'Verifier',global_name:'Verifier',bot:false},
           nick:'Recovery Tester',
           roles:[targetRoleId],
-          joined_at:'2026-01-01T00:00:00.000Z'
+          joined_at:'2026-01-01T00:00:00.000Z',
+          communication_disabled_until:'2099-01-01T00:00:00.000Z'
         }]);
       }
       if (
@@ -398,6 +452,7 @@ test('backup snapshot is encrypted, listed, previewable, and recovery panel is t
   assert.equal(preview.body.behavior.destructive,false);
   assert.equal(preview.body.behavior.deletesExisting,false);
   assert.equal(preview.body.counts.members,1);
+  assert.equal(preview.body.counts.bans,1);
 
   const recovery = await request(
     mf,
@@ -425,6 +480,73 @@ test('backup snapshot is encrypted, listed, previewable, and recovery panel is t
       call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
     ),
     'recovery panel must be posted through Discord API'
+  );
+});
+
+test('restore job replays guild extras and bans without deleting existing structure', async t => {
+  const {mf,calls} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const token=login.body.token;
+
+  const created=await request(
+    mf,
+    `/api/guilds/${guildId}/backups`,
+    token,
+    'POST',
+    {label:'Restore regression'}
+  );
+  assert.equal(created.status,201,JSON.stringify(created.body));
+
+  const started=await request(
+    mf,
+    `/api/backups/${created.body.id}/restore`,
+    token,
+    'POST',
+    {targetGuildId:guildId}
+  );
+  assert.equal(started.status,202,JSON.stringify(started.body));
+
+  const worker=await mf.getWorker();
+  let job=started.body;
+  for(let tick=0;tick<24 && !['completed','failed','cancelled'].includes(job.status);tick++){
+    const scheduled=await worker.scheduled({cron:'* * * * *'});
+    assert.equal(scheduled.outcome,'ok');
+    const current=await request(mf,`/api/restore-jobs/${job.id}`,token);
+    assert.equal(current.status,200,JSON.stringify(current.body));
+    job=current.body;
+  }
+
+  assert.equal(job.status,'completed',JSON.stringify(job));
+  assert.equal(job.result.bansRestored,1);
+  assert.ok(job.result.guildExtrasRestored>=2);
+  assert.ok(
+    calls.some(call=>
+      call.method==='PUT'&&
+      call.path===`/api/v10/guilds/${guildId}/bans/${bannedUserId}`
+    ),
+    'restore must recreate the backed-up ban'
+  );
+  assert.ok(
+    calls.some(call=>
+      call.method==='PATCH'&&
+      call.path===`/api/v10/guilds/${guildId}/welcome-screen`
+    ),
+    'restore must replay the welcome screen'
+  );
+  assert.ok(
+    calls.some(call=>
+      call.method==='PATCH'&&
+      call.path===`/api/v10/guilds/${guildId}/widget`
+    ),
+    'restore must replay widget settings'
+  );
+  assert.equal(
+    calls.some(call=>call.method==='DELETE'&&/\/channels\/\d+$/.test(call.path)),
+    false,
+    'safe restore must never delete existing channels'
   );
 });
 

@@ -25,6 +25,9 @@ type RestoreStats = {
   membersSkippedNoConsent:number;
   membersRevoked:number;
   membersFailed:number;
+  memberTimeoutsRestored:number;
+  bansRestored:number;
+  guildExtrasRestored:number;
   panelsRestored:number;
   productsRestored:number;
   vendingMachinesRestored:number;
@@ -53,6 +56,7 @@ type Preview = {
     channels:number;
     missingChannels:number;
     members:number;
+    bans:number;
     recoveryRegistered:number;
     botPanels:number;
     vendingMachines:number;
@@ -93,6 +97,8 @@ function phaseLabel(phase:string){
     categories:"カテゴリ",
     channels:"チャンネル",
     positions:"配置・サーバー設定",
+    "guild-extras":"Welcome/Widget",
+    bans:"BAN一覧",
     "bot-settings":"BOT設定",
     "legacy-products":"商品",
     vending:"自販機",
@@ -312,7 +318,7 @@ export default function BackupManager({
             <strong>取得対象</strong>
             <span>
               サーバー基本設定、ロール・権限・並び順、カテゴリ/チャンネル、
-              メンバーID・ロール、絵文字/ステッカー情報、認証設定、商品、自販機、
+              メンバーID・ロール・タイムアウト、BAN一覧、Welcome Screen / Widget、絵文字/ステッカー情報、認証設定、商品、自販機、
               在庫、クーポン、パネル設置情報。
             </span>
           </div>
@@ -401,6 +407,8 @@ export default function BackupManager({
                     <span>ロール +{job.result.rolesCreated}</span>
                     <span>チャンネル +{job.result.channelsCreated}</span>
                     <span>メンバー +{job.result.membersAdded}</span>
+                    <span>BAN +{job.result.bansRestored||0}</span>
+                    <span>タイムアウト +{job.result.memberTimeoutsRestored||0}</span>
                     <span>パネル +{job.result.panelsRestored}</span>
                   </div>
                   {job.error&&<div className="backup-job-error">{job.error}</div>}
@@ -492,6 +500,7 @@ export default function BackupManager({
               <span>ロール <b>{preview.data.counts.roles}</b> / 新規見込み {preview.data.counts.missingRoles}</span>
               <span>チャンネル <b>{preview.data.counts.channels}</b> / 新規見込み {preview.data.counts.missingChannels}</span>
               <span>メンバー <b>{preview.data.counts.members}</b></span>
+              <span>BAN <b>{preview.data.counts.bans}</b></span>
               <span>復旧登録 <b>{preview.data.counts.recoveryRegistered}</b></span>
               <span>パネル <b>{preview.data.counts.botPanels}</b></span>
               <span>自販機 <b>{preview.data.counts.vendingMachines}</b></span>
