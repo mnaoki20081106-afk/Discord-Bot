@@ -78,7 +78,7 @@ type SnapshotMember = {
 };
 
 type PanelSnapshot = {
-  kind:"verification"|"ticket"|"product"|"vending";
+  kind:"verification"|"ticket"|"product"|"vending"|"recovery";
   objectId:string;
   channelId:string;
   messageId:string|null;
@@ -272,7 +272,7 @@ async function discoverPanels(
 
   for(const row of await listPanelDeployments(env,guildId)){
     const kind=row.kind as PanelSnapshot["kind"];
-    if(!["verification","ticket","product","vending"].includes(kind)) continue;
+    if(!["verification","ticket","product","vending","recovery"].includes(kind)) continue;
     const key=kind+":"+row.object_id;
     if(!found.has(key)){
       found.set(key,{
@@ -923,6 +923,9 @@ async function restorePanels(
             }]}]
           };
         }
+      }else if(panel.kind==="recovery"){
+        stats.warnings.push("復旧登録パネルは復元先で新しいWorker URLを埋め込む必要があるため、管理画面から再設置してください。");
+        continue;
       }else if(panel.kind==="vending"){
         const newVmId=vmMap[panel.objectId];
         if(newVmId){
@@ -1213,6 +1216,35 @@ export async function handleBackupApi(
       authorizePath:"/auth/recovery/start?guild_id="+encodeURIComponent(recoveryStatus[1]!),
       redirectPath:"/auth/discord/callback"
     });
+  }
+
+  const recoveryPanel=url.pathname.match(/^\/api\/guilds\/(\d+)\/recovery\/panel$/);
+  if(recoveryPanel&&request.method==="POST"){
+    await requireDashboard(request,env);
+    const guildId=recoveryPanel[1]!;
+    await botJson(env,"/guilds/"+guildId);
+    const body=await request.json() as {channelId?:string};
+    const channelId=String(body.channelId??"");
+    if(!/^\d+$/.test(channelId)) throw new BackupHttpError(400,"設置先チャンネルが不正です");
+    const channel=await botJson<any>(env,"/channels/"+channelId);
+    if(String(channel.guild_id??"")!==guildId||![0,5].includes(Number(channel.type))){
+      throw new BackupHttpError(400,"復旧登録パネルはこのサーバーのテキストチャンネルに設置してください");
+    }
+    const message=await postMessage(env,channelId,{
+      embeds:[{
+        title:"サーバー復旧登録",
+        description:"万が一サーバーが失われた時に、Discord公式OAuthを使ってこのアカウントを復旧先へ再参加できるよう登録します。登録はいつでもDiscord側から取り消せます。",
+        color:5793266
+      }],
+      components:[{type:1,components:[{
+        type:2,style:5,label:"復旧登録する",
+        url:url.origin+"/auth/recovery/start?guild_id="+encodeURIComponent(guildId)
+      }]}]
+    });
+    await recordPanelDeployment(env,{
+      guildId,kind:"recovery",channelId,messageId:message.id??null
+    });
+    return json(env,{ok:true,channelId,messageId:message.id??null});
   }
 
   const backupMatch=url.pathname.match(/^\/api\/backups\/([^/]+)$/);
