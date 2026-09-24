@@ -1090,77 +1090,26 @@ async function handleInteraction(
         ));
       }
 
-      let member=await botJson<DiscordGuildMember>(
+      // Verification is not complete until the user has authorized the
+      // Discord OAuth scopes required for disaster-recovery membership.
+      const verificationUrl=await createVerificationRecoveryAuthorizeUrl(
         env,
-        `/guilds/${challenge.guild_id}/members/${challenge.user_id}`
+        new URL(request.url).origin,
+        challenge.guild_id,
+        challenge.user_id
       );
-      if(!member.roles.includes(targetRole.id)){
-        try{
-          await botJson<void>(
-            env,
-            `/guilds/${challenge.guild_id}/members/${challenge.user_id}/roles/${targetRole.id}`,
-            {method:"PUT"}
-          );
-        }catch(error){
-          if(error instanceof DiscordApiError&&error.status===403){
-            const botMember=await getBotGuildMember(env,challenge.guild_id,roles);
-            const highestBotRole=highestMemberRole(roles,botMember);
-            const hierarchyBlocked=
-              highestBotRole!==null&&compareRoleHierarchy(targetRole,highestBotRole)>=0;
-            return interactionResponse(ephemeral(
-              hierarchyBlocked
-                ? `Discordがロール付与を拒否しました。認証ロール @${targetRole.name} はBOTの最高ロール @${highestBotRole.name} と同等以上です。認証ロールをBOTロールより下へ移動してください。`
-                : "Discordが認証ロールの付与を拒否しました。BOTの「ロールの管理」権限とロール設定を確認してください。"
-            ));
-          }
-          if(error instanceof DiscordApiError&&error.status===404){
-            return interactionResponse(ephemeral(
-              "認証対象のメンバーまたはロールが見つかりませんでした。もう一度認証してください。"
-            ));
-          }
-          throw error;
-        }
-
-        const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
-        let confirmed=false;
-        for(const delay of [0,180,420]){
-          if(delay>0) await sleep(delay);
-          member=await botJson<DiscordGuildMember>(
-            env,
-            `/guilds/${challenge.guild_id}/members/${challenge.user_id}`
-          );
-          if(member.roles.includes(targetRole.id)){
-            confirmed=true;
-            break;
-          }
-        }
-        if(!confirmed){
-          return interactionResponse(ephemeral(
-            "Discordへロール付与を送信しましたが、付与済みであることを再確認できませんでした。もう一度認証するかBOTのロール権限を確認してください。"
-          ));
-        }
-      }
-
       await deleteChallenge(env,challengeId);
 
-      console.log("verification completed",{
-        guildId:challenge.guild_id,
-        userId:challenge.user_id,
-        roleId:targetRole.id,
-        minAccountAgeDays
-      });
-      const recoveryUrl=
-        new URL(request.url).origin+
-        "/auth/recovery/start?guild_id="+encodeURIComponent(challenge.guild_id);
       return interactionResponse(ephemeral(
-        `認証が完了しました。@${targetRole.name} を付与しました。\n\n万が一のサーバー復旧に備える場合は、下のボタンから復旧登録もできます。`,
+        "計算認証は成功しました。最後にDiscord連携を完了してください。\n\n"+
+        "この操作が完了すると認証ロールの付与と、万が一のサーバー復旧用メンバー登録が同時に完了します。",
         [{
           type:1,
           components:[{
             type:2,
             style:5,
-            label:"復旧登録もする",
-            url:recoveryUrl
+            label:"Discordで認証を完了",
+            url:verificationUrl
           }]
         }]
       ));
