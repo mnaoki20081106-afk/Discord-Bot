@@ -1143,8 +1143,20 @@ async function handleInteraction(
         roleId:targetRole.id,
         minAccountAgeDays
       });
+      const recoveryUrl=
+        new URL(request.url).origin+
+        "/auth/recovery/start?guild_id="+encodeURIComponent(challenge.guild_id);
       return interactionResponse(ephemeral(
-        `認証が完了しました。@${targetRole.name} を付与しました。`
+        `認証が完了しました。@${targetRole.name} を付与しました。\n\n万が一のサーバー復旧に備える場合は、下のボタンから復旧登録もできます。`,
+        [{
+          type:1,
+          components:[{
+            type:2,
+            style:5,
+            label:"復旧登録もする",
+            url:recoveryUrl
+          }]
+        }]
       ));
     }
   }
