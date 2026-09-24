@@ -16,6 +16,12 @@ type Meta = {
   name: string;
   icon: string | null;
   botAdministrator?: boolean;
+  botAccessRepair?: {
+    administrator: boolean;
+    checked: number;
+    repaired: number;
+    failed: Array<{ id: string; name: string; status: number }>;
+  };
   channels: Array<{
     id: string;
     name: string;
@@ -268,6 +274,18 @@ export default function App() {
 
       setMeta(serverMeta);
       setSettings(serverSettings);
+      if (serverMeta.botAccessRepair && !serverMeta.botAccessRepair.administrator) {
+        const repair = serverMeta.botAccessRepair;
+        if (repair.failed.length > 0) {
+          setError(
+            `BOTアクセス保護を${repair.failed.length}件のチャンネル/カテゴリへ適用できませんでした。Discord側でBOTの「チャンネルを見る」を許可し、BOTロールの「チャンネルの管理」「ロールの管理」を確認してから再読み込みしてください。`
+          );
+        } else if (repair.repaired > 0) {
+          setNotice(
+            `BOTアクセス保護を${repair.repaired}件へ自動適用しました。@everyoneを制限してもBOTアクセスを維持します。`
+          );
+        }
+      }
       const messageChannels = serverMeta.channels.filter(
         (channel) =>
           channel.type === "text" || channel.type === "announcement"
