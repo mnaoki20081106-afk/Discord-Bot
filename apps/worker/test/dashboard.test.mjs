@@ -17,6 +17,8 @@ async function runtime(t, options = {}) {
   const calls = [];
   let rateLimitGuild = true;
   const botPermissions = options.botPermissions ?? nonAdminBotPermissions;
+  const botRolePosition = options.botRolePosition ?? 2;
+  const targetRolePosition = options.targetRolePosition ?? 1;
   let channelOverwrites = [...(options.channelOverwrites ?? [])];
   const forceBotOverwrite403 = options.forceBotOverwrite403 ?? false;
   const mf = new Miniflare({
@@ -54,11 +56,11 @@ async function runtime(t, options = {}) {
       ]);
       if (url.pathname.endsWith('/roles')) return Response.json([
         {id:guildId,name:'@everyone',position:0,managed:false,permissions:'0'},
-        {id:targetRoleId,name:'Customer',position:1,managed:false,permissions:'0'},
+        {id:targetRoleId,name:'Customer',position:targetRolePosition,managed:false,permissions:'0'},
         {
           id:botRoleId,
           name:'Test bot',
-          position:2,
+          position:botRolePosition,
           managed:true,
           permissions:botPermissions,
           tags:{bot_id:botId}
@@ -218,6 +220,33 @@ test('verification settings persist account age and role values', async t => {
     {minAccountAgeDays:-1}
   );
   assert.equal(invalid.status,400,JSON.stringify(invalid.body));
+});
+
+test('verification settings do not false-block equal Discord role positions', async t => {
+  const {mf} = await runtime(t, {
+    botRolePosition:1,
+    targetRolePosition:1
+  });
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const token = login.body.token;
+
+  const saved = await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    token,
+    'PUT',
+    {
+      verifiedRoleId:targetRoleId,
+      minAccountAgeDays:7
+    }
+  );
+
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.equal(saved.body.verifiedRoleId,targetRoleId);
+  assert.equal(saved.body.minAccountAgeDays,7);
 });
 
 test('D1 rejects multiline exec but migration uses complete prepared statements', async t => {
