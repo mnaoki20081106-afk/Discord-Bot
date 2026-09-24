@@ -389,6 +389,138 @@ async function botAccessGuardSweep(env:Env):Promise<void>{
   }
 }
 
+type ChannelPermissionKey=
+  "view"|"send"|"react"|"files"|"threads"|"connect"|"speak";
+type ChannelPermissionMode="inherit"|"allow"|"deny";
+type ChannelPermissionPatch=Partial<Record<ChannelPermissionKey,ChannelPermissionMode>>;
+
+const CHANNEL_PERMISSION_BITS:Record<ChannelPermissionKey,bigint>={
+  view:1024n,
+  send:2048n,
+  react:64n,
+  files:32768n,
+  threads:34359738368n,
+  connect:1048576n,
+  speak:2097152n
+};
+
+async function applyChannelRolePermissions(
+  env:Env,
+  guildId:string,
+  channel:DiscordChannel,
+  targetId:string,
+  roles:DiscordRole[],
+  member:DiscordGuildMember,
+  permissions:ChannelPermissionPatch
+):Promise<{allow:string;deny:string}>{
+  const botId=env.DISCORD_APPLICATION_ID.trim();
+  const botAdministrator=(botBasePermissions(guildId,roles,member)&8n)===8n;
+
+  if(!botAdministrator&&targetId!==botId){
+    const targetCanAffectBot=targetId===guildId||member.roles.includes(targetId);
+    if(targetCanAffectBot){
+      const effective=botChannelPermissions(
+        guildId,
+        botId,
+        roles,
+        member,
+        channel
+      );
+      const botCanManageChannel=
+        (effective&16n)===16n||
+        (botBasePermissions(guildId,roles,member)&16n)===16n;
+      if(!botCanManageChannel){
+        throw new HttpError(
+          409,
+          "このチャンネルの権限を変更するとBOT自身が締め出される可能性があります。対象カテゴリ/チャンネルでBOTの「チャンネルを見る」を許可し、BOTロールの「チャンネルの管理」を確認してください"
+        );
+      }
+      await protectBotChannelAccess(env,guildId,channel);
+    }
+  }
+
+  const current=(channel.permission_overwrites??[]).find(
+    overwrite=>overwrite.id===targetId&&overwrite.type===0
+  );
+  let allow=BigInt(current?.allow??"0");
+  let deny=BigInt(current?.deny??"0");
+
+  for(const [rawKey,mode] of Object.entries(permissions)){
+    if(!(rawKey in CHANNEL_PERMISSION_BITS)) continue;
+    if(mode!=="inherit"&&mode!=="allow"&&mode!=="deny") continue;
+    const key=rawKey as ChannelPermissionKey;
+    const bit=CHANNEL_PERMISSION_BITS[key];
+    allow&=~bit;
+    deny&=~bit;
+    if(mode==="allow") allow|=bit;
+    if(mode==="deny") deny|=bit;
+  }
+
+  try{
+    if(allow===0n&&deny===0n){
+      if(current){
+        const response=await botFetch(
+          env,
+          `/channels/${channel.id}/permissions/${targetId}`,
+          {method:"DELETE"}
+        );
+        if(!response.ok){
+          const detail=await response.text().catch(()=>"");
+          throw new DiscordApiError(
+            response.status,
+            "Discord API "+response.status+": "+detail.slice(0,300)
+          );
+        }
+      }
+    }else{
+      await botJson(
+        env,
+        `/channels/${channel.id}/permissions/${targetId}`,
+        {
+          method:"PUT",
+          body:JSON.stringify({
+            type:0,
+            allow:allow.toString(),
+            deny:deny.toString()
+          })
+        }
+      );
+    }
+  }catch(error){
+    if(error instanceof DiscordApiError&&error.status===403){
+      throw new HttpError(
+        403,
+        "Discordがこのチャンネルの権限変更を拒否しました。対象カテゴリ/チャンネルでBOTの「チャンネルを見る」を許可し、BOTロールの「チャンネルの管理」「ロールの管理」を確認してください"
+      );
+    }
+    throw error;
+  }
+
+  return {allow:allow.toString(),deny:deny.toString()};
+}
+
+function channelPermissionPatchMatches(
+  channel:DiscordChannel,
+  targetId:string,
+  permissions:ChannelPermissionPatch
+):boolean{
+  const overwrite=(channel.permission_overwrites??[]).find(
+    item=>item.id===targetId&&item.type===0
+  );
+  const allow=BigInt(overwrite?.allow??"0");
+  const deny=BigInt(overwrite?.deny??"0");
+
+  for(const [rawKey,mode] of Object.entries(permissions)){
+    if(!(rawKey in CHANNEL_PERMISSION_BITS)) continue;
+    if(mode!=="inherit"&&mode!=="allow"&&mode!=="deny") continue;
+    const bit=CHANNEL_PERMISSION_BITS[rawKey as ChannelPermissionKey];
+    if(mode==="allow"&&((allow&bit)!==bit||(deny&bit)!==0n)) return false;
+    if(mode==="deny"&&((deny&bit)!==bit||(allow&bit)!==0n)) return false;
+    if(mode==="inherit"&&((allow&bit)!==0n||(deny&bit)!==0n)) return false;
+  }
+  return true;
+}
+
 async function discordMeta(env:Env,guildId:string){
   let channels:DiscordChannel[];
   let roles:DiscordRole[];
@@ -1334,6 +1466,102 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     }
   }
 
+  const bulkChannelPermissionMatch=url.pathname.match(
+    /^\/api\/guilds\/(\d+)\/channels\/permissions\/bulk$/
+  );
+  if(bulkChannelPermissionMatch&&request.method==="PATCH"){
+    const guildId=bulkChannelPermissionMatch[1]!;
+    await requireGuild(request,env,guildId);
+    const input=await bodyObject<{
+      channelIds?:string[];
+      targetId?:string;
+      permissions?:ChannelPermissionPatch;
+    }>(request);
+
+    const channelIds=[...new Set(
+      (input.channelIds??[])
+        .map(id=>String(id).trim())
+        .filter(id=>/^\d+$/.test(id))
+    )];
+    const targetId=String(input.targetId??"").trim();
+    const permissions=input.permissions??{};
+    if(channelIds.length===0) throw new HttpError(400,"対象チャンネルを選択してください");
+    if(channelIds.length>100) throw new HttpError(400,"一度に変更できるのは100チャンネルまでです");
+    if(!/^\d+$/.test(targetId)) throw new HttpError(400,"対象ロールが不正です");
+    if(Object.keys(permissions).length===0){
+      throw new HttpError(400,"変更する権限を選択してください");
+    }
+
+    const [channels,roles]=await Promise.all([
+      botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`),
+      botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`)
+    ]);
+    if(targetId!==guildId&&!roles.some(role=>role.id===targetId)){
+      throw new HttpError(404,"対象ロールが見つかりません");
+    }
+    const member=await getBotGuildMember(env,guildId,roles);
+    const channelById=new Map(channels.map(channel=>[channel.id,channel]));
+    const updated:string[]=[];
+    const failed:Array<{id:string;name:string;message:string}>=[];
+
+    for(const channelId of channelIds){
+      const channel=channelById.get(channelId);
+      if(!channel||channel.type===4){
+        failed.push({
+          id:channelId,
+          name:channel?.name??channelId,
+          message:"チャンネルが見つかりません"
+        });
+        continue;
+      }
+      try{
+        await applyChannelRolePermissions(
+          env,
+          guildId,
+          channel,
+          targetId,
+          roles,
+          member,
+          permissions
+        );
+        updated.push(channelId);
+      }catch(error){
+        failed.push({
+          id:channel.id,
+          name:channel.name,
+          message:error instanceof Error?error.message:String(error)
+        });
+      }
+    }
+
+    const confirmed=await botJson<DiscordChannel[]>(
+      env,
+      `/guilds/${guildId}/channels`
+    );
+    const confirmedById=new Map(confirmed.map(channel=>[channel.id,channel]));
+    for(const channelId of [...updated]){
+      const channel=confirmedById.get(channelId);
+      if(!channel||!channelPermissionPatchMatches(channel,targetId,permissions)){
+        const original=channelById.get(channelId);
+        failed.push({
+          id:channelId,
+          name:original?.name??channelId,
+          message:"Discordから再取得した権限が指定内容と一致しませんでした"
+        });
+        updated.splice(updated.indexOf(channelId),1);
+      }
+    }
+
+    return json(env,{
+      ok:failed.length===0,
+      targetId,
+      requested:channelIds.length,
+      updated:updated.length,
+      updatedIds:updated,
+      failed
+    });
+  }
+
   const channelPermissionMatch=url.pathname.match(
     /^\/api\/guilds\/(\d+)\/channels\/(\d+)\/permissions\/(\d+)$/
   );
@@ -1345,17 +1573,9 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
     const input=await bodyObject<{
       targetType?:"role";
-      permissions?:Partial<Record<
-        "view"|"send"|"react"|"files"|"threads"|"connect"|"speak",
-        "inherit"|"allow"|"deny"
-      >>;
+      permissions?:ChannelPermissionPatch;
     }>(request);
 
-    // Do not GET /channels/:id here. Discord returns Missing Access for that
-    // endpoint when the bot cannot currently view a private channel, which
-    // previously made it impossible to repair/edit that channel from the
-    // dashboard. The guild channel list still gives us the canonical
-    // permission_overwrites used by the editor.
     const [channels,roles]=await Promise.all([
       botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`),
       botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`)
@@ -1367,109 +1587,22 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         "チャンネルが見つかりません。サーバー構成を再読み込みしてください"
       );
     }
-
     const member=await getBotGuildMember(env,guildId,roles);
-    const botId=env.DISCORD_APPLICATION_ID.trim();
-    const botAdministrator=(botBasePermissions(guildId,roles,member)&8n)===8n;
-
-    // Only protect bot access when channel overwrites can actually affect the
-    // bot. Administrator bypasses channel overwrites, so no member overwrite is
-    // needed in that case.
-    if(!botAdministrator&&targetId!==botId){
-      const targetCanAffectBot=
-        targetId===guildId||member.roles.includes(targetId);
-      if(targetCanAffectBot){
-        const effective=botChannelPermissions(
-          guildId,
-          botId,
-          roles,
-          member,
-          channel
-        );
-        const botCanManageChannel=
-          (effective&16n)===16n||
-          (botBasePermissions(guildId,roles,member)&16n)===16n;
-
-        if(!botCanManageChannel){
-          throw new HttpError(
-            409,
-            "このチャンネルの権限を変更するとBOT自身が締め出される可能性があります。BOT権限を更新してAdministratorを反映してから再試行してください"
-          );
-        }
-        await protectBotChannelAccess(env,guildId,channel);
-      }
-    }
-
-    const permissionBits={
-      view:1024n,
-      send:2048n,
-      react:64n,
-      files:32768n,
-      threads:34359738368n,
-      connect:1048576n,
-      speak:2097152n
-    } as const;
-
-    const current=(channel.permission_overwrites??[]).find(
-      overwrite=>overwrite.id===targetId&&overwrite.type===0
+    const result=await applyChannelRolePermissions(
+      env,
+      guildId,
+      channel,
+      targetId,
+      roles,
+      member,
+      input.permissions??{}
     );
-    let allow=BigInt(current?.allow??"0");
-    let deny=BigInt(current?.deny??"0");
-
-    for(const [key,mode] of Object.entries(input.permissions??{})){
-      if(!(key in permissionBits)) continue;
-      const bit=permissionBits[key as keyof typeof permissionBits];
-      allow&=~bit;
-      deny&=~bit;
-      if(mode==="allow") allow|=bit;
-      if(mode==="deny") deny|=bit;
-    }
-
-    try{
-      if(allow===0n&&deny===0n){
-        if(current){
-          const response=await botFetch(
-            env,
-            `/channels/${channelId}/permissions/${targetId}`,
-            {method:"DELETE"}
-          );
-          if(!response.ok){
-            const detail=await response.text().catch(()=>"");
-            throw new DiscordApiError(
-              response.status,
-              "Discord API "+response.status+": "+detail.slice(0,300)
-            );
-          }
-        }
-      }else{
-        await botJson(
-          env,
-          `/channels/${channelId}/permissions/${targetId}`,
-          {
-            method:"PUT",
-            body:JSON.stringify({
-              type:0,
-              allow:allow.toString(),
-              deny:deny.toString()
-            })
-          }
-        );
-      }
-    }catch(error){
-      if(error instanceof DiscordApiError&&error.status===403){
-        throw new HttpError(
-          403,
-          "Discordがこのチャンネルの権限変更を拒否しました。対象カテゴリ/チャンネルでBOTの「チャンネルを見る」を許可し、BOTロールの「チャンネルの管理」「ロールの管理」を確認してください"
-        );
-      }
-      throw error;
-    }
 
     return json(env,{
       ok:true,
       targetId,
-      allow:allow.toString(),
-      deny:deny.toString()
+      allow:result.allow,
+      deny:result.deny
     });
   }
 
@@ -1838,6 +1971,7 @@ export default {
         (/^\/api\/guilds\/\d+\/meta$/.test(url.pathname)&&request.method==="GET")||
         (/^\/api\/guilds\/\d+\/channels\/reorder$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)&&request.method==="PATCH")||
+        (/^\/api\/guilds\/\d+\/channels\/permissions\/bulk$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/roles(?:\/\d+)?$/.test(url.pathname)&&["POST","PATCH","DELETE"].includes(request.method))||
         (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")
       ){
