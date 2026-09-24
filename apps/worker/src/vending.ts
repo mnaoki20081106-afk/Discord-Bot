@@ -2,6 +2,7 @@ import type { Env } from "./types";
 import { botFetch, botJson } from "./discord";
 import { getDashboardSession } from "./db";
 import { json, randomId, sha256Hex } from "./utils";
+import { recordPanelDeployment } from "./backup-db";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
   deleteCoupon, deleteMachine, deleteStockNotify, deleteVmProduct, ensureVendingSchema, finishDelivery, getCoupon,
@@ -34,7 +35,11 @@ async function requireGuild(request:Request,env:Env,guildId:string){
 function input<T>(r:Request){ return r.json() as Promise<T>; }
 function ires(data:unknown){ return new Response(JSON.stringify(data),{headers:{"Content-Type":"application/json"}}); }
 function eph(content:string,components?:unknown[],embeds?:unknown[]){ return {type:4,data:{content,flags:64,...(components?{components}:{}),...(embeds?{embeds}:{})}}; }
-async function send(env:Env,channelId:string,payload:unknown){ await botJson(env,"/channels/"+channelId+"/messages",{method:"POST",body:JSON.stringify(payload)}); }
+async function send(env:Env,channelId:string,payload:unknown){
+  return botJson<{id?:string}>(env,"/channels/"+channelId+"/messages",{
+    method:"POST",body:JSON.stringify(payload)
+  });
+}
 async function sendFile(
   env:Env,
   channelId:string,
@@ -205,8 +210,11 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
   const panel=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/panel$/);
   if(panel&&request.method==="POST"){
     const guildId=panel[1]!,vmId=panel[2]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id),b=await input<{channelId:string}>(request),products=await listVmProducts(env,vmId);
-    await send(env,b.channelId,{embeds:[panelEmbed(vm,products)],components:[{type:1,components:[{type:2,style:3,label:"購入する",emoji:{name:"🛒"},custom_id:"vm:buy:"+vmId},{type:2,style:1,label:"在庫・販売数",emoji:{name:"📦"},custom_id:"vm:stock:"+vmId}]}]});
-    return json(env,{ok:true});
+    const message=await send(env,b.channelId,{embeds:[panelEmbed(vm,products)],components:[{type:1,components:[{type:2,style:3,label:"購入する",emoji:{name:"🛒"},custom_id:"vm:buy:"+vmId},{type:2,style:1,label:"在庫・販売数",emoji:{name:"📦"},custom_id:"vm:stock:"+vmId}]}]});
+    await recordPanelDeployment(env,{
+      guildId,kind:"vending",objectId:vmId,channelId:b.channelId,messageId:message.id??null
+    });
+    return json(env,{ok:true,messageId:message.id??null});
   }
 
   const panelUpdate=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/panel\/update$/);
