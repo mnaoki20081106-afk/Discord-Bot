@@ -299,35 +299,50 @@ async function handleJoin(member: GuildMember): Promise<void> {
   }
 }
 
-function makeChallengeCode(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(6);
-  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+function makeVerificationChallenge(): { question: string; answer: string } {
+  const bytes = randomBytes(2);
+  const left = 10 + (bytes[0]! % 90);
+  const right = 1 + (bytes[1]! % 9);
+  return {
+    question: `${left} + ${right}`,
+    answer: String(left + right)
+  };
+}
+
+function normalizeVerificationAnswer(value: string): string | null {
+  const normalized = value
+    .trim()
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/\s+/g, "");
+  if (!/^\d{2,3}$/.test(normalized)) return null;
+  const answer = Number(normalized);
+  if (!Number.isSafeInteger(answer) || answer < 11 || answer > 108) return null;
+  return String(answer);
 }
 
 async function startVerification(interaction: Interaction): Promise<void> {
   if (!interaction.isButton() || !interaction.guildId) return;
   const challengeId = randomUUID();
-  const code = makeChallengeCode();
+  const challenge = makeVerificationChallenge();
   challenges.set(challengeId, {
     guildId: interaction.guildId,
     userId: interaction.user.id,
-    code,
+    code: challenge.answer,
     expiresAt: Date.now() + 5 * 60_000
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`verify:answer:${challengeId}`)
-      .setLabel("コードを入力")
+      .setLabel("答えを入力")
       .setStyle(ButtonStyle.Primary)
   );
 
   await interaction.reply({
     ephemeral: true,
     content:
-      "下の確認コードを入力してください。5分で失効します。\n\n" +
-      `**${code.split("").join("  ")}**`,
+      "次の計算に答えてください。5分で失効します。\n\n" +
+      `**${challenge.question} = ?**`,
     components: [row]
   });
 }
@@ -351,11 +366,11 @@ async function openVerificationModal(interaction: Interaction): Promise<void> {
     .setTitle("サーバー認証");
   const input = new TextInputBuilder()
     .setCustomId("code")
-    .setLabel("確認コード")
+    .setLabel("計算の答え")
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
-    .setMinLength(6)
-    .setMaxLength(6);
+    .setMinLength(2)
+    .setMaxLength(3);
   modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
   await interaction.showModal(modal);
 }
@@ -365,21 +380,32 @@ async function completeVerification(interaction: Interaction): Promise<void> {
   const challengeId = interaction.customId.split(":")[2];
   if (!challengeId) return;
   const challenge = challenges.get(challengeId);
-  challenges.delete(challengeId);
 
   if (
     !challenge ||
     challenge.userId !== interaction.user.id ||
-    challenge.guildId !== interaction.guild.id ||
-    challenge.expiresAt < Date.now()
+    challenge.guildId !== interaction.guild.id
   ) {
-    await interaction.reply({ ephemeral: true, content: "認証が失効しています。" });
+    await interaction.reply({ ephemeral: true, content: "認証情報が一致しないか、認証が失効しています。" });
+    return;
+  }
+  if (challenge.expiresAt < Date.now()) {
+    challenges.delete(challengeId);
+    await interaction.reply({
+      ephemeral: true,
+      content: "認証が失効しています。もう一度「認証する」から始めてください。"
+    });
     return;
   }
 
-  const answer = interaction.fields.getTextInputValue("code").trim().toUpperCase();
-  if (answer !== challenge.code) {
-    await interaction.reply({ ephemeral: true, content: "コードが一致しません。" });
+  const answer = normalizeVerificationAnswer(
+    interaction.fields.getTextInputValue("code")
+  );
+  if (answer === null || answer !== challenge.code) {
+    await interaction.reply({
+      ephemeral: true,
+      content: "答えが違います。もう一度「答えを入力」から試してください。"
+    });
     return;
   }
 
@@ -413,6 +439,7 @@ async function completeVerification(interaction: Interaction): Promise<void> {
 
   const member = await interaction.guild.members.fetch(interaction.user.id);
   await member.roles.add(role, "Discord Server Manager verification");
+  challenges.delete(challengeId);
   await interaction.reply({ ephemeral: true, content: "認証が完了しました。" });
 }
 

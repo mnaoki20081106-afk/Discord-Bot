@@ -340,15 +340,16 @@ export async function putChallenge(
   `).bind(id,guildId,userId,code,Date.now()+5*60_000).run();
 }
 
-export async function consumeChallenge(env:Env,id:string): Promise<{
+export async function getChallenge(env:Env,id:string): Promise<{
   guild_id:string;user_id:string;code:string;expires_at:number
 }|null> {
-  const row=await env.DB.prepare(
+  return env.DB.prepare(
     "SELECT guild_id,user_id,code,expires_at FROM verification_challenges WHERE id=?"
   ).bind(id).first<{guild_id:string;user_id:string;code:string;expires_at:number}>();
-  if (!row) return null;
+}
+
+export async function deleteChallenge(env:Env,id:string): Promise<void> {
   await env.DB.prepare("DELETE FROM verification_challenges WHERE id=?").bind(id).run();
-  return row;
 }
 
 export async function getAuditCursor(env:Env,guildId:string): Promise<string|null> {
