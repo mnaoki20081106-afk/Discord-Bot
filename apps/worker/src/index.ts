@@ -2045,7 +2045,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v34-backup-audit",
+          version:"dashboard-auth-v35-achievement-room",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
