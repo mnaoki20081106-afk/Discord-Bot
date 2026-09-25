@@ -57,6 +57,7 @@ import { recordPanelDeployment } from "./backup-db";
 import {
   handleVendingApi,
   handleVendingInteraction,
+  handleVendingMedia,
   vendingSweep,
   VendingHttpError
 } from "./vending";
@@ -2675,7 +2676,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"vending-stock-v51",
+          version:"vending-ui-v52",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -2730,6 +2731,10 @@ export default {
 
       if(url.pathname==="/paypay/webhook"&&request.method==="POST"){
         return handlePayPayWebhook(request,env,ctx);
+      }
+      if(url.pathname.startsWith("/media/vending/")){
+        const mediaResponse=await handleVendingMedia(request,env,url);
+        if(mediaResponse) return mediaResponse;
       }
       if(url.pathname.startsWith("/api/")){
         const backupResponse=await handleBackupApi(request,env,url);
