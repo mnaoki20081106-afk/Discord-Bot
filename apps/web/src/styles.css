@@ -2644,7 +2644,7 @@ body.dsm-touch-reordering .discord-category {
 
 .vending-wysiwyg-title::placeholder {
   color: #f2f3f5;
-  opacity: .72;
+  opacity: 1;
 }
 
 .vending-wysiwyg-description {
@@ -2659,7 +2659,7 @@ body.dsm-touch-reordering .discord-category {
 
 .vending-wysiwyg-description::placeholder {
   color: #dbdee1;
-  opacity: .72;
+  opacity: 1;
 }
 
 .vending-wysiwyg-title:focus,
