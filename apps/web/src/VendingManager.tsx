@@ -175,6 +175,8 @@ export default function VendingManager({
     productEdit.infiniteStock!==Boolean(editingProduct!.infinite_stock) ||
     productEdit.infiniteContent!==(editingProduct!.infinite_content??"")
   );
+  const stockModeNeedsSave = Boolean(editingProduct) &&
+    productEdit.infiniteStock!==Boolean(editingProduct!.infinite_stock);
 
   const stockSummary = useMemo(()=>{
     const products=detail?.products??[];
@@ -312,6 +314,9 @@ export default function VendingManager({
 
   async function persistEditingProduct(){
     if(!selectedId||!editingProduct||!productDirty) return;
+    if(productEdit.infiniteStock&&!productEdit.infiniteContent.trim()){
+      throw new Error("無限在庫の商品は納品内容を入力してください");
+    }
     await api(
       `/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}`,
       {
@@ -532,6 +537,10 @@ export default function VendingManager({
 
   async function saveProduct(){
     if(!selectedId||!editingProduct) return;
+    if(productEdit.infiniteStock&&!productEdit.infiniteContent.trim()){
+      onError(new Error("無限在庫の商品は納品内容を入力してください"));
+      return;
+    }
     setBusy(true);
     try{
       await api(`/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}`,{
@@ -1254,11 +1263,16 @@ export default function VendingManager({
                           </label>
                           <small>{stockText ? stockText.split(/\r?\n/).filter(Boolean).length+"行を読込済み" : "1行＝在庫1件"}</small>
                         </div>
+                        {stockModeNeedsSave&&(
+                          <div className="vending-stock-save-first">
+                            在庫方式を変更しました。先に「商品を保存」してから有限在庫を操作してください。
+                          </div>
+                        )}
                         <div className="button-row">
-                          <button className="secondary" onClick={()=>void addStock()} disabled={!stockText.trim()||busy}>在庫追加</button>
-                          <button className="secondary" onClick={()=>void viewStock()}>在庫内容確認</button>
-                          <input className="withdraw-input" type="number" min={1} max={500} value={withdrawQuantity} onChange={e=>setWithdrawQuantity(Number(e.target.value))}/>
-                          <button className="secondary" onClick={()=>void withdraw()}>引出</button>
+                          <button className="secondary" onClick={()=>void addStock()} disabled={!stockText.trim()||busy||stockModeNeedsSave}>在庫追加</button>
+                          <button className="secondary" onClick={()=>void viewStock()} disabled={busy||stockModeNeedsSave}>在庫内容確認</button>
+                          <input className="withdraw-input" type="number" min={1} max={500} value={withdrawQuantity} onChange={e=>setWithdrawQuantity(Number(e.target.value))} disabled={stockModeNeedsSave}/>
+                          <button className="secondary" onClick={()=>void withdraw()} disabled={busy||stockModeNeedsSave||editingStockCount<=0}>引出</button>
                         </div>
                         {stockPreview.length>0&&(
                           <pre className="stock-preview">{stockPreview.map(item=>item.content).join("\n")}</pre>
