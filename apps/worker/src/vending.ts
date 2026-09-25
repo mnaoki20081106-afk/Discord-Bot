@@ -86,7 +86,8 @@ export async function handleVendingMedia(
   await ensureVendingSchema(env);
   const media=await getVmPanelImage(env,match[1]!);
   if(!media) return new Response("Not found",{status:404});
-  return new Response(decodeBase64(media.content_base64),{
+  const bytes=decodeBase64(media.content_base64);
+  return new Response(bytes.buffer as ArrayBuffer,{
     headers:{
       "Content-Type":media.mime_type,
       "Cache-Control":"public, max-age=31536000, immutable",
