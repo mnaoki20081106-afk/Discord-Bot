@@ -5,9 +5,9 @@ import { json, randomId, sha256Hex } from "./utils";
 import { recordPanelDeployment } from "./backup-db";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
-  deleteCoupon, deleteMachine, deleteStockNotify, deleteVmProduct, ensureVendingSchema, finishDelivery, getCoupon,
+  deleteAchievementRoom, deleteCoupon, deleteMachine, deleteStockNotify, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementChannelForMachine, getAchievementRoom, getCoupon,
   getMachine, getOrder, getPayPay, getStockNotify, getVmProduct, listCoupons, listMachines, listVmProducts,
-  markPaid, orderStock, releaseStock, removePayPay, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, stockContents,
+  markPaid, orderStock, releaseStock, removePayPay, reserveOrder, resetDelivery, saveAchievementRoom, savePayChallenge, savePayPay, saveStockNotify, stockContents,
   takePayChallenge, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
@@ -94,6 +94,41 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
       const b=await input<{name:string}>(request); const name=b.name?.trim();
       if(!name||name.length>80) throw new VendingHttpError(400,"自販機名が不正です");
       return json(env,await createMachine(env,guildId,session.user_id,name),201);
+    }
+  }
+
+  const achievementRoom=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/achievement-room$/);
+  if(achievementRoom){
+    const guildId=achievementRoom[1]!;
+    const session=await requireGuild(request,env,guildId);
+    if(request.method==="GET"){
+      const room=await getAchievementRoom(env,guildId,session.user_id);
+      return json(env,room??{guild_id:guildId,owner_id:session.user_id,channel_id:null,machine_ids:[],updated_at:0});
+    }
+    if(request.method==="PUT"){
+      const b=await input<{channelId?:string|null;machineIds?:string[]}>(request);
+      const channelId=String(b.channelId??"").trim();
+      const machineIds=[...new Set((Array.isArray(b.machineIds)?b.machineIds:[]).map(String).filter(Boolean))];
+      if(!channelId) throw new VendingHttpError(400,"実績部屋のチャンネルを選択してください");
+      if(machineIds.length===0) throw new VendingHttpError(400,"通知する自販機を1つ以上選択してください");
+      const owned=await listMachines(env,guildId,session.user_id);
+      const allowed=new Set(owned.map(machine=>machine.id));
+      if(machineIds.some(machineId=>!allowed.has(machineId))){
+        throw new VendingHttpError(400,"選択された自販機に無効な項目があります");
+      }
+      const channel=await botJson<{guild_id?:string;type?:number}>(env,"/channels/"+channelId);
+      if(channel.guild_id!==guildId) throw new VendingHttpError(400,"このサーバーのチャンネルを選択してください");
+      const room=await saveAchievementRoom(env,{
+        guildId,
+        ownerId:session.user_id,
+        channelId,
+        machineIds
+      });
+      return json(env,room);
+    }
+    if(request.method==="DELETE"){
+      await deleteAchievementRoom(env,guildId,session.user_id);
+      return json(env,{ok:true});
     }
   }
 
@@ -297,6 +332,37 @@ function selectOptions(products:Array<VmProduct&{stock_count:number}>,method:"pa
   return products.slice(0,25).map(p=>({label:p.name.slice(0,100),value:p.id,description:(method==="paypay"?p.price_paypay:p.price_kyash)+"円 | 在庫 "+(p.infinite_stock?"∞":p.stock_count)+" | 販売 "+p.sales_count,...(p.emoji?{emoji:componentEmoji(p.emoji)}:{})}));
 }
 
+async function sendAchievementPurchase(
+  env:Env,
+  order:VmOrder,
+  vm:Vm,
+  product:VmProduct
+){
+  const channelId=await getAchievementChannelForMachine(
+    env,
+    order.guild_id,
+    vm.owner_id,
+    vm.id
+  );
+  if(!channelId) return;
+  const productName=(product.emoji?product.emoji+" ":"")+product.name;
+  const embed:any={
+    title:"🎉 商品購入ログ",
+    color:5763719,
+    fields:[
+      {name:"購入者",value:"<@"+order.user_id+">",inline:false},
+      {name:"商品名",value:productName.slice(0,1024),inline:false},
+      {name:"個数",value:String(order.quantity)+"個",inline:false}
+    ],
+    footer:{text:"注文ID: "+order.id},
+    timestamp:new Date().toISOString()
+  };
+  if(vm.panel_image_url&&/^https?:\/\//i.test(vm.panel_image_url)){
+    embed.thumbnail={url:vm.panel_image_url};
+  }
+  await send(env,channelId,{embeds:[embed]});
+}
+
 async function deliver(env:Env,order:VmOrder){
   if(order.delivered_at) return;
   if(!(await claimDelivery(env,order.id))) return;
@@ -336,6 +402,9 @@ async function deliver(env:Env,order:VmOrder){
       ).catch(()=>undefined);
     }
     await finishDelivery(env,order);
+    await sendAchievementPurchase(env,order,vm,product).catch(error=>{
+      console.error("vending achievement log failed",order.id,error);
+    });
   }catch(error){
     await resetDelivery(env,order.id);
     throw error;
