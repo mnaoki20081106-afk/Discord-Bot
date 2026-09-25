@@ -379,7 +379,7 @@ advanced: TEXT_ADVANCED_PERMISSION_ROWS
 };
 }, [bulkSelectedChannels]);
 const selectedPermissionGroups = selectedChannel
-? permissionGroupsForChannelType(selectedChannel.type)
+? permissionGroupsForChannelType(selectedChannel.type ?? "text")
 : permissionGroupsForChannelType("text");
 function renderPermissionRows(rows: PermissionRow[], bulk = false) {
 if (bulk) {
