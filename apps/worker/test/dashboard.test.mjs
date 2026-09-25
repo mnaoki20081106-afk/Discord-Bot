@@ -387,9 +387,25 @@ test('verification stores recovery access before assigning the role', async t =>
     'SELECT COUNT(*) AS count FROM verification_challenges'
   ).first();
   assert.equal(remaining.count,0);
+
+  const legacyStart=await mf.dispatchFetch(
+    'https://worker.example/auth/recovery/start?guild_id='+encodeURIComponent(guildId)
+  );
+  assert.equal(legacyStart.status,302);
+  const legacyAuthorizeUrl=new URL(legacyStart.headers.get('location'));
+  const legacyState=legacyAuthorizeUrl.searchParams.get('state');
+  assert.ok(legacyState);
+  const legacyStateRow=await db.prepare(
+    'SELECT purpose FROM member_recovery_oauth_states WHERE state=?'
+  ).bind(legacyState).first();
+  assert.equal(
+    legacyStateRow?.purpose,
+    'verification',
+    'legacy recovery links must use the unified verification flow'
+  );
 });
 
-test('backup snapshot is encrypted, listed, previewable, and recovery panel is tracked', async t => {
+test('backup snapshot is encrypted, listed, previewable, and recovery uses verification', async t => {
   const {mf,db,calls} = await runtime(t);
   const login = await request(mf, '/api/login', null, 'POST', {
     password:'local-test-password'
@@ -453,6 +469,12 @@ test('backup snapshot is encrypted, listed, previewable, and recovery panel is t
   );
   assert.equal(recovery.status,200,JSON.stringify(recovery.body));
   assert.equal(recovery.body.registered,0);
+  assert.equal(recovery.body.registrationMode,'verification');
+  assert.equal(recovery.body.separatePanelAvailable,false);
+  assert.equal(
+    recovery.body.authorizePath,
+    '/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+  );
 
   const panel = await request(
     mf,
@@ -461,18 +483,12 @@ test('backup snapshot is encrypted, listed, previewable, and recovery panel is t
     'POST',
     {channelId:chatChannelId}
   );
-  assert.equal(panel.status,200,JSON.stringify(panel.body));
+  assert.equal(panel.status,410,JSON.stringify(panel.body));
+  assert.match(panel.body.message,/認証パネルへ統合/);
   const deployment = await db.prepare(
-    "SELECT kind,channel_id,message_id FROM panel_deployments WHERE guild_id=? AND kind='recovery'"
+    "SELECT COUNT(*) AS count FROM panel_deployments WHERE guild_id=? AND kind='recovery'"
   ).bind(guildId).first();
-  assert.equal(deployment.channel_id,chatChannelId);
-  assert.ok(deployment.message_id);
-  assert.ok(
-    calls.some(call=>
-      call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
-    ),
-    'recovery panel must be posted through Discord API'
-  );
+  assert.equal(deployment.count,0);
 });
 
 test('restore job replays guild extras and bans without deleting existing structure', async t => {
