@@ -1181,7 +1181,7 @@ async function restorePanels(
           };
         }
       }else if(panel.kind==="recovery"){
-        stats.warnings.push("復旧登録パネルは復元先で新しいWorker URLを埋め込む必要があるため、管理画面から再設置してください。");
+        stats.warnings.push("旧・復旧登録パネルは認証パネルへ統合済みのため復元しません。復元先では認証タブの認証パネルを使用してください。");
         continue;
       }else if(panel.kind==="vending"){
         const newVmId=vmMap[panel.objectId];
