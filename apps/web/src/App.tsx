@@ -719,7 +719,7 @@ export default function App() {
                 className={activeView === "backup" ? "active" : ""}
                 onClick={() => setActiveView("backup")}
               >
-                バックアップ
+                バックアップ管理
               </button>
             </nav>
 
