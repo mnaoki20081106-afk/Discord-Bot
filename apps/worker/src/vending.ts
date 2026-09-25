@@ -177,15 +177,42 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
       if(!name||name.length>80) throw new VendingHttpError(400,"商品名が不正です");
       const pp=Math.max(0,Number(b.pricePayPay??0)),ky=Math.max(0,Number(b.priceKyash??0));
       if(!Number.isInteger(pp)||!Number.isInteger(ky)) throw new VendingHttpError(400,"価格は整数で入力してください");
-      return json(env,await createVmProduct(env,vmId,{name,description:String(b.description??"").slice(0,500),pricePayPay:pp,priceKyash:ky,emoji:b.emoji?String(b.emoji).slice(0,64):null}),201);
+      const infiniteStock=Boolean(b.infiniteStock);
+      const infiniteContent=infiniteStock?String(b.infiniteContent??"").trim():null;
+      if(infiniteStock&&!infiniteContent) throw new VendingHttpError(400,"無限在庫の商品は納品内容を入力してください");
+      return json(env,await createVmProduct(env,vmId,{
+        name,
+        description:String(b.description??"").slice(0,500),
+        pricePayPay:pp,
+        priceKyash:ky,
+        emoji:b.emoji?String(b.emoji).slice(0,64):null,
+        infiniteStock,
+        infiniteContent
+      }),201);
     }
   }
 
   const product=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/products\/([^/]+)$/);
   if(product){
-    const guildId=product[1]!,vmId=product[2]!,productId=product[3]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id); await productOwned(env,productId,vm);
+    const guildId=product[1]!,vmId=product[2]!,productId=product[3]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id),currentProduct=await productOwned(env,productId,vm);
     if(request.method==="PATCH"){
-      const b=await input<any>(request); await updateVmProduct(env,productId,vmId,{name:b.name?.trim(),description:b.description,pricePayPay:b.pricePayPay===undefined?undefined:Number(b.pricePayPay),priceKyash:b.priceKyash===undefined?undefined:Number(b.priceKyash),emoji:b.emoji,infiniteStock:b.infiniteStock,infiniteContent:b.infiniteContent});
+      const b=await input<any>(request);
+      const nextInfinite=b.infiniteStock===undefined?Boolean(currentProduct.infinite_stock):Boolean(b.infiniteStock);
+      const nextInfiniteContent=b.infiniteContent===undefined
+        ? String(currentProduct.infinite_content??"")
+        : String(b.infiniteContent??"");
+      if(nextInfinite&&!nextInfiniteContent.trim()){
+        throw new VendingHttpError(400,"無限在庫の商品は納品内容を入力してください");
+      }
+      await updateVmProduct(env,productId,vmId,{
+        name:b.name?.trim(),
+        description:b.description,
+        pricePayPay:b.pricePayPay===undefined?undefined:Number(b.pricePayPay),
+        priceKyash:b.priceKyash===undefined?undefined:Number(b.priceKyash),
+        emoji:b.emoji,
+        infiniteStock:b.infiniteStock,
+        infiniteContent:b.infiniteContent===undefined?undefined:nextInfiniteContent.trim()
+      });
       return json(env,{ok:true});
     }
     if(request.method==="DELETE") return json(env,{ok:await deleteVmProduct(env,productId,vmId)});
@@ -193,9 +220,10 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
 
   const stock=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/products\/([^/]+)\/stock$/);
   if(stock){
-    const guildId=stock[1]!,vmId=stock[2]!,productId=stock[3]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id); await productOwned(env,productId,vm);
+    const guildId=stock[1]!,vmId=stock[2]!,productId=stock[3]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id),stockProduct=await productOwned(env,productId,vm);
     if(request.method==="GET") return json(env,await stockContents(env,productId));
     if(request.method==="POST"){
+      if(stockProduct.infinite_stock) throw new VendingHttpError(409,"無限在庫の商品には有限在庫を追加できません");
       const b=await input<{text?:string;lines?:string[];notify?:boolean}>(request);
       const lines=Array.isArray(b.lines)?b.lines:String(b.text??"").split(/\r?\n/);
       if(lines.filter(Boolean).length>500) throw new VendingHttpError(413,"在庫は1回500件まで追加できます");
@@ -225,7 +253,8 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
 
   const withdraw=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/products\/([^/]+)\/withdraw$/);
   if(withdraw&&request.method==="POST"){
-    const guildId=withdraw[1]!,vmId=withdraw[2]!,productId=withdraw[3]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id); await productOwned(env,productId,vm);
+    const guildId=withdraw[1]!,vmId=withdraw[2]!,productId=withdraw[3]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id),withdrawProduct=await productOwned(env,productId,vm);
+    if(withdrawProduct.infinite_stock) throw new VendingHttpError(409,"無限在庫の商品は引き出せません");
     const b=await input<{quantity:number}>(request),q=Math.max(1,Math.min(500,Number(b.quantity)||1));
     const items=await withdrawStock(env,productId,q); if(items.length<q) throw new VendingHttpError(409,"在庫が不足しています");
     return json(env,{items});
