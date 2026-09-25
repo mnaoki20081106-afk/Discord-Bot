@@ -496,6 +496,43 @@ test('verification panel oauth stores recovery access before assigning the role'
   );
 });
 
+test('cancelled discord verification consumes state without registering', async t => {
+  const {mf,db,verificationMemberRoles} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  const settings = await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    login.body.token,
+    'PUT',
+    {verifiedRoleId:targetRoleId,minAccountAgeDays:0}
+  );
+  assert.equal(settings.status,200,JSON.stringify(settings.body));
+
+  const started=await mf.dispatchFetch(
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+  );
+  const state=new URL(started.headers.get('location')).searchParams.get('state');
+  assert.ok(state);
+
+  const cancelled=await mf.dispatchFetch(
+    'https://worker.example/auth/discord/callback?error=access_denied&state='+encodeURIComponent(state)
+  );
+  assert.equal(cancelled.status,400);
+  assert.match(await cancelled.text(),/認証をキャンセルしました/);
+
+  const remaining=await db.prepare(
+    'SELECT COUNT(*) AS count FROM member_recovery_oauth_states WHERE state=?'
+  ).bind(state).first();
+  assert.equal(remaining.count,0);
+  const saved=await db.prepare(
+    'SELECT COUNT(*) AS count FROM member_recovery_tokens WHERE guild_id=? AND user_id=?'
+  ).bind(guildId,verificationUserId).first();
+  assert.equal(saved.count,0);
+  assert.equal(verificationMemberRoles.includes(targetRoleId),false);
+});
+
 test('verification rejection does not create recovery registration', async t => {
   const {mf,db,verificationMemberRoles} = await runtime(t);
   const login = await request(mf, '/api/login', null, 'POST', {
