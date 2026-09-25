@@ -1,6 +1,6 @@
 import type { Env, GuildSettings, ProductRow } from "./types";
 import { botFetch, botJson, DiscordApiError, syncAutoMod, type DiscordChannel, type DiscordRole } from "./discord";
-import { getDashboardSession, getGuildSettings } from "./db";
+import { ensureSchema, getDashboardSession, getGuildSettings } from "./db";
 import { ensureVendingSchema } from "./vending-db";
 import { accountCreatedAt, decrypt, encrypt, json, randomId, randomToken, sha256Hex } from "./utils";
 import {
@@ -1745,6 +1745,11 @@ export async function handleRecoveryOAuth(
   if(url.pathname==="/auth/verification/start"&&request.method==="GET"){
     const guildId=String(url.searchParams.get("guild_id")??"");
     if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
+    await ensureSchema(env);
+    const settings=await getGuildSettings(env,guildId);
+    if(!settings.verifiedRoleId){
+      throw new BackupHttpError(409,"認証ロールが設定されていません。管理者に確認してください");
+    }
     await botJson(env,"/guilds/"+guildId);
     const state=randomToken(24);
     await putRecoveryOAuthState(env,state,guildId,{purpose:"verification"});
@@ -1756,6 +1761,11 @@ export async function handleRecoveryOAuth(
     // route them through the same verification + recovery registration flow.
     const guildId=String(url.searchParams.get("guild_id")??"");
     if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
+    await ensureSchema(env);
+    const settings=await getGuildSettings(env,guildId);
+    if(!settings.verifiedRoleId){
+      throw new BackupHttpError(409,"認証ロールが設定されていません。管理者に確認してください");
+    }
     await botJson(env,"/guilds/"+guildId);
     const state=randomToken(24);
     await putRecoveryOAuthState(env,state,guildId,{purpose:"verification"});
@@ -1769,6 +1779,7 @@ export async function handleRecoveryOAuth(
     const recoveryState=await consumeRecoveryOAuthState(env,state);
     if(!recoveryState) return null;
     const guildId=recoveryState.guildId;
+    await ensureSchema(env);
 
     const tokens=await oauthTokenRequest(env,new URLSearchParams({
       grant_type:"authorization_code",
