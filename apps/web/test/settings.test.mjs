@@ -52,6 +52,9 @@ test('typed ID separators, save-in-flight edits, reload persistence, and backup 
  const trusted=await screen.findByLabelText(/信頼ユーザーID/);
  await user.type(trusted,'400000000000000001,400000000000000002');
  assert.equal(trusted.value,'400000000000000001,400000000000000002','typing comma must not erase separator');
+ const verificationTab=screen.getByRole('tab',{name:'認証'});
+ await user.click(verificationTab);
+ assert.equal(verificationTab.getAttribute('aria-selected'),'true');
  const age=screen.getByLabelText(/アカウント.*日|最低.*日/);
  await user.clear(age);await user.type(age,'31');
  await user.click(screen.getByRole('button',{name:'認証設定を保存'}));
@@ -65,9 +68,11 @@ test('typed ID separators, save-in-flight edits, reload persistence, and backup 
  await waitFor(()=>assert.equal(writes.length,2));
  await React.act(async()=>{releaseSave();});
  cleanup();render(React.createElement(App));
- assert.equal((await screen.findByLabelText(/アカウント.*日|最低.*日/)).value,'42');
+ const verificationTabAfterReload=await screen.findByRole('tab',{name:'認証'});
+ await user.click(verificationTabAfterReload);
+ assert.equal(screen.getByLabelText(/アカウント.*日|最低.*日/).value,'42');
  assert.equal(screen.getByLabelText(/信頼ユーザーID/).value,'400000000000000001,400000000000000002');
- await user.click(screen.getByRole('button',{name:'バックアップ管理'}));
+ await user.click(screen.getByRole('tab',{name:'バックアップ管理'}));
  await user.type(await screen.findByLabelText('メモ / 名前'),'入力保存テスト');
  await user.click(screen.getByRole('button',{name:'今すぐバックアップを作成'}));
  await screen.findByText('入力保存テスト');
