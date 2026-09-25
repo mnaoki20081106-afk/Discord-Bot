@@ -401,7 +401,7 @@ export async function markRecoveryMemberRevoked(
 }
 
 export async function createRestoreJob(
-  env:Env,backupId:string,targetGuildId:string
+  env:Env,backupId:string,targetGuildId:string,workerOrigin:string
 ):Promise<RestoreJobRow|null>{
   await ensureBackupSchema(env);
   const existing=await env.DB.prepare(`
@@ -409,17 +409,29 @@ export async function createRestoreJob(
     WHERE target_guild_id=? AND status IN ('queued','running')
     ORDER BY created_at DESC LIMIT 1
   `).bind(targetGuildId).first<RestoreJobRow>();
-  if(existing) return existing;
+  if(existing){
+    let result:Record<string,unknown>={};
+    try{result=JSON.parse(existing.result_json||"{}") as Record<string,unknown>;}catch{}
+    if(!result.workerOrigin){
+      result.workerOrigin=workerOrigin;
+      await env.DB.prepare(
+        "UPDATE guild_restore_jobs SET result_json=?,updated_at=? WHERE id=? AND status IN ('queued','running')"
+      ).bind(JSON.stringify(result),Date.now(),existing.id).run();
+      existing.result_json=JSON.stringify(result);
+    }
+    return existing;
+  }
 
   const id=randomId(),now=Date.now();
+  const resultJson=JSON.stringify({workerOrigin});
   await env.DB.prepare(`
     INSERT INTO guild_restore_jobs(
       id,backup_id,target_guild_id,status,phase,cursor,role_map_json,channel_map_json,
       vm_map_json,product_map_json,result_json,error,created_at,updated_at
-    ) SELECT ?,?,?,'queued','preflight',0,'{}','{}','{}','{}','{}',NULL,?,?
+    ) SELECT ?,?,?,'queued','preflight',0,'{}','{}','{}','{}',?,NULL,?,?
     WHERE EXISTS (SELECT 1 FROM guild_backups WHERE id=?)
       AND NOT EXISTS (SELECT 1 FROM guild_restore_jobs WHERE target_guild_id=? AND status IN ('queued','running'))
-  `).bind(id,backupId,targetGuildId,now,now,backupId,targetGuildId).run();
+  `).bind(id,backupId,targetGuildId,resultJson,now,now,backupId,targetGuildId).run();
   return (await env.DB.prepare("SELECT * FROM guild_restore_jobs WHERE target_guild_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1").bind(targetGuildId).first<RestoreJobRow>())!;
 }
 
