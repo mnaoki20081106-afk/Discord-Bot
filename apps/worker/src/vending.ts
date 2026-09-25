@@ -5,9 +5,9 @@ import { json, randomId, sha256Hex } from "./utils";
 import { recordPanelDeployment } from "./backup-db";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
-  deleteCoupon, deleteMachine, deleteStockNotify, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementChannelsForMachine, getCoupon,
-  getMachine, getOrder, getPayPay, getStockNotify, getVmProduct, listAchievementRooms, listCoupons, listMachines, listVmProducts,
-  markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, stockContents,
+  deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementChannelsForMachine, getCoupon,
+  getMachine, getOrder, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, listAchievementRooms, listCoupons, listMachines, listVmProducts,
+  markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, saveVmPanelImage, stockContents,
   takePayChallenge, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
@@ -67,6 +67,32 @@ async function productOwned(env:Env,productId:string,vm:Vm){
   const p=await getVmProduct(env,productId);
   if(!p||p.vending_machine_id!==vm.id) throw new VendingHttpError(404,"商品が見つかりません");
   return p;
+}
+
+function decodeBase64(base64:string):Uint8Array{
+  const raw=atob(base64);
+  const bytes=new Uint8Array(raw.length);
+  for(let index=0;index<raw.length;index++) bytes[index]=raw.charCodeAt(index);
+  return bytes;
+}
+
+export async function handleVendingMedia(
+  request:Request,
+  env:Env,
+  url:URL
+):Promise<Response|null>{
+  const match=url.pathname.match(/^\/media\/vending\/([^/]+)\/panel-image$/);
+  if(!match||request.method!=="GET") return null;
+  await ensureVendingSchema(env);
+  const media=await getVmPanelImage(env,match[1]!);
+  if(!media) return new Response("Not found",{status:404});
+  return new Response(decodeBase64(media.content_base64),{
+    headers:{
+      "Content-Type":media.mime_type,
+      "Cache-Control":"public, max-age=31536000, immutable",
+      "Access-Control-Allow-Origin":"*"
+    }
+  });
 }
 
 function panelEmbed(vm:Vm,products:Array<VmProduct&{stock_count:number}>){
@@ -153,6 +179,32 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
         rooms
       });
       return json(env,{rooms:saved});
+    }
+  }
+
+  const panelImage=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/panel-image$/);
+  if(panelImage){
+    const guildId=panelImage[1]!,vmId=panelImage[2]!,session=await requireGuild(request,env,guildId);
+    await machineOwned(env,vmId,session.user_id);
+    if(request.method==="POST"){
+      const b=await input<{dataUrl?:string}>(request);
+      const dataUrl=String(b.dataUrl??"");
+      const match=dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/i);
+      if(!match) throw new VendingHttpError(400,"PNG・JPEG・WebP・GIF画像を選択してください");
+      const mimeType=match[1]!.toLowerCase();
+      const contentBase64=match[2]!;
+      if(contentBase64.length>1_200_000){
+        throw new VendingHttpError(413,"画像が大きすぎます。自動圧縮後でも約900KB以下にしてください");
+      }
+      const updatedAt=await saveVmPanelImage(env,vmId,session.user_id,mimeType,contentBase64);
+      const publicUrl=`${url.origin}/media/vending/${vmId}/panel-image?v=${updatedAt}`;
+      await updateMachine(env,vmId,session.user_id,{panelImageUrl:publicUrl});
+      return json(env,{ok:true,url:publicUrl});
+    }
+    if(request.method==="DELETE"){
+      await deleteVmPanelImage(env,vmId,session.user_id);
+      await updateMachine(env,vmId,session.user_id,{panelImageUrl:null});
+      return json(env,{ok:true});
     }
   }
 
