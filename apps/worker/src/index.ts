@@ -429,18 +429,50 @@ async function botAccessGuardSweep(env:Env):Promise<void>{
 }
 
 type ChannelPermissionKey=
-  "view"|"send"|"react"|"files"|"threads"|"connect"|"speak";
+  "view"|"send"|"history"|"react"|"files"|"embeds"|"appCommands"|"polls"|
+  "createPublicThreads"|"createPrivateThreads"|"sendInThreads"|"manageThreads"|
+  "manageMessages"|"mentionEveryone"|"externalEmojis"|"externalStickers"|
+  "voiceMessages"|"createInvite"|"manageWebhooks"|"pinMessages"|"bypassSlowmode"|
+  "connect"|"speak"|"stream"|"useVad"|"soundboard"|"externalSounds"|
+  "setVoiceStatus"|"prioritySpeaker"|"muteMembers"|"deafenMembers"|"moveMembers"|
+  "threads";
 type ChannelPermissionMode="inherit"|"allow"|"deny";
 type ChannelPermissionPatch=Partial<Record<ChannelPermissionKey,ChannelPermissionMode>>;
 
 const CHANNEL_PERMISSION_BITS:Record<ChannelPermissionKey,bigint>={
   view:1024n,
   send:2048n,
+  history:65536n,
   react:64n,
   files:32768n,
-  threads:34359738368n,
+  embeds:16384n,
+  appCommands:2147483648n,
+  polls:562949953421312n,
+  createPublicThreads:34359738368n,
+  createPrivateThreads:68719476736n,
+  sendInThreads:274877906944n,
+  manageThreads:17179869184n,
+  manageMessages:8192n,
+  mentionEveryone:131072n,
+  externalEmojis:262144n,
+  externalStickers:137438953472n,
+  voiceMessages:70368744177664n,
+  createInvite:1n,
+  manageWebhooks:536870912n,
+  pinMessages:2251799813685248n,
+  bypassSlowmode:4503599627370496n,
   connect:1048576n,
-  speak:2097152n
+  speak:2097152n,
+  stream:512n,
+  useVad:33554432n,
+  soundboard:4398046511104n,
+  externalSounds:35184372088832n,
+  setVoiceStatus:281474976710656n,
+  prioritySpeaker:256n,
+  muteMembers:4194304n,
+  deafenMembers:8388608n,
+  moveMembers:16777216n,
+  threads:34359738368n
 };
 
 async function botFetchInteractive(
@@ -2631,7 +2663,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v47-redeploy",
+          version:"channel-permissions-v49",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
