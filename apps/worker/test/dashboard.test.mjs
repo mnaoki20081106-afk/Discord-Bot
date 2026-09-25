@@ -339,7 +339,7 @@ for (const legacy of [false, true]) {
   });
 }
 
-test('verification stores recovery access before assigning the role', async t => {
+test('verification panel oauth stores recovery access before assigning the role', async t => {
   const {mf,calls,db,interactionPrivateKey,verificationMemberRoles} = await runtime(t);
   const login = await request(mf, '/api/login', null, 'POST', {
     password:'local-test-password'
@@ -353,24 +353,30 @@ test('verification stores recovery access before assigning the role', async t =>
   );
   assert.equal(settings.status,200,JSON.stringify(settings.body));
 
-  const started = await signedInteraction(mf,interactionPrivateKey,{
-    type:3,
-    guild_id:guildId,
-    member:{user:{id:verificationUserId,username:'Verifier'}},
-    data:{custom_id:`verify:start:${guildId}`}
-  });
-  assert.equal(started.status,200,JSON.stringify(started.body));
-  assert.match(started.body.data.content,/Discord認証/);
-  assert.equal(verificationMemberRoles.includes(targetRoleId),false);
-
-  const authorizeUrl=new URL(started.body.data.components[0].components[0].url);
+  // This is the actual URL used by newly deployed verification panels.
+  const started=await mf.dispatchFetch(
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+  );
+  assert.equal(started.status,302);
+  const authorizeUrl=new URL(started.headers.get('location'));
+  assert.equal(authorizeUrl.hostname,'discord.com');
+  assert.ok(authorizeUrl.searchParams.get('scope')?.includes('guilds.join'));
   const state=authorizeUrl.searchParams.get('state');
   assert.ok(state);
+  assert.equal(verificationMemberRoles.includes(targetRoleId),false);
+
+  const stateRow=await db.prepare(
+    'SELECT purpose,expected_user_id FROM member_recovery_oauth_states WHERE state=?'
+  ).bind(state).first();
+  assert.equal(stateRow?.purpose,'verification');
+  assert.equal(stateRow?.expected_user_id,null);
 
   const callback=await mf.dispatchFetch(
     'https://worker.example/auth/discord/callback?code=ok&state='+encodeURIComponent(state)
   );
   assert.equal(callback.status,200);
+  assert.equal(callback.headers.get('cache-control'),'no-store');
+  assert.match(callback.headers.get('content-security-policy')??'',/default-src 'none'/);
 
   const saved = await db.prepare(
     'SELECT user_id,revoked_at FROM member_recovery_tokens WHERE guild_id=? AND user_id=?'
@@ -382,6 +388,25 @@ test('verification stores recovery access before assigning the role', async t =>
   const grantPath=
     `/api/v10/guilds/${guildId}/members/${verificationUserId}/roles/${targetRoleId}`;
   assert.ok(calls.some(call=>call.method==='PUT'&&call.path===grantPath));
+
+  // Restored/legacy verification panels still use an interaction button.
+  // It must create the same verification-purpose OAuth state and bind it to
+  // the Discord user who pressed the button.
+  const interactionStart = await signedInteraction(mf,interactionPrivateKey,{
+    type:3,
+    guild_id:guildId,
+    member:{user:{id:verificationUserId,username:'Verifier'}},
+    data:{custom_id:`verify:start:${guildId}`}
+  });
+  assert.equal(interactionStart.status,200,JSON.stringify(interactionStart.body));
+  const interactionUrl=new URL(interactionStart.body.data.components[0].components[0].url);
+  const interactionState=interactionUrl.searchParams.get('state');
+  assert.ok(interactionState);
+  const interactionStateRow=await db.prepare(
+    'SELECT purpose,expected_user_id FROM member_recovery_oauth_states WHERE state=?'
+  ).bind(interactionState).first();
+  assert.equal(interactionStateRow?.purpose,'verification');
+  assert.equal(interactionStateRow?.expected_user_id,verificationUserId);
 
   const remaining = await db.prepare(
     'SELECT COUNT(*) AS count FROM verification_challenges'
