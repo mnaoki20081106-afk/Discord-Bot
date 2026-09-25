@@ -1673,6 +1673,32 @@ function escapeHtmlText(value:string):string{
   });
 }
 
+function verificationHtmlResponse(
+  title:string,
+  heading:string,
+  detail:string,
+  status=200
+):Response{
+  return new Response(
+    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"+
+    "<title>"+escapeHtmlText(title)+"</title>"+
+    "<body style='font-family:system-ui;background:#070b14;color:#eef3ff;padding:40px'>"+
+    "<main style='max-width:560px;margin:auto;background:#10172a;border:1px solid #202943;border-radius:20px;padding:28px'>"+
+    "<h1>"+escapeHtmlText(heading)+"</h1><p>"+escapeHtmlText(detail)+"</p>"+
+    "<p>このページは閉じて大丈夫です。</p></main></body>",
+    {
+      status,
+      headers:{
+        "Content-Type":"text/html; charset=utf-8",
+        "Cache-Control":"no-store",
+        "Referrer-Policy":"no-referrer",
+        "X-Content-Type-Options":"nosniff",
+        "Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+      }
+    }
+  );
+}
+
 function recoveryAuthorizeUrl(
   env:Env,origin:string,state:string,forceConsent=true
 ):string{
@@ -1775,6 +1801,19 @@ export async function handleRecoveryOAuth(
   if(url.pathname==="/auth/discord/callback"&&request.method==="GET"){
     const code=url.searchParams.get("code");
     const state=url.searchParams.get("state");
+    const oauthError=url.searchParams.get("error");
+    if(oauthError&&state){
+      const recoveryState=await consumeRecoveryOAuthState(env,state);
+      if(!recoveryState) return null;
+      return verificationHtmlResponse(
+        "認証キャンセル",
+        "認証をキャンセルしました",
+        oauthError==="access_denied"
+          ?"Discordの認証許可がキャンセルされました。必要な場合は認証パネルからもう一度やり直してください。"
+          :"Discord認証を完了できませんでした。認証パネルからもう一度やり直してください。",
+        400
+      );
+    }
     if(!code||!state) return null;
     const recoveryState=await consumeRecoveryOAuthState(env,state);
     if(!recoveryState) return null;
@@ -1842,23 +1881,10 @@ export async function handleRecoveryOAuth(
       const roleName=await grantVerifiedRoleAfterOAuth(env,guildId,userId);
       title="認証完了";
       heading="認証が完了しました";
-      detail="認証ロール @"+escapeHtmlText(roleName)+" を付与し、同時にサーバー復旧対象メンバーとして登録しました。";
+      detail="認証ロール @"+roleName+" を付与し、同時にサーバー復旧対象メンバーとして登録しました。";
     }
 
-    return new Response(
-      "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"+
-      "<title>"+title+"</title><body style='font-family:system-ui;background:#070b14;color:#eef3ff;padding:40px'>"+
-      "<main style='max-width:560px;margin:auto;background:#10172a;border:1px solid #202943;border-radius:20px;padding:28px'>"+
-      "<h1>"+heading+"</h1><p>"+detail+"</p>"+
-      "<p>このページは閉じて大丈夫です。</p></main></body>",
-      {headers:{
-        "Content-Type":"text/html; charset=utf-8",
-        "Cache-Control":"no-store",
-        "Referrer-Policy":"no-referrer",
-        "X-Content-Type-Options":"nosniff",
-        "Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
-      }}
-    );
+    return verificationHtmlResponse(title,heading,detail);
   }
 
   return null;
