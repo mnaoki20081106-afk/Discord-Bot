@@ -298,6 +298,11 @@ async function protectBotChannelAccess(
   );
   let allow=BigInt(current?.allow??"0");
   let deny=BigInt(current?.deny??"0");
+  const alreadyProtected=
+    (allow&BOT_CHANNEL_GUARD_MASK)===BOT_CHANNEL_GUARD_MASK&&
+    (deny&BOT_CHANNEL_GUARD_MASK)===0n;
+  if(alreadyProtected) return;
+
   allow|=BOT_CHANNEL_GUARD_MASK;
   deny&=~BOT_CHANNEL_GUARD_MASK;
 
@@ -1931,6 +1936,10 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       targetType?:"role";
       permissions?:ChannelPermissionPatch;
     }>(request);
+    const permissions=input.permissions??{};
+    if(Object.keys(permissions).length===0){
+      throw new HttpError(400,"変更する権限を選択してください");
+    }
 
     const [channels,roles]=await Promise.all([
       botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`),
@@ -1943,19 +1952,86 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         "チャンネルが見つかりません。サーバー構成を再読み込みしてください"
       );
     }
+    if(targetId!==guildId&&!roles.some(role=>role.id===targetId)){
+      throw new HttpError(404,"対象ロールが見つかりません");
+    }
+
     const member=await getBotGuildMember(env,guildId,roles);
-    const result=await applyChannelRolePermissions(
+    let result=await applyChannelRolePermissions(
       env,
       guildId,
       channel,
       targetId,
       roles,
       member,
-      input.permissions??{}
+      permissions
     );
+
+    const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+    const verify=async():Promise<boolean>=>{
+      for(const delay of [0,180,420]){
+        if(delay>0) await sleep(delay);
+        const confirmed=await botJson<DiscordChannel[]>(
+          env,
+          `/guilds/${guildId}/channels`
+        );
+        const confirmedChannel=confirmed.find(item=>item.id===channelId);
+        if(
+          confirmedChannel&&
+          channelPermissionPatchMatches(confirmedChannel,targetId,permissions)
+        ){
+          return true;
+        }
+      }
+      return false;
+    };
+
+    let verified=await verify();
+    if(!verified){
+      const refreshedChannels=await botJson<DiscordChannel[]>(
+        env,
+        `/guilds/${guildId}/channels`
+      );
+      const refreshedChannel=refreshedChannels.find(item=>item.id===channelId);
+      if(!refreshedChannel){
+        throw new HttpError(
+          404,
+          "保存確認中にチャンネルが見つからなくなりました。サーバー構成を再読み込みしてください"
+        );
+      }
+      result=await applyChannelRolePermissions(
+        env,
+        guildId,
+        refreshedChannel,
+        targetId,
+        roles,
+        member,
+        permissions
+      );
+      verified=await verify();
+    }
+
+    if(!verified){
+      throw new HttpError(
+        502,
+        "Discordへ権限変更を送信しましたが、再取得した内容が一致しませんでした。もう一度お試しください"
+      );
+    }
+
+    const operationId=randomId();
+    console.log("channel permissions",{
+      operationId,
+      guildId,
+      channelId,
+      targetId,
+      verified:true
+    });
 
     return json(env,{
       ok:true,
+      verified:true,
+      operationId,
+      channelId,
       targetId,
       allow:result.allow,
       deny:result.deny
