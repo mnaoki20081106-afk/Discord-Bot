@@ -61,6 +61,13 @@ import {
   VendingHttpError
 } from "./vending";
 import {
+  getMemberActivitySettings,
+  memberActivitySweep,
+  primeMemberActivity,
+  saveMemberActivitySettings,
+  sendMemberActivityTest
+} from "./member-activity";
+import {
   accountCreatedAt,
   corsHeaders,
   encrypt,
@@ -1141,6 +1148,65 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     });
   }
 
+  const memberActivityMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/member-activity$/);
+  if(memberActivityMatch){
+    const guildId=memberActivityMatch[1]!;
+    if(request.method==="GET"){
+      await sessionFromRequest(request,env);
+      return json(env,await getMemberActivitySettings(env,guildId));
+    }
+    await requireGuild(request,env,guildId);
+    if(request.method==="PUT"){
+      const input=await bodyObject<{
+        enabled?:boolean;
+        channelId?:string|null;
+        joinEnabled?:boolean;
+        leaveEnabled?:boolean;
+      }>(request);
+      if(typeof input.enabled!=="boolean"||
+        typeof input.joinEnabled!=="boolean"||
+        typeof input.leaveEnabled!=="boolean"){
+        throw new HttpError(400,"入退室設定が不正です");
+      }
+      const channelId=input.channelId?String(input.channelId):null;
+      if(input.enabled&&!channelId){
+        throw new HttpError(400,"通知先チャンネルを選択してください");
+      }
+      if(channelId) await requireMessageChannel(env,guildId,channelId);
+      let saved=await saveMemberActivitySettings(env,guildId,{
+        enabled:input.enabled,
+        channelId,
+        joinEnabled:input.joinEnabled,
+        leaveEnabled:input.leaveEnabled
+      });
+      if(saved.enabled){
+        try{
+          saved=await primeMemberActivity(env,guildId);
+        }catch(error){
+          if(error instanceof DiscordApiError&&error.status===403){
+            throw new HttpError(
+              409,
+              "メンバー一覧を取得できません。Discord Developer Portal の Bot 設定で Server Members Intent を有効にしてから、もう一度保存してください"
+            );
+          }
+          throw error;
+        }
+      }
+      return json(env,saved);
+    }
+  }
+
+  const memberActivityTest=url.pathname.match(/^\/api\/guilds\/(\d+)\/member-activity\/test$/);
+  if(memberActivityTest&&request.method==="POST"){
+    const guildId=memberActivityTest[1]!;
+    await requireGuild(request,env,guildId);
+    const {channelId}=await bodyObject<{channelId?:string}>(request);
+    if(!channelId) throw new HttpError(400,"通知先チャンネルを選択してください");
+    await requireMessageChannel(env,guildId,channelId);
+    await sendMemberActivityTest(env,guildId,channelId);
+    return json(env,{ok:true});
+  }
+
   const settingsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/settings$/);
   if(settingsMatch){
     const guildId=settingsMatch[1]!;
@@ -2048,7 +2114,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v37-multi-achievement-routing",
+          version:"dashboard-auth-v38-member-activity",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -2146,6 +2212,7 @@ export default {
       auditWatch(env),
       paymentSweep(env),
       vendingSweep(env),
+      memberActivitySweep(env),
       botAccessGuardSweep(env),
       backupRestoreSweep(env)
     ]).then(()=>undefined));

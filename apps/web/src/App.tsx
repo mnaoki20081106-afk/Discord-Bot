@@ -4,6 +4,7 @@ import ServerEditor from "./ServerEditor";
 import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
 import BackupManager from "./BackupManager";
+import MemberActivityManager from "./MemberActivityManager";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -153,7 +154,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "verification" | "tickets" | "vending" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "members" | "verification" | "tickets" | "vending" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -679,6 +680,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-members"
+                role="tab"
+                aria-controls="admin-panel-members"
+                aria-selected={activeView === "members"}
+                className={activeView === "members" ? "active" : ""}
+                onClick={() => setActiveView("members")}
+              >
+                入室管理
+              </button>
+              <button
+                type="button"
                 id="admin-tab-verification"
                 role="tab"
                 aria-controls="admin-panel-verification"
@@ -922,6 +934,24 @@ export default function App() {
                       </article>
                     </div>
                   </section>
+                </section>
+
+                <section
+                  id="admin-panel-members"
+                  className="admin-tab-panel"
+                  role="tabpanel"
+                  aria-labelledby="admin-tab-members"
+                  hidden={activeView !== "members"}
+                >
+                  {activeView === "members" && (
+                    <MemberActivityManager
+                      key={"MemberActivityManager:"+selectedId}
+                      guildId={selectedId!}
+                      channels={meta.channels}
+                      onNotice={flash}
+                      onError={fail}
+                    />
+                  )}
                 </section>
 
                 <section
