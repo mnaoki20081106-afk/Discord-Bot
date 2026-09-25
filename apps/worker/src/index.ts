@@ -857,6 +857,142 @@ function ephemeral(content:string,components?:unknown[]){
   };
 }
 
+function deferredEphemeral():Response{
+  return interactionResponse({
+    type:5,
+    data:{flags:64}
+  });
+}
+
+function interactionCustomId(interaction:any):string{
+  return String(interaction?.data?.custom_id??"");
+}
+
+function isVendingInteraction(interaction:any):boolean{
+  return (
+    (interaction?.type===3||interaction?.type===5)&&
+    interactionCustomId(interaction).startsWith("vm:")
+  );
+}
+
+function shouldDeferInteraction(interaction:any):boolean{
+  const id=interactionCustomId(interaction);
+  if(interaction?.type===3){
+    if(
+      id==="ticket:create"||
+      id.startsWith("verify:start:")||
+      id.startsWith("buy:")
+    ) return true;
+
+    if(id.startsWith("vm:")){
+      // These two component actions must return a modal as the initial response,
+      // so they cannot be deferred.
+      if(id.startsWith("vm:product:")||id.startsWith("vm:pay:")) return false;
+      return true;
+    }
+  }
+
+  // Vending modal submissions can involve D1, external payment APIs and Discord
+  // REST calls. Always acknowledge them first and finish in the background.
+  return interaction?.type===5&&id.startsWith("vm:");
+}
+
+async function patchOriginalInteraction(
+  interaction:any,
+  data:Record<string,unknown>
+):Promise<void>{
+  const applicationId=String(interaction?.application_id??"");
+  const token=String(interaction?.token??"");
+  if(!applicationId||!token) throw new Error("interaction callback metadata missing");
+
+  const url=
+    "https://discord.com/api/v10/webhooks/"+
+    encodeURIComponent(applicationId)+"/"+
+    encodeURIComponent(token)+
+    "/messages/@original";
+
+  let lastError:unknown=null;
+  for(let attempt=0;attempt<2;attempt++){
+    const controller=new AbortController();
+    let timeoutId:ReturnType<typeof setTimeout>|undefined;
+    try{
+      const request=fetch(url,{
+        method:"PATCH",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(data),
+        signal:controller.signal
+      });
+      const timeout=new Promise<Response>((_,reject)=>{
+        timeoutId=setTimeout(()=>{
+          controller.abort();
+          reject(new Error("deferred interaction update timed out"));
+        },5_000);
+      });
+      const response=await Promise.race([request,timeout]);
+      if(!response.ok){
+        const detail=await response.text().catch(()=>"");
+        throw new Error(
+          "Discord deferred update "+response.status+": "+detail.slice(0,240)
+        );
+      }
+      return;
+    }catch(error){
+      lastError=error;
+      if(attempt===0) await new Promise(resolve=>setTimeout(resolve,150));
+    }finally{
+      if(timeoutId!==undefined) clearTimeout(timeoutId);
+    }
+  }
+  throw lastError instanceof Error?lastError:new Error(String(lastError));
+}
+
+async function finishDeferredInteraction(
+  interaction:any,
+  result:Response
+):Promise<void>{
+  let payload:any=null;
+  try{
+    payload=await result.json();
+  }catch{
+    // Fall through to a safe generic message.
+  }
+
+  if(payload?.type===4&&payload?.data){
+    const data={...payload.data};
+    delete data.flags;
+    await patchOriginalInteraction(interaction,data);
+    return;
+  }
+
+  await patchOriginalInteraction(interaction,{
+    content:"処理は完了しました。",
+    components:[]
+  });
+}
+
+async function failDeferredInteraction(
+  interaction:any,
+  error:unknown
+):Promise<void>{
+  console.error("deferred interaction failed",{
+    interactionId:String(interaction?.id??""),
+    type:interaction?.type,
+    customId:interactionCustomId(interaction),
+    error:error instanceof Error?error.message:String(error)
+  });
+  try{
+    await patchOriginalInteraction(interaction,{
+      content:"処理中にエラーが発生しました。もう一度お試しください。",
+      components:[]
+    });
+  }catch(updateError){
+    console.error(
+      "deferred interaction error response failed",
+      updateError instanceof Error?updateError.message:String(updateError)
+    );
+  }
+}
+
 async function deliverPayment(env:Env,payment:PaymentRow):Promise<void>{
   if(payment.delivered_at) return;
   const product=await getProduct(env,payment.product_id);
@@ -933,22 +1069,22 @@ async function createTicketFromInteraction(env:Env,interaction:any):Promise<Resp
   return interactionResponse(ephemeral(`作成しました: <#${channel.id}>`));
 }
 
-async function handleInteraction(
-  request:Request,env:Env,ctx:ExecutionContext
+async function processInteraction(
+  interaction:any,
+  request:Request,
+  env:Env,
+  ctx:ExecutionContext
 ):Promise<Response>{
-  const text=await request.text();
-  if(!(await verifyInteraction(env,request,text))) return new Response("invalid signature",{status:401});
-  const interaction=JSON.parse(text) as any;
-  if(interaction.type===1) return interactionResponse({type:1});
-
-  await ensureSchema(env);
-  const vendingResponse=await handleVendingInteraction(interaction,env,ctx);
-  if(vendingResponse) return vendingResponse;
+  if(isVendingInteraction(interaction)){
+    const vendingResponse=await handleVendingInteraction(interaction,env,ctx);
+    if(vendingResponse) return vendingResponse;
+  }
 
   if(interaction.type===2){
     const name=interaction.data?.name;
     if(name==="dashboard") return interactionResponse(ephemeral(`管理画面: ${env.WEB_PUBLIC_URL}`));
     if(name==="security-status"&&interaction.guild_id){
+      await ensureSchema(env);
       const s=await getGuildSettings(env,interaction.guild_id);
       return interactionResponse(ephemeral(
         `Security: ${s.securityEnabled?"ON":"OFF"}\nAutoMod Spam: ${s.antiSpam?"ON":"OFF"}\nAnti-Nuke: ${s.antiNuke?"ON":"OFF"}`
@@ -960,6 +1096,7 @@ async function handleInteraction(
   if(interaction.type===3){
     const id=interaction.data?.custom_id as string;
     if(id?.startsWith("verify:start:")){
+      await ensureSchema(env);
       const guildId=id.split(":")[2]!;
       const userId=String(interaction.member?.user?.id??"");
       const settings=await getGuildSettings(env,guildId);
@@ -988,13 +1125,17 @@ async function handleInteraction(
         }]
       ));
     }
-    if(id==="ticket:create") return createTicketFromInteraction(env,interaction);
+    if(id==="ticket:create"){
+      await ensureSchema(env);
+      return createTicketFromInteraction(env,interaction);
+    }
     if(id==="ticket:close"){
       const channelId=interaction.channel_id as string;
       ctx.waitUntil(botFetch(env,`/channels/${channelId}`,{method:"DELETE"}).then(()=>undefined));
       return interactionResponse(ephemeral("チケットを閉じます。"));
     }
     if(id?.startsWith("buy:")){
+      await ensureSchema(env);
       const product=await getProduct(env,id.slice(4));
       if(!product||!product.active||product.guild_id!==interaction.guild_id){
         return interactionResponse(ephemeral("この商品は現在購入できません。"));
@@ -1031,6 +1172,39 @@ async function handleInteraction(
   }
 
   return interactionResponse(ephemeral("未対応の操作です。"));
+}
+
+async function handleInteraction(
+  request:Request,env:Env,ctx:ExecutionContext
+):Promise<Response>{
+  const startedAt=Date.now();
+  const text=await request.text();
+  if(!(await verifyInteraction(env,request,text))){
+    return new Response("invalid signature",{status:401});
+  }
+
+  const interaction=JSON.parse(text) as any;
+  if(interaction.type===1) return interactionResponse({type:1});
+
+  if(shouldDeferInteraction(interaction)){
+    const cfRay=request.headers.get("CF-Ray")??"";
+    console.log("interaction deferred",{
+      interactionId:String(interaction?.id??""),
+      type:interaction?.type,
+      customId:interactionCustomId(interaction),
+      ackPreparationMs:Date.now()-startedAt,
+      cfRay
+    });
+
+    ctx.waitUntil(
+      processInteraction(interaction,request,env,ctx)
+        .then(result=>finishDeferredInteraction(interaction,result))
+        .catch(error=>failDeferredInteraction(interaction,error))
+    );
+    return deferredEphemeral();
+  }
+
+  return processInteraction(interaction,request,env,ctx);
 }
 
 async function registerCommands(env:Env):Promise<void>{
