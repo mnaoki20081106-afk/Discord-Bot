@@ -73,6 +73,50 @@ const emptyProduct = {
   infiniteContent:""
 };
 
+function readFileAsDataUrl(file:File):Promise<string>{
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(String(reader.result??""));
+    reader.onerror=()=>reject(reader.error??new Error("画像の読み込みに失敗しました"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function preparePanelImage(file:File):Promise<string>{
+  const allowed=new Set(["image/png","image/jpeg","image/webp","image/gif"]);
+  if(!allowed.has(file.type)) throw new Error("PNG・JPEG・WebP・GIF画像を選択してください");
+  if(file.size<=800_000) return readFileAsDataUrl(file);
+  if(file.type==="image/gif"){
+    throw new Error("GIFはアニメーション維持のため800KB以下のファイルを使用してください");
+  }
+
+  const objectUrl=URL.createObjectURL(file);
+  try{
+    const image=await new Promise<HTMLImageElement>((resolve,reject)=>{
+      const element=new Image();
+      element.onload=()=>resolve(element);
+      element.onerror=()=>reject(new Error("画像を読み込めませんでした"));
+      element.src=objectUrl;
+    });
+    let scale=Math.min(1,1600/Math.max(image.naturalWidth,image.naturalHeight));
+    for(let attempt=0;attempt<5;attempt++){
+      const canvas=document.createElement("canvas");
+      canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
+      canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
+      const context=canvas.getContext("2d");
+      if(!context) throw new Error("画像の圧縮処理を開始できません");
+      context.drawImage(image,0,0,canvas.width,canvas.height);
+      const quality=Math.max(.58,.88-attempt*.08);
+      const dataUrl=canvas.toDataURL("image/webp",quality);
+      if(dataUrl.length<=1_150_000) return dataUrl;
+      scale*=.78;
+    }
+    throw new Error("画像を900KB以下まで圧縮できませんでした。別の画像を選択してください");
+  }finally{
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export default function VendingManager({
   guildId, channels, roles, onNotice, onError
 }:Props){
@@ -86,6 +130,7 @@ export default function VendingManager({
   const [detail,setDetail]=useState<MachineDetail|null>(null);
   const [newMachineName,setNewMachineName]=useState("");
   const [busy,setBusy]=useState(false);
+  const [panelImageBusy,setPanelImageBusy]=useState(false);
   const [panelPreviewMode,setPanelPreviewMode]=useState<"desktop"|"mobile">(
     ()=>window.matchMedia("(max-width: 700px)").matches?"mobile":"desktop"
   );
@@ -335,6 +380,38 @@ export default function VendingManager({
       onNotice("自販機設定を保存しました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
+  }
+
+  async function uploadPanelImage(file:File){
+    if(!selectedId) return;
+    setPanelImageBusy(true);
+    try{
+      const dataUrl=await preparePanelImage(file);
+      const result=await api<{url:string}>(
+        `/api/guilds/${guildId}/vending/${selectedId}/panel-image`,
+        {method:"POST",body:JSON.stringify({dataUrl})},
+        30_000
+      );
+      setMachineForm(current=>({...current,panelImageUrl:result.url}));
+      setDetail(current=>current?{...current,panel_image_url:result.url}:current);
+      onNotice("パネル画像をアップロードしました");
+    }catch(reason){onError(reason);}
+    finally{setPanelImageBusy(false);}
+  }
+
+  async function removePanelImage(){
+    if(!selectedId||!machineForm.panelImageUrl) return;
+    setPanelImageBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/vending/${selectedId}/panel-image`,
+        {method:"DELETE"}
+      );
+      setMachineForm(current=>({...current,panelImageUrl:""}));
+      setDetail(current=>current?{...current,panel_image_url:null}:current);
+      onNotice("パネル画像を削除しました");
+    }catch(reason){onError(reason);}
+    finally{setPanelImageBusy(false);}
   }
 
   async function removeMachine(){
@@ -714,7 +791,7 @@ export default function VendingManager({
   }
 
   return (
-    <section className="card vending-manager" inert={busy||detailLoading} aria-busy={busy||detailLoading}>
+    <section className="card vending-manager" inert={busy||detailLoading||panelImageBusy} aria-busy={busy||detailLoading||panelImageBusy}>
       <div className="section-head">
         <div>
           <span className="eyebrow">VENDING MACHINE</span>
@@ -917,15 +994,38 @@ export default function VendingManager({
                           maxLength={3000}
                         />
                       </label>
-                      <label className="field">
-                        <span>画像URL</span>
-                        <input
-                          value={machineForm.panelImageUrl}
-                          onChange={e=>setMachineForm({...machineForm,panelImageUrl:e.target.value})}
-                          placeholder="https://..."
-                          inputMode="url"
-                        />
-                      </label>
+                      <div className="field">
+                        <span>パネル画像</span>
+                        <div className="vending-image-upload-row">
+                          <label className="secondary vending-file-button vending-image-upload-button">
+                            {panelImageBusy?"画像を処理中…":"画像をアップロード"}
+                            <input
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp,image/gif"
+                              disabled={panelImageBusy}
+                              onChange={(event)=>{
+                                const input=event.currentTarget;
+                                const file=input.files?.[0];
+                                if(!file) return;
+                                void uploadPanelImage(file).finally(()=>{input.value="";});
+                              }}
+                            />
+                          </label>
+                          {machineForm.panelImageUrl&&(
+                            <button
+                              type="button"
+                              className="danger"
+                              onClick={()=>void removePanelImage()}
+                              disabled={panelImageBusy}
+                            >
+                              画像を削除
+                            </button>
+                          )}
+                        </div>
+                        <small className="vending-field-help">
+                          URL入力は不要です。大きな写真は自動で縮小・圧縮します。GIFは800KB以下にしてください。
+                        </small>
+                      </div>
                     </div>
 
                     <details className="vending-advanced-settings">
