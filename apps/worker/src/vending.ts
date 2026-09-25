@@ -5,9 +5,9 @@ import { json, randomId, sha256Hex } from "./utils";
 import { recordPanelDeployment } from "./backup-db";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
-  deleteAchievementRoom, deleteCoupon, deleteMachine, deleteStockNotify, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementChannelForMachine, getAchievementRoom, getCoupon,
-  getMachine, getOrder, getPayPay, getStockNotify, getVmProduct, listCoupons, listMachines, listVmProducts,
-  markPaid, orderStock, releaseStock, removePayPay, reserveOrder, resetDelivery, saveAchievementRoom, savePayChallenge, savePayPay, saveStockNotify, stockContents,
+  deleteCoupon, deleteMachine, deleteStockNotify, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementChannelsForMachine, getCoupon,
+  getMachine, getOrder, getPayPay, getStockNotify, getVmProduct, listAchievementRooms, listCoupons, listMachines, listVmProducts,
+  markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, stockContents,
   takePayChallenge, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
@@ -102,33 +102,57 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     const guildId=achievementRoom[1]!;
     const session=await requireGuild(request,env,guildId);
     if(request.method==="GET"){
-      const room=await getAchievementRoom(env,guildId,session.user_id);
-      return json(env,room??{guild_id:guildId,owner_id:session.user_id,channel_id:null,machine_ids:[],updated_at:0});
+      return json(env,{rooms:await listAchievementRooms(env,guildId,session.user_id)});
     }
     if(request.method==="PUT"){
-      const b=await input<{channelId?:string|null;machineIds?:string[]}>(request);
-      const channelId=String(b.channelId??"").trim();
-      const machineIds=[...new Set((Array.isArray(b.machineIds)?b.machineIds:[]).map(String).filter(Boolean))];
-      if(!channelId) throw new VendingHttpError(400,"実績部屋のチャンネルを選択してください");
-      if(machineIds.length===0) throw new VendingHttpError(400,"通知する自販機を1つ以上選択してください");
+      const b=await input<{
+        rooms?:Array<{id?:string;channelId?:string|null;machineIds?:string[]}>;
+      }>(request);
+      const rawRooms=Array.isArray(b.rooms)?b.rooms:[];
+      if(rawRooms.length>20) throw new VendingHttpError(400,"実績部屋は20個まで設定できます");
+      const rooms=rawRooms.map(room=>({
+        id:room.id?String(room.id):undefined,
+        channelId:String(room.channelId??"").trim(),
+        machineIds:[...new Set(
+          (Array.isArray(room.machineIds)?room.machineIds:[]).map(String).filter(Boolean)
+        )]
+      }));
+      if(rooms.some(room=>!room.channelId)){
+        throw new VendingHttpError(400,"すべての実績部屋でチャンネルを選択してください");
+      }
+      if(rooms.some(room=>room.machineIds.length===0)){
+        throw new VendingHttpError(400,"すべての実績部屋で通知する自販機を1つ以上選択してください");
+      }
+
       const owned=await listMachines(env,guildId,session.user_id);
       const allowed=new Set(owned.map(machine=>machine.id));
-      if(machineIds.some(machineId=>!allowed.has(machineId))){
-        throw new VendingHttpError(400,"選択された自販機に無効な項目があります");
+      const assigned=new Set<string>();
+      for(const room of rooms){
+        for(const machineId of room.machineIds){
+          if(!allowed.has(machineId)){
+            throw new VendingHttpError(400,"選択された自販機に無効な項目があります");
+          }
+          if(assigned.has(machineId)){
+            throw new VendingHttpError(400,"同じ自販機を複数の実績部屋へ重複設定することはできません");
+          }
+          assigned.add(machineId);
+        }
       }
-      const channel=await botJson<{guild_id?:string;type?:number}>(env,"/channels/"+channelId);
-      if(channel.guild_id!==guildId) throw new VendingHttpError(400,"このサーバーのチャンネルを選択してください");
-      const room=await saveAchievementRoom(env,{
+
+      const uniqueChannels=[...new Set(rooms.map(room=>room.channelId))];
+      for(const channelId of uniqueChannels){
+        const channel=await botJson<{guild_id?:string;type?:number}>(env,"/channels/"+channelId);
+        if(channel.guild_id!==guildId){
+          throw new VendingHttpError(400,"このサーバーのチャンネルを選択してください");
+        }
+      }
+
+      const saved=await replaceAchievementRooms(env,{
         guildId,
         ownerId:session.user_id,
-        channelId,
-        machineIds
+        rooms
       });
-      return json(env,room);
-    }
-    if(request.method==="DELETE"){
-      await deleteAchievementRoom(env,guildId,session.user_id);
-      return json(env,{ok:true});
+      return json(env,{rooms:saved});
     }
   }
 
@@ -338,13 +362,13 @@ async function sendAchievementPurchase(
   vm:Vm,
   product:VmProduct
 ){
-  const channelId=await getAchievementChannelForMachine(
+  const channelIds=await getAchievementChannelsForMachine(
     env,
     order.guild_id,
     vm.owner_id,
     vm.id
   );
-  if(!channelId) return;
+  if(channelIds.length===0) return;
   const productName=(product.emoji?product.emoji+" ":"")+product.name;
   const embed:any={
     title:"🎉 商品購入ログ",
@@ -360,7 +384,13 @@ async function sendAchievementPurchase(
   if(vm.panel_image_url&&/^https?:\/\//i.test(vm.panel_image_url)){
     embed.thumbnail={url:vm.panel_image_url};
   }
-  await send(env,channelId,{embeds:[embed]});
+  await Promise.all(
+    channelIds.map(channelId=>
+      send(env,channelId,{embeds:[embed]}).catch(error=>{
+        console.error("vending achievement channel send failed",order.id,channelId,error);
+      })
+    )
+  );
 }
 
 async function deliver(env:Env,order:VmOrder){

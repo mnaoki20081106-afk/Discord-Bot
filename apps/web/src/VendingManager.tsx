@@ -40,11 +40,19 @@ type MachineDetail = Machine & {
 };
 
 type AchievementRoom = {
+  id:string;
   guild_id:string;
   owner_id:string;
-  channel_id:string|null;
+  channel_id:string;
   machine_ids:string[];
+  created_at:number;
   updated_at:number;
+};
+
+type AchievementRoomDraft = {
+  id:string;
+  channelId:string;
+  machineIds:string[];
 };
 
 type Props = {
@@ -94,8 +102,7 @@ export default function VendingManager({
   const [panelMessageUrl,setPanelMessageUrl]=useState("");
   const [notifyChannel,setNotifyChannel]=useState("");
   const [notifyRole,setNotifyRole]=useState("");
-  const [achievementChannel,setAchievementChannel]=useState("");
-  const [achievementMachineIds,setAchievementMachineIds]=useState<string[]>([]);
+  const [achievementRooms,setAchievementRooms]=useState<AchievementRoomDraft[]>([]);
 
   const [newProduct,setNewProduct]=useState(emptyProduct);
   const [editingProduct,setEditingProduct]=useState<Product|null>(null);
@@ -221,11 +228,14 @@ export default function VendingManager({
   }
 
   async function loadAchievementRoom(){
-    const room=await api<AchievementRoom>(
+    const result=await api<{rooms:AchievementRoom[]}>(
       `/api/guilds/${guildId}/vending/achievement-room`
     );
-    setAchievementChannel(room.channel_id??"");
-    setAchievementMachineIds(room.machine_ids);
+    setAchievementRooms(result.rooms.map(room=>({
+      id:room.id,
+      channelId:room.channel_id,
+      machineIds:room.machine_ids
+    })));
   }
 
   useEffect(()=>{
@@ -361,41 +371,93 @@ export default function VendingManager({
     finally{setBusy(false);}
   }
 
-  async function saveAchievementRoom(){
-    if(!achievementChannel||achievementMachineIds.length===0) return;
+  function addAchievementRoom(){
+    if(achievementRooms.length>=20) return;
+    setAchievementRooms(current=>[
+      ...current,
+      {
+        id:"new-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8),
+        channelId:"",
+        machineIds:[]
+      }
+    ]);
+  }
+
+  function updateAchievementRoom(
+    roomId:string,
+    patch:Partial<Pick<AchievementRoomDraft,"channelId"|"machineIds">>
+  ){
+    setAchievementRooms(current=>current.map(room=>
+      room.id===roomId?{...room,...patch}:room
+    ));
+  }
+
+  function machineAssignedToOtherAchievementRoom(machineId:string,roomId:string){
+    return achievementRooms.some(room=>
+      room.id!==roomId&&room.machineIds.includes(machineId)
+    );
+  }
+
+  async function saveAchievementRooms(){
+    const validMachineIds=new Set(machines.map(machine=>machine.id));
+    if(achievementRooms.some(room=>!room.channelId)){
+      onError(new Error("すべての実績部屋でチャンネルを選択してください"));
+      return;
+    }
+    if(achievementRooms.some(room=>room.machineIds.length===0)){
+      onError(new Error("すべての実績部屋で通知する自販機を1つ以上選択してください"));
+      return;
+    }
+    const assigned=new Set<string>();
+    for(const room of achievementRooms){
+      for(const machineId of room.machineIds){
+        if(!validMachineIds.has(machineId)){
+          onError(new Error("削除済みの自販機が実績部屋設定に含まれています"));
+          return;
+        }
+        if(assigned.has(machineId)){
+          onError(new Error("同じ自販機を複数の実績部屋へ設定することはできません"));
+          return;
+        }
+        assigned.add(machineId);
+      }
+    }
+
     setBusy(true);
     try{
-      const validIds=achievementMachineIds.filter(id=>machines.some(machine=>machine.id===id));
-      if(validIds.length===0){
-        throw new Error("通知する自販機を1つ以上選択してください");
-      }
-      const room=await api<AchievementRoom>(
+      const result=await api<{rooms:AchievementRoom[]}>(
         `/api/guilds/${guildId}/vending/achievement-room`,
         {
           method:"PUT",
           body:JSON.stringify({
-            channelId:achievementChannel,
-            machineIds:validIds
+            rooms:achievementRooms.map(room=>({
+              id:room.id.startsWith("new-")?undefined:room.id,
+              channelId:room.channelId,
+              machineIds:room.machineIds
+            }))
           })
         }
       );
-      setAchievementChannel(room.channel_id??"");
-      setAchievementMachineIds(room.machine_ids);
-      onNotice("実績部屋の通知設定を保存しました");
+      setAchievementRooms(result.rooms.map(room=>({
+        id:room.id,
+        channelId:room.channel_id,
+        machineIds:room.machine_ids
+      })));
+      onNotice("実績部屋の振り分け設定を保存しました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
 
-  async function clearAchievementRoom(){
+  async function clearAchievementRooms(){
+    if(!window.confirm("実績部屋の振り分け設定をすべて解除しますか？")) return;
     setBusy(true);
     try{
       await api(
         `/api/guilds/${guildId}/vending/achievement-room`,
-        {method:"DELETE"}
+        {method:"PUT",body:JSON.stringify({rooms:[]})}
       );
-      setAchievementChannel("");
-      setAchievementMachineIds([]);
-      onNotice("実績部屋の通知を解除しました");
+      setAchievementRooms([]);
+      onNotice("実績部屋の振り分けをすべて解除しました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
@@ -1131,84 +1193,125 @@ export default function VendingManager({
               <div hidden={activeSection!=="achievement"} className="vending-tabs-section">
                 <div className="section-head compact">
                   <div>
-                    <span className="eyebrow">ACHIEVEMENT ROOM</span>
-                    <h3>実績部屋</h3>
+                    <span className="eyebrow">ACHIEVEMENT ROUTING</span>
+                    <h3>実績部屋の振り分け</h3>
                     <p className="muted">
-                      購入完了時に「🎉 商品購入ログ」を送信します。通知したい自販機だけ選べます。
+                      自販機ごとに実績の送信先を分けられます。例: 自販機A/B → #実績1、自販機C → #実績2。
                     </p>
                   </div>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={addAchievementRoom}
+                    disabled={achievementRooms.length>=20||busy}
+                  >
+                    ＋ 実績部屋を追加
+                  </button>
                 </div>
-                <label className="field"><span>実績を送るチャンネル</span>
-                  <select value={achievementChannel} onChange={e=>setAchievementChannel(e.target.value)}>
-                    <option value="">選択</option>
-                    {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                  </select>
-                </label>
-                <div className="field">
-                  <span>通知する自販機</span>
-                  <div className="role-picker">
-                    {machines.map(machine=>{
-                      const checked=achievementMachineIds.includes(machine.id);
-                      return (
-                        <label
-                          key={machine.id}
-                          className={`role-choice ${checked?"selected":""}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={event=>{
-                              setAchievementMachineIds(current=>
-                                event.target.checked
-                                  ? [...new Set([...current,machine.id])]
-                                  : current.filter(id=>id!==machine.id)
-                              );
-                            }}
-                          />
-                          <span>{machine.name}</span>
-                        </label>
-                      );
-                    })}
+
+                {achievementRooms.length===0 ? (
+                  <div className="vending-select-prompt">
+                    <strong>実績部屋はまだありません</strong>
+                    <span>「＋ 実績部屋を追加」から送信先と対象自販機を設定してください。</span>
                   </div>
-                </div>
-                <div className="button-row">
-                  <button
-                    className="secondary"
-                    type="button"
-                    onClick={()=>setAchievementMachineIds(machines.map(machine=>machine.id))}
-                    disabled={machines.length===0}
-                  >
-                    すべて選択
-                  </button>
-                  <button
-                    className="secondary"
-                    type="button"
-                    onClick={()=>setAchievementMachineIds([])}
-                    disabled={achievementMachineIds.length===0}
-                  >
-                    全解除
-                  </button>
-                </div>
+                ) : (
+                  <div className="stack">
+                    {achievementRooms.map((room,index)=>(
+                      <article className="vending-control-group" key={room.id}>
+                        <div className="section-head compact">
+                          <div>
+                            <span className="eyebrow">ROUTE {index+1}</span>
+                            <h3>
+                              {room.channelId
+                                ? "#"+(channels.find(channel=>channel.id===room.channelId)?.name??"実績部屋")
+                                : "送信先を選択"}
+                            </h3>
+                          </div>
+                          <button
+                            className="danger"
+                            type="button"
+                            onClick={()=>setAchievementRooms(current=>current.filter(item=>item.id!==room.id))}
+                            disabled={busy}
+                          >
+                            この振り分けを削除
+                          </button>
+                        </div>
+
+                        <label className="field"><span>実績を送るチャンネル</span>
+                          <select
+                            value={room.channelId}
+                            onChange={event=>updateAchievementRoom(room.id,{channelId:event.target.value})}
+                          >
+                            <option value="">選択</option>
+                            {channels.map(channel=>(
+                              <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <div className="field">
+                          <span>この実績部屋へ送る自販機</span>
+                          <div className="role-picker">
+                            {machines.map(machine=>{
+                              const checked=room.machineIds.includes(machine.id);
+                              const usedElsewhere=machineAssignedToOtherAchievementRoom(machine.id,room.id);
+                              return (
+                                <label
+                                  key={machine.id}
+                                  className={`role-choice ${checked?"selected":""}`}
+                                  title={usedElsewhere?"別の実績部屋に設定済み":undefined}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={usedElsewhere}
+                                    onChange={event=>{
+                                      updateAchievementRoom(room.id,{
+                                        machineIds:event.target.checked
+                                          ? [...new Set([...room.machineIds,machine.id])]
+                                          : room.machineIds.filter(id=>id!==machine.id)
+                                      });
+                                    }}
+                                  />
+                                  <span>
+                                    {machine.name}{usedElsewhere&&!checked?" — 他の実績部屋に設定済み":""}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <small className="muted">
+                          {room.machineIds.length}台の自販機をこの部屋へ振り分け
+                        </small>
+                      </article>
+                    ))}
+                  </div>
+                )}
+
                 <div className="button-row">
                   <button
                     className="primary"
                     type="button"
-                    onClick={()=>void saveAchievementRoom()}
-                    disabled={!achievementChannel||achievementMachineIds.length===0||busy}
+                    onClick={()=>void saveAchievementRooms()}
+                    disabled={
+                      busy||
+                      achievementRooms.some(room=>!room.channelId||room.machineIds.length===0)
+                    }
                   >
-                    実績部屋を保存
+                    振り分け設定を保存
                   </button>
                   <button
                     className="danger"
                     type="button"
-                    onClick={()=>void clearAchievementRoom()}
-                    disabled={!achievementChannel&&achievementMachineIds.length===0}
+                    onClick={()=>void clearAchievementRooms()}
+                    disabled={achievementRooms.length===0||busy}
                   >
-                    実績部屋を解除
+                    すべて解除
                   </button>
                 </div>
                 <small className="muted">
-                  通知内容: 購入者 / 商品名 / 個数 / 注文ID
+                  1台の自販機は1つの実績部屋に割り当てます。通知内容: 購入者 / 商品名 / 個数 / 注文ID
                 </small>
               </div>
             </>

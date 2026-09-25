@@ -2045,7 +2045,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v36-achievement-room-live",
+          version:"dashboard-auth-v37-multi-achievement-routing",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
