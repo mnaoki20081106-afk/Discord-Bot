@@ -35,6 +35,29 @@ class BackupHttpError extends Error {
 }
 export { BackupHttpError };
 
+export function verificationPanelPayload(workerOrigin:string,guildId:string):unknown{
+  const origin=String(workerOrigin??"").replace(/\/$/,"");
+  if(!/^https?:\/\//.test(origin)||!/^\d+$/.test(guildId)){
+    throw new BackupHttpError(500,"認証パネルURLを生成できませんでした");
+  }
+  return {
+    embeds:[{
+      title:"サーバー認証",
+      description:"下のボタンから認証を開始してください。認証完了時に、万が一のサーバー復旧に必要なDiscord連携も同時に登録されます。",
+      color:5793266
+    }],
+    components:[{
+      type:1,
+      components:[{
+        type:2,
+        style:5,
+        label:"認証する",
+        url:origin+"/auth/verification/start?guild_id="+encodeURIComponent(guildId)
+      }]
+    }]
+  };
+}
+
 type SnapshotRole = {
   id:string;
   name:string;
@@ -1152,26 +1175,14 @@ async function restorePanels(
       let objectId=panel.objectId;
       if(panel.kind==="verification"){
         objectId="";
-        const workerOrigin=String(stats.workerOrigin??"").replace(/\/$/,"");
-        if(!/^https?:\/\//.test(workerOrigin)){
+        const workerOrigin=String(stats.workerOrigin??"");
+        if(!workerOrigin){
           stats.warnings.push(
             "認証パネルの復元に必要なWorker URLが見つからなかったため、このパネルだけ復元をスキップしました。管理画面から再設置してください。"
           );
           continue;
         }
-        payload={
-          embeds:[{
-            title:"サーバー認証",
-            description:"下のボタンから認証を開始してください。認証完了時に、サーバー復旧用のメンバー登録も同時に行われます。",
-            color:5793266
-          }],
-          components:[{type:1,components:[{
-            type:2,
-            style:5,
-            label:"認証する",
-            url:workerOrigin+"/auth/verification/start?guild_id="+encodeURIComponent(job.target_guild_id)
-          }]}]
-        };
+        payload=verificationPanelPayload(workerOrigin,job.target_guild_id);
       }else if(panel.kind==="ticket"){
         objectId="";
         payload={
