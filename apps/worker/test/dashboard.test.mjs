@@ -485,7 +485,8 @@ test('verification panel oauth stores recovery access before assigning the role'
 
   // This is the actual URL used by newly deployed verification panels.
   const started=await mf.dispatchFetch(
-    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId),
+    {redirect:'manual'}
   );
   assert.equal(started.status,302);
   const authorizeUrl=new URL(started.headers.get('location'));
@@ -544,7 +545,8 @@ test('verification panel oauth stores recovery access before assigning the role'
   assert.equal(remaining.count,0);
 
   const legacyStart=await mf.dispatchFetch(
-    'https://worker.example/auth/recovery/start?guild_id='+encodeURIComponent(guildId)
+    'https://worker.example/auth/recovery/start?guild_id='+encodeURIComponent(guildId),
+    {redirect:'manual'}
   );
   assert.equal(legacyStart.status,302);
   const legacyAuthorizeUrl=new URL(legacyStart.headers.get('location'));
@@ -575,7 +577,8 @@ test('cancelled discord verification consumes state without registering', async 
   assert.equal(settings.status,200,JSON.stringify(settings.body));
 
   const started=await mf.dispatchFetch(
-    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId),
+    {redirect:'manual'}
   );
   const state=new URL(started.headers.get('location')).searchParams.get('state');
   assert.ok(state);
@@ -612,7 +615,8 @@ test('verification rejection does not create recovery registration', async t => 
   assert.equal(settings.status,200,JSON.stringify(settings.body));
 
   const started=await mf.dispatchFetch(
-    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId),
+    {redirect:'manual'}
   );
   assert.equal(started.status,302);
   const state=new URL(started.headers.get('location')).searchParams.get('state');
@@ -649,7 +653,8 @@ test('verification role grant failure is not reported as success', async t => {
   assert.equal(settings.status,200,JSON.stringify(settings.body));
 
   const started=await mf.dispatchFetch(
-    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId),
+    {redirect:'manual'}
   );
   const state=new URL(started.headers.get('location')).searchParams.get('state');
   assert.ok(state);
