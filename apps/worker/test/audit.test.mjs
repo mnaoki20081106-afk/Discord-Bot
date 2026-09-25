@@ -177,36 +177,67 @@ test('a second backup cannot silently substitute an active restore job',async t=
  assert.equal(res.status,409);
 });
 
-test('vending achievement room stores a channel and selected machines only',async t=>{
+test('vending achievements can be split across multiple rooms without duplicate machine routing',async t=>{
  const f=await fixture(t);
  await f.request(`/api/guilds/${source}/vending`);
- await f.db.prepare(
-  'INSERT INTO vending_machines(id,guild_id,owner_id,name,created_at,updated_at) VALUES (?,?,?,?,1,1)'
- ).bind('achievement-vm-a',source,'shared-dashboard','Shop A').run();
- await f.db.prepare(
-  'INSERT INTO vending_machines(id,guild_id,owner_id,name,created_at,updated_at) VALUES (?,?,?,?,1,1)'
- ).bind('achievement-vm-b',source,'shared-dashboard','Shop B').run();
+ for(const [id,name] of [
+  ['achievement-vm-a','Shop A'],
+  ['achievement-vm-b','Shop B'],
+  ['achievement-vm-c','Shop C']
+ ]){
+  await f.db.prepare(
+   'INSERT INTO vending_machines(id,guild_id,owner_id,name,created_at,updated_at) VALUES (?,?,?,?,1,1)'
+  ).bind(id,source,'shared-dashboard',name).run();
+ }
  const saved=await f.request(
   `/api/guilds/${source}/vending/achievement-room`,
   'PUT',
-  {channelId:channelA,machineIds:['achievement-vm-b','achievement-vm-a','achievement-vm-b']}
+  {rooms:[
+   {channelId:channelA,machineIds:['achievement-vm-a','achievement-vm-b']},
+   {channelId:channelB,machineIds:['achievement-vm-c']}
+  ]}
  );
  assert.equal(saved.status,200,JSON.stringify(saved));
- assert.equal(saved.body.channel_id,channelA);
- assert.deepEqual(new Set(saved.body.machine_ids),new Set(['achievement-vm-a','achievement-vm-b']));
+ assert.equal(saved.body.rooms.length,2);
+ assert.equal(saved.body.rooms[0].channel_id,channelA);
+ assert.deepEqual(new Set(saved.body.rooms[0].machine_ids),new Set(['achievement-vm-a','achievement-vm-b']));
+ assert.equal(saved.body.rooms[1].channel_id,channelB);
+ assert.deepEqual(saved.body.rooms[1].machine_ids,['achievement-vm-c']);
+
  const fresh=await f.request(`/api/guilds/${source}/vending/achievement-room`);
  assert.equal(fresh.status,200,JSON.stringify(fresh));
- assert.equal(fresh.body.channel_id,channelA);
- assert.deepEqual(new Set(fresh.body.machine_ids),new Set(['achievement-vm-a','achievement-vm-b']));
+ assert.equal(fresh.body.rooms.length,2);
+ const rows=(await f.db.prepare(
+  'SELECT channel_id,machine_ids_json FROM vending_achievement_routes WHERE guild_id=? AND owner_id=? ORDER BY created_at'
+ ).bind(source,'shared-dashboard').all()).results;
+ assert.equal(rows.length,2);
+ assert.equal(rows[0].channel_id,channelA);
+ assert.equal(rows[1].channel_id,channelB);
+
+ const duplicate=await f.request(
+  `/api/guilds/${source}/vending/achievement-room`,
+  'PUT',
+  {rooms:[
+   {channelId:channelA,machineIds:['achievement-vm-a']},
+   {channelId:channelB,machineIds:['achievement-vm-a']}
+  ]}
+ );
+ assert.equal(duplicate.status,400,JSON.stringify(duplicate));
+
  const invalid=await f.request(
   `/api/guilds/${source}/vending/achievement-room`,
   'PUT',
-  {channelId:channelA,machineIds:['missing-machine']}
+  {rooms:[{channelId:channelA,machineIds:['missing-machine']}]}
  );
  assert.equal(invalid.status,400,JSON.stringify(invalid));
- const cleared=await f.request(`/api/guilds/${source}/vending/achievement-room`,'DELETE');
- assert.equal(cleared.status,200);
- assert.equal((await f.request(`/api/guilds/${source}/vending/achievement-room`)).body.channel_id,null);
+
+ const cleared=await f.request(
+  `/api/guilds/${source}/vending/achievement-room`,
+  'PUT',
+  {rooms:[]}
+ );
+ assert.equal(cleared.status,200,JSON.stringify(cleared));
+ assert.deepEqual(cleared.body.rooms,[]);
 });
 
 test('same-guild identity restores renamed and moved channels without making duplicates',async t=>{
