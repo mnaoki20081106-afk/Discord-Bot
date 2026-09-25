@@ -29,6 +29,7 @@ async function runtime(t, options = {}) {
   const targetRolePosition = options.targetRolePosition ?? 1;
   let channelOverwrites = [...(options.channelOverwrites ?? [])];
   const forceBotOverwrite403 = options.forceBotOverwrite403 ?? false;
+  const forceVerificationRole403 = options.forceVerificationRole403 ?? false;
   const mf = new Miniflare({
     modules: true,
     scriptPath: '.test-worker/index.js',
@@ -190,6 +191,9 @@ async function runtime(t, options = {}) {
         request.method === 'PUT' &&
         url.pathname === `/api/v10/guilds/${guildId}/members/${verificationUserId}/roles/${targetRoleId}`
       ) {
+        if (forceVerificationRole403) {
+          return Response.json({message:'Missing Permissions',code:50013},{status:403});
+        }
         if (!verificationMemberRoles.includes(targetRoleId)) {
           verificationMemberRoles.push(targetRoleId);
         }
@@ -490,6 +494,77 @@ test('verification panel oauth stores recovery access before assigning the role'
     'verification',
     'legacy recovery links must use the unified verification flow'
   );
+});
+
+test('verification rejection does not create recovery registration', async t => {
+  const {mf,db,verificationMemberRoles} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  const settings = await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    login.body.token,
+    'PUT',
+    {verifiedRoleId:targetRoleId,minAccountAgeDays:36500}
+  );
+  assert.equal(settings.status,200,JSON.stringify(settings.body));
+
+  const started=await mf.dispatchFetch(
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+  );
+  assert.equal(started.status,302);
+  const state=new URL(started.headers.get('location')).searchParams.get('state');
+  assert.ok(state);
+
+  const callback=await mf.dispatchFetch(
+    'https://worker.example/auth/discord/callback?code=too-young&state='+encodeURIComponent(state)
+  );
+  assert.equal(callback.status,403);
+  const body=await callback.json();
+  assert.match(body.message,/認証条件/);
+
+  const saved=await db.prepare(
+    'SELECT COUNT(*) AS count FROM member_recovery_tokens WHERE guild_id=? AND user_id=?'
+  ).bind(guildId,verificationUserId).first();
+  assert.equal(saved.count,0);
+  assert.equal(verificationMemberRoles.includes(targetRoleId),false);
+});
+
+test('verification role grant failure is not reported as success', async t => {
+  const {mf,db,verificationMemberRoles} = await runtime(t,{
+    forceVerificationRole403:true
+  });
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  const settings = await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    login.body.token,
+    'PUT',
+    {verifiedRoleId:targetRoleId,minAccountAgeDays:0}
+  );
+  assert.equal(settings.status,200,JSON.stringify(settings.body));
+
+  const started=await mf.dispatchFetch(
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId)
+  );
+  const state=new URL(started.headers.get('location')).searchParams.get('state');
+  assert.ok(state);
+  const callback=await mf.dispatchFetch(
+    'https://worker.example/auth/discord/callback?code=role-fail&state='+encodeURIComponent(state)
+  );
+  assert.equal(callback.status,403);
+  const body=await callback.json();
+  assert.match(body.message,/認証ロールを付与できませんでした/);
+  assert.equal(verificationMemberRoles.includes(targetRoleId),false);
+
+  const saved=await db.prepare(
+    'SELECT user_id,revoked_at FROM member_recovery_tokens WHERE guild_id=? AND user_id=?'
+  ).bind(guildId,verificationUserId).first();
+  assert.equal(saved?.user_id,verificationUserId);
+  assert.equal(saved?.revoked_at,null);
 });
 
 test('backup snapshot is encrypted, listed, previewable, and recovery uses verification', async t => {
