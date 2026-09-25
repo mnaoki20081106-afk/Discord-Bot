@@ -19,7 +19,6 @@ import {
   listRestoreJobs,
   markRecoveryMemberRevoked,
   nextRestoreJob,
-  putRecoveryState,
   putRecoveryOAuthState,
   consumeRecoveryOAuthState,
   recordPanelDeployment,
@@ -1579,7 +1578,9 @@ export async function handleBackupApi(
     await botJson(env,"/guilds/"+recoveryStatus[1]);
     return json(env,{
       registered:await countRecoveryMembers(env,recoveryStatus[1]!),
-      authorizePath:"/auth/recovery/start?guild_id="+encodeURIComponent(recoveryStatus[1]!),
+      registrationMode:"verification",
+      separatePanelAvailable:false,
+      authorizePath:"/auth/verification/start?guild_id="+encodeURIComponent(recoveryStatus[1]!),
       redirectPath:"/auth/discord/callback"
     });
   }
@@ -1587,30 +1588,10 @@ export async function handleBackupApi(
   const recoveryPanel=url.pathname.match(/^\/api\/guilds\/(\d+)\/recovery\/panel$/);
   if(recoveryPanel&&request.method==="POST"){
     await requireDashboard(request,env);
-    const guildId=recoveryPanel[1]!;
-    await botJson(env,"/guilds/"+guildId);
-    const body=await request.json() as {channelId?:string};
-    const channelId=String(body.channelId??"");
-    if(!/^\d+$/.test(channelId)) throw new BackupHttpError(400,"設置先チャンネルが不正です");
-    const channel=await botJson<any>(env,"/channels/"+channelId);
-    if(String(channel.guild_id??"")!==guildId||![0,5].includes(Number(channel.type))){
-      throw new BackupHttpError(400,"復旧登録パネルはこのサーバーのテキストチャンネルに設置してください");
-    }
-    const message=await postMessage(env,channelId,{
-      embeds:[{
-        title:"サーバー復旧登録",
-        description:"万が一サーバーが失われた時に、Discord公式OAuthを使ってこのアカウントを復旧先へ再参加できるよう登録します。登録はいつでもDiscord側から取り消せます。",
-        color:5793266
-      }],
-      components:[{type:1,components:[{
-        type:2,style:5,label:"復旧登録する",
-        url:url.origin+"/auth/recovery/start?guild_id="+encodeURIComponent(guildId)
-      }]}]
-    });
-    await recordPanelDeployment(env,{
-      guildId,kind:"recovery",channelId,messageId:message.id??null
-    });
-    return json(env,{ok:true,channelId,messageId:message.id??null});
+    throw new BackupHttpError(
+      410,
+      "復旧登録パネルは認証パネルへ統合されました。認証タブから認証パネルを設置してください。"
+    );
   }
 
   const backupMatch=url.pathname.match(/^\/api\/backups\/([^/]+)$/);
@@ -1755,12 +1736,14 @@ export async function handleRecoveryOAuth(
   }
 
   if(url.pathname==="/auth/recovery/start"&&request.method==="GET"){
+    // Backward compatibility for already-posted recovery panels:
+    // route them through the same verification + recovery registration flow.
     const guildId=String(url.searchParams.get("guild_id")??"");
     if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
     await botJson(env,"/guilds/"+guildId);
     const state=randomToken(24);
-    await putRecoveryState(env,state,guildId);
-    return Response.redirect(recoveryAuthorizeUrl(env,url.origin,state),302);
+    await putRecoveryOAuthState(env,state,guildId,{purpose:"verification"});
+    return Response.redirect(recoveryAuthorizeUrl(env,url.origin,state,false),302);
   }
 
   if(url.pathname==="/auth/discord/callback"&&request.method==="GET"){
@@ -1811,7 +1794,7 @@ export async function handleRecoveryOAuth(
       await botJson(env,"/guilds/"+guildId+"/members/"+user.id);
     }catch(error){
       if(error instanceof DiscordApiError&&error.status===404){
-        throw new BackupHttpError(403,"この復旧登録は現在サーバーに参加しているメンバーだけ利用できます");
+        throw new BackupHttpError(403,"認証は現在サーバーに参加しているメンバーだけ利用できます");
       }
       throw error;
     }
