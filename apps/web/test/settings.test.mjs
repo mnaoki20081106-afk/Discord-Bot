@@ -43,7 +43,7 @@ test('typed ID separators, save-in-flight edits, reload persistence, and backup 
   else if(p==='/api/restore-jobs')value=[];
   else if(p.endsWith('/recovery/status'))value={registered:0,authorizePath:'/auth/recovery/start',redirectPath:'/auth/discord/callback'};
   else if(p==='/api/vending/payments/status')value={paypay:false,kyash:false};
-  else if(p.endsWith('/vending/achievement-room'))value={guild_id:'100000000000000001',owner_id:'shared-dashboard',channel_id:null,machine_ids:[],updated_at:0};
+  else if(p.endsWith('/vending/achievement-room'))value={rooms:[]};
   else if(p.endsWith('/products')||p.endsWith('/vending'))value=[];
   else throw new Error('Unexpected request: '+p);
   return Response.json(value);
