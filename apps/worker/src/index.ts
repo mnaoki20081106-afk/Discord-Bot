@@ -49,7 +49,8 @@ import {
   backupRestoreSweep,
   createVerificationRecoveryAuthorizeUrl,
   handleBackupApi,
-  handleRecoveryOAuth
+  handleRecoveryOAuth,
+  verificationPanelPayload
 } from "./backup";
 import { recordPanelDeployment } from "./backup-db";
 import {
@@ -658,22 +659,9 @@ async function sendPanelMessage(
 async function publishVerificationPanel(
   env:Env,guildId:string,channelId:string,workerOrigin:string
 ){
-  const message=await sendPanelMessage(env,guildId,channelId,{
-    embeds:[{
-      title:"サーバー認証",
-      description:"下のボタンから認証を開始してください。認証完了時に、万が一のサーバー復旧に必要なDiscord連携も同時に登録されます。",
-      color:5793266
-    }],
-    components:[{
-      type:1,
-      components:[{
-        type:2,
-        style:5,
-        label:"認証する",
-        url:workerOrigin+"/auth/verification/start?guild_id="+encodeURIComponent(guildId)
-      }]
-    }]
-  });
+  const message=await sendPanelMessage(
+    env,guildId,channelId,verificationPanelPayload(workerOrigin,guildId)
+  );
   await recordPanelDeployment(env,{
     guildId,kind:"verification",channelId,messageId:message.id??null
   });
