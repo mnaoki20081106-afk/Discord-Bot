@@ -1014,6 +1014,50 @@ test('channel permission edit does not require direct channel access', async t =
 });
 
 
+test('channel permission edit supports the expanded priority permission set', async t => {
+  const {mf} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+
+  const result = await request(
+    mf,
+    `/api/guilds/${guildId}/channels/${chatChannelId}/permissions/${targetRoleId}`,
+    login.body.token,
+    'PATCH',
+    {
+      targetType:'role',
+      permissions:{
+        history:'allow',
+        embeds:'allow',
+        appCommands:'allow',
+        polls:'allow',
+        createPublicThreads:'allow',
+        createPrivateThreads:'deny',
+        sendInThreads:'allow',
+        manageThreads:'deny',
+        stream:'allow'
+      }
+    }
+  );
+
+  assert.equal(result.status,200,JSON.stringify(result.body));
+  assert.equal(result.body.verified,true);
+  const allow=BigInt(result.body.allow);
+  const deny=BigInt(result.body.deny);
+  assert.equal(allow&65536n,65536n,'message history must be allowed');
+  assert.equal(allow&16384n,16384n,'embed links must be allowed');
+  assert.equal(allow&2147483648n,2147483648n,'application commands must be allowed');
+  assert.equal(allow&562949953421312n,562949953421312n,'polls must be allowed');
+  assert.equal(allow&34359738368n,34359738368n,'public threads must be allowed');
+  assert.equal(deny&68719476736n,68719476736n,'private threads must be denied');
+  assert.equal(allow&274877906944n,274877906944n,'thread messages must be allowed');
+  assert.equal(deny&17179869184n,17179869184n,'thread management must be denied');
+  assert.equal(allow&512n,512n,'streaming must be allowed');
+});
+
+
 test('non-admin bot role allow overrides @everyone channel deny', async t => {
   const botPermissions = nonAdminBotPermissions;
   const {mf} = await runtime(t, {
