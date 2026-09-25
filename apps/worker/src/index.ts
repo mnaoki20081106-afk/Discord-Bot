@@ -877,6 +877,9 @@ function isVendingInteraction(interaction:any):boolean{
 
 function shouldDeferInteraction(interaction:any):boolean{
   const id=interactionCustomId(interaction);
+  if(interaction?.type===2){
+    return interaction?.data?.name==="security-status";
+  }
   if(interaction?.type===3){
     if(
       id==="ticket:create"||
@@ -2288,7 +2291,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v38-member-activity",
+          version:"dashboard-auth-v39-interaction-fast-ack",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
