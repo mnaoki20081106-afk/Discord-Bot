@@ -68,7 +68,9 @@ const emptyProduct = {
   description:"",
   pricePayPay:0,
   priceKyash:0,
-  emoji:""
+  emoji:"",
+  infiniteStock:false,
+  infiniteContent:""
 };
 
 export default function VendingManager({
@@ -105,6 +107,7 @@ export default function VendingManager({
   const [achievementRooms,setAchievementRooms]=useState<AchievementRoomDraft[]>([]);
 
   const [newProduct,setNewProduct]=useState(emptyProduct);
+  const [stockFilter,setStockFilter]=useState<"all"|"finite"|"infinite"|"empty">("all");
   const [editingProduct,setEditingProduct]=useState<Product|null>(null);
   const [productEdit,setProductEdit]=useState({
     name:"",
@@ -172,6 +175,33 @@ export default function VendingManager({
     productEdit.infiniteStock!==Boolean(editingProduct!.infinite_stock) ||
     productEdit.infiniteContent!==(editingProduct!.infinite_content??"")
   );
+
+  const stockSummary = useMemo(()=>{
+    const products=detail?.products??[];
+    const finite=products.filter(product=>!product.infinite_stock);
+    const infinite=products.filter(product=>Boolean(product.infinite_stock));
+    const empty=finite.filter(product=>product.stock_count<=0);
+    return {
+      productCount:products.length,
+      finiteProductCount:finite.length,
+      infiniteProductCount:infinite.length,
+      finiteUnits:finite.reduce((sum,product)=>sum+Math.max(0,product.stock_count),0),
+      emptyProductCount:empty.length,
+      salesCount:products.reduce((sum,product)=>sum+Math.max(0,product.sales_count),0)
+    };
+  },[detail]);
+
+  const visibleProducts = useMemo(()=>{
+    const products=detail?.products??[];
+    if(stockFilter==="finite") return products.filter(product=>!product.infinite_stock);
+    if(stockFilter==="infinite") return products.filter(product=>Boolean(product.infinite_stock));
+    if(stockFilter==="empty") return products.filter(product=>!product.infinite_stock&&product.stock_count<=0);
+    return products;
+  },[detail,stockFilter]);
+
+  const editingStockCount = editingProduct
+    ? detail?.products.find(product=>product.id===editingProduct.id)?.stock_count ?? editingProduct.stock_count
+    : 0;
 
   const previewChannelName =
     channels.find(channel=>channel.id===panelChannel)?.name ?? "販売";
@@ -465,6 +495,10 @@ export default function VendingManager({
   async function addProduct(event:FormEvent){
     event.preventDefault();
     if(!selectedId||!newProduct.name.trim()) return;
+    if(newProduct.infiniteStock&&!newProduct.infiniteContent.trim()){
+      onError(new Error("無限在庫の商品は納品内容を入力してください"));
+      return;
+    }
     setBusy(true);
     try{
       await api(`/api/guilds/${guildId}/vending/${selectedId}/products`,{
@@ -1045,10 +1079,34 @@ export default function VendingManager({
               <div hidden={activeSection!=="products"} className="vending-tabs-section vending-products-section">
                 <div className="section-head compact">
                   <div>
-                    <span className="eyebrow">PRODUCTS</span>
-                    <h3>商品・在庫</h3>
+                    <span className="eyebrow">PRODUCTS / STOCK</span>
+                    <h3>{detail.name} の商品・在庫</h3>
+                    <p className="muted">この自販機に入っている商品だけを管理しています。有限在庫と無限在庫は別々に表示します。</p>
                   </div>
-                  <span className="status-pill"><i /> {detail.products.length} products</span>
+                  <span className="status-pill"><i /> 販売累計 {stockSummary.salesCount}</span>
+                </div>
+
+                <div className="vending-stock-overview" aria-label="在庫の絞り込み">
+                  <button type="button" className={stockFilter==="all"?"active":""} onClick={()=>setStockFilter("all")}>
+                    <span>全商品</span>
+                    <strong>{stockSummary.productCount}</strong>
+                    <small>商品</small>
+                  </button>
+                  <button type="button" className={stockFilter==="finite"?"active":""} onClick={()=>setStockFilter("finite")}>
+                    <span>有限在庫</span>
+                    <strong>{stockSummary.finiteUnits}</strong>
+                    <small>{stockSummary.finiteProductCount}商品 / 合計個数</small>
+                  </button>
+                  <button type="button" className={stockFilter==="infinite"?"active":""} onClick={()=>setStockFilter("infinite")}>
+                    <span>無限在庫</span>
+                    <strong>∞ {stockSummary.infiniteProductCount}</strong>
+                    <small>商品</small>
+                  </button>
+                  <button type="button" className={(stockFilter==="empty"?"active ":"")+(stockSummary.emptyProductCount>0?"warning":"")} onClick={()=>setStockFilter("empty")}>
+                    <span>在庫切れ</span>
+                    <strong>{stockSummary.emptyProductCount}</strong>
+                    <small>有限商品</small>
+                  </button>
                 </div>
 
                 <details className="vending-add-product">
@@ -1063,26 +1121,62 @@ export default function VendingManager({
                     <label className="field"><span>説明</span><input value={newProduct.description} onChange={e=>setNewProduct({...newProduct,description:e.target.value})}/></label>
                     <label className="field"><span>絵文字</span><input value={newProduct.emoji} onChange={e=>setNewProduct({...newProduct,emoji:e.target.value})} placeholder="📦"/></label>
                   </div>
+                  <label className="toggle-row compact-toggle vending-stock-create-mode">
+                    <span className="toggle-copy">
+                      <strong>無限在庫にする</strong>
+                      <small>{newProduct.infiniteStock?"同じ内容を何度でも納品します":"1件ずつ在庫を登録して販売します"}</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={newProduct.infiniteStock}
+                      onChange={e=>setNewProduct({...newProduct,infiniteStock:e.target.checked})}
+                    />
+                  </label>
+                  {newProduct.infiniteStock&&(
+                    <label className="field">
+                      <span>無限在庫の納品内容</span>
+                      <textarea
+                        required
+                        value={newProduct.infiniteContent}
+                        onChange={e=>setNewProduct({...newProduct,infiniteContent:e.target.value})}
+                        placeholder="購入者へ毎回送る内容"
+                      />
+                    </label>
+                  )}
+                  {!newProduct.infiniteStock&&(
+                    <div className="vending-stock-create-note">
+                      商品追加後に「有限在庫」からコード・URL・テキストを1行1件で登録できます。
+                    </div>
+                  )}
                   <button className="secondary" type="submit" disabled={busy}>＋ 商品を追加</button>
                 </form>
 
                 </details>
                 <div className="vending-products">
-                  {detail.products.map(product=>(
-                    <article key={product.id} className={`vending-product-card ${editingProduct?.id===product.id?"active":""}`}>
-                      <button className="vending-product-summary" onClick={()=>editProduct(product)}>
+                  {visibleProducts.map(product=>(
+                    <article key={product.id} className={`vending-product-card ${editingProduct?.id===product.id?"active":""} ${product.infinite_stock?"infinite":"finite"}`}>
+                      <button type="button" className="vending-product-summary" onClick={()=>editProduct(product)}>
                         <span className="vending-product-emoji">{product.emoji||"📦"}</span>
                         <span className="vending-product-copy">
                           <strong>{product.name}</strong>
                           <small>PayPay ¥{product.price_paypay} · Kyash ¥{product.price_kyash}</small>
+                          <span className={`vending-stock-type ${product.infinite_stock?"infinite":"finite"}`}>
+                            {product.infinite_stock?"∞ 無限在庫":"有限在庫"}
+                          </span>
                         </span>
-                        <span className="vending-stock-count">{product.infinite_stock?"∞":product.stock_count}</span>
+                        <span className={`vending-stock-count ${!product.infinite_stock&&product.stock_count<=0?"empty":""}`}>
+                          {product.infinite_stock?"∞":product.stock_count+"個"}
+                        </span>
                         <span className="vending-sales">販売 {product.sales_count}</span>
                       </button>
                     </article>
                   ))}
+                  {visibleProducts.length===0&&(
+                    <div className="vending-filter-empty">
+                      {stockFilter==="empty"?"在庫切れの商品はありません。":"この条件に該当する商品はありません。"}
+                    </div>
+                  )}
                 </div>
-
                 {editingProduct&&(
                   <div className="vending-product-editor" ref={productEditorRef}>
                     <div className="section-head compact">
@@ -1098,12 +1192,34 @@ export default function VendingManager({
                       <label className="field"><span>説明</span><textarea value={productEdit.description} onChange={e=>setProductEdit({...productEdit,description:e.target.value})}/></label>
                       <label className="field"><span>絵文字</span><input value={productEdit.emoji} onChange={e=>setProductEdit({...productEdit,emoji:e.target.value})}/></label>
                     </div>
+                    <div className={`vending-stock-mode-banner ${productEdit.infiniteStock?"infinite":"finite"}`}>
+                      <div>
+                        <strong>{productEdit.infiniteStock?"∞ 無限在庫":"有限在庫"}</strong>
+                        <span>
+                          {productEdit.infiniteStock
+                            ?"在庫数は減りません。同じ納品内容を購入ごとに送ります。"
+                            :`現在 ${Math.max(0,editingStockCount)}個。1行を在庫1件として個別に消費します。`}
+                        </span>
+                      </div>
+                      <span className="vending-stock-mode-value">{productEdit.infiniteStock?"∞":Math.max(0,editingStockCount)+"個"}</span>
+                    </div>
                     <label className="toggle-row compact-toggle">
-                      <span className="toggle-copy"><strong>無限在庫</strong><small>購入数は1固定・同じ内容を納品</small></span>
+                      <span className="toggle-copy">
+                        <strong>無限在庫として扱う</strong>
+                        <small>{productEdit.infiniteStock?"ON: 同じ内容を繰り返し納品":"OFF: 登録した有限在庫を1件ずつ消費"}</small>
+                      </span>
                       <input type="checkbox" checked={productEdit.infiniteStock} onChange={e=>setProductEdit({...productEdit,infiniteStock:e.target.checked})}/>
                     </label>
                     {productEdit.infiniteStock&&(
-                      <label className="field"><span>無限在庫の納品内容</span><textarea value={productEdit.infiniteContent} onChange={e=>setProductEdit({...productEdit,infiniteContent:e.target.value})}/></label>
+                      <label className="field">
+                        <span>無限在庫の納品内容</span>
+                        <textarea
+                          value={productEdit.infiniteContent}
+                          onChange={e=>setProductEdit({...productEdit,infiniteContent:e.target.value})}
+                          placeholder="購入者へ毎回送る内容"
+                        />
+                        <small className="vending-field-help">有限在庫へ戻しても、以前に登録した有限在庫は残ります。</small>
+                      </label>
                     )}
                     <div className="button-row">
                       <button className="primary" onClick={()=>void saveProduct()} disabled={busy}>商品を保存</button>
@@ -1112,7 +1228,15 @@ export default function VendingManager({
 
                     {!productEdit.infiniteStock&&(
                       <div className="vending-stock-editor">
-                        <span className="eyebrow">FINITE STOCK</span>
+                        <div className="vending-stock-editor-head">
+                          <div>
+                            <span className="eyebrow">FINITE STOCK</span>
+                            <strong>有限在庫を追加・確認</strong>
+                          </div>
+                          <span className={`vending-stock-live-count ${editingStockCount<=0?"empty":""}`}>
+                            現在 {Math.max(0,editingStockCount)}個
+                          </span>
+                        </div>
                         <textarea value={stockText} onChange={e=>setStockText(e.target.value)} placeholder={"1行＝在庫1件\nコードA\nコードB\nコードC"}/>
                         <div className="vending-stock-file-row">
                           <label className="secondary vending-file-button">
