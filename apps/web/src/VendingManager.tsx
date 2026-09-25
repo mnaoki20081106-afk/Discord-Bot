@@ -1153,7 +1153,7 @@ export default function VendingManager({
 
                             <div className="vending-preview-match">
                               <span>✓</span>
-                              このプレビューと同じ設定を保存してからDiscordへ投稿します
+                              表示内容・順序は実際のDiscord送信内容と同じです。フォントや余白はDiscordアプリ側で多少変わる場合があります。
                             </div>
                           </div>
                         </div>
