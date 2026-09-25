@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const source = readFileSync(new URL("../src/ServerEditor.tsx", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/ServerEditor/index.tsx", import.meta.url), "utf8");
 
 function functionBody(name, nextName) {
   const start = source.indexOf(`  async function ${name}`);
@@ -45,4 +45,29 @@ test("permission-only main save avoids the generic channel PATCH", () => {
 
 test("main action is labeled as saving all channel changes", () => {
   assert.match(source, /すべての変更を保存/);
+});
+
+
+test("high-priority channel permissions are visible and advanced permissions are collapsible", () => {
+  const textPrimaryStart = source.indexOf("const TEXT_PRIMARY_PERMISSION_ROWS");
+  const textAdvancedStart = source.indexOf("const TEXT_ADVANCED_PERMISSION_ROWS");
+  const voicePrimaryStart = source.indexOf("const VOICE_PRIMARY_PERMISSION_ROWS");
+  assert.ok(textPrimaryStart >= 0);
+  assert.ok(textAdvancedStart > textPrimaryStart);
+  assert.ok(voicePrimaryStart > textAdvancedStart);
+
+  const textPrimary = source.slice(textPrimaryStart, textAdvancedStart);
+  const textAdvanced = source.slice(textAdvancedStart, voicePrimaryStart);
+
+  assert.match(textPrimary, /history/);
+  assert.match(textPrimary, /embeds/);
+  assert.match(textPrimary, /appCommands/);
+  assert.match(textPrimary, /polls/);
+  assert.match(textPrimary, /createPublicThreads/);
+  assert.match(textPrimary, /createPrivateThreads/);
+  assert.match(textPrimary, /sendInThreads/);
+
+  assert.match(textAdvanced, /manageThreads/);
+  assert.match(textAdvanced, /manageMessages/);
+  assert.match(source, /<details className="permission-advanced">/);
 });
