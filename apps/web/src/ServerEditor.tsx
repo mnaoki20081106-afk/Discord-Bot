@@ -547,7 +547,7 @@ export default function ServerEditor({
     setPermissionSaveFeedback({
       kind: "saving",
       message: "Discordへ権限を反映して確認中…",
-      detail: `#${channelName} / ${targetName}`
+      detail: `#${channelName} / ${targetName} / atomic-v45`
     });
 
     try {
@@ -556,7 +556,7 @@ export default function ServerEditor({
         verified?: boolean;
         operationId?: string;
       }>(
-        `/api/guilds/${guildId}/channels/${channelId}/permissions/${targetId}`,
+        `/api/guilds/${guildId}/channels/${channelId}/permissions/${targetId}?client=atomic-v45`,
         {
           method: "PATCH",
           body: JSON.stringify({
@@ -564,7 +564,7 @@ export default function ServerEditor({
             permissions: permissionDraft
           })
         },
-        30_000
+        18_000
       );
 
       if (!result.ok || result.verified !== true) {
