@@ -2159,19 +2159,129 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       permissions
     );
 
+    const readBack=async():Promise<DiscordChannel>=>{
+      const response=await botFetchInteractive(
+        env,
+        `/guilds/${guildId}/channels`
+      );
+      if(!response.ok){
+        const detail=await response.text().catch(()=>"");
+        throw new DiscordApiError(
+          response.status,
+          "Discord API "+response.status+": "+detail.slice(0,300)
+        );
+      }
+      const currentChannels=await response.json() as DiscordChannel[];
+      const currentChannel=currentChannels.find(item=>item.id===channelId);
+      if(!currentChannel){
+        throw new HttpError(
+          404,
+          "保存確認中に対象チャンネルが見つかりませんでした"
+        );
+      }
+      return currentChannel;
+    };
+
+    const exactOverwriteMatches=(currentChannel:DiscordChannel):boolean=>{
+      const overwrite=(currentChannel.permission_overwrites??[]).find(
+        item=>item.id===targetId&&item.type===0
+      );
+      const actualAllow=overwrite?.allow??"0";
+      const actualDeny=overwrite?.deny??"0";
+      return actualAllow===result.allow&&actualDeny===result.deny;
+    };
+
+    // A 204 only confirms that Discord accepted the request. Read the guild
+    // channel state back once and require the exact overwrite to match before
+    // reporting success to the dashboard.
+    let confirmedChannel=await readBack();
+    let verification:"readback"|"forced-channel-patch"="readback";
+
+    if(!exactOverwriteMatches(confirmedChannel)){
+      // Rare recovery path: preserve every latest overwrite and replace only
+      // the requested role overwrite via Modify Channel. This avoids reporting
+      // a false success if the single-overwrite PUT was accepted but the state
+      // observed by Discord did not change as requested.
+      const replacement=[
+        ...(confirmedChannel.permission_overwrites??[])
+          .filter(item=>!(item.id===targetId&&item.type===0))
+          .map(item=>({
+            id:item.id,
+            type:item.type,
+            allow:item.allow,
+            deny:item.deny
+          }))
+      ];
+      if(result.allow!=="0"||result.deny!=="0"){
+        replacement.push({
+          id:targetId,
+          type:0,
+          allow:result.allow,
+          deny:result.deny
+        });
+      }
+
+      const forceResponse=await botFetchInteractive(
+        env,
+        `/channels/${channelId}`,
+        {
+          method:"PATCH",
+          body:JSON.stringify({permission_overwrites:replacement})
+        }
+      );
+      if(!forceResponse.ok){
+        const detail=await forceResponse.text().catch(()=>"");
+        if(forceResponse.status===403){
+          throw new HttpError(
+            403,
+            "通常の権限変更は受理されましたが、Discord側で反映を確認できず、強制反映も拒否されました。BOTロールの「チャンネルの管理」と「ロールの管理」を確認してください"
+          );
+        }
+        throw new DiscordApiError(
+          forceResponse.status,
+          "Discord API "+forceResponse.status+": "+detail.slice(0,300)
+        );
+      }
+
+      confirmedChannel=await readBack();
+      verification="forced-channel-patch";
+    }
+
+    if(!exactOverwriteMatches(confirmedChannel)){
+      const overwrite=(confirmedChannel.permission_overwrites??[]).find(
+        item=>item.id===targetId&&item.type===0
+      );
+      console.error("channel permission verification mismatch",{
+        guildId,
+        channelId,
+        targetId,
+        expectedAllow:result.allow,
+        expectedDeny:result.deny,
+        actualAllow:overwrite?.allow??"0",
+        actualDeny:overwrite?.deny??"0"
+      });
+      throw new HttpError(
+        502,
+        "Discord側の権限を再取得しましたが、指定した内容と一致しませんでした。成功扱いにはしていません"
+      );
+    }
+
     const operationId=randomId();
-    console.log("channel permissions direct",{
+    console.log("channel permissions verified",{
       operationId,
       guildId,
       channelId,
       targetId,
-      changed:result.changed
+      changed:result.changed,
+      verification,
+      allow:result.allow,
+      deny:result.deny
     });
 
     return json(env,{
       ok:true,
       verified:true,
-      verification:"discord-write-ack",
+      verification,
       operationId,
       channelId,
       targetId,
@@ -2510,7 +2620,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v43-hidden-channel-permission-write",
+          version:"dashboard-auth-v44-verified-permission-persist",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
