@@ -175,6 +175,29 @@ async function runtime(t, options = {}) {
         return Response.json([]);
       }
       if (
+        request.method === 'GET' &&
+        url.pathname === `/api/v10/channels/${chatChannelId}/messages/723456789012345678`
+      ) {
+        return Response.json({
+          id:'723456789012345678',
+          channel_id:chatChannelId,
+          components:[{type:1,components:[{
+            type:2,style:3,label:'認証する',custom_id:`verify:start:${guildId}`
+          }]}]
+        });
+      }
+      if (
+        request.method === 'PATCH' &&
+        url.pathname === `/api/v10/channels/${chatChannelId}/messages/723456789012345678`
+      ) {
+        calls[calls.length-1].body=await request.clone().json().catch(()=>null);
+        return Response.json({
+          id:'723456789012345678',
+          channel_id:chatChannelId,
+          ...calls[calls.length-1].body
+        });
+      }
+      if (
         request.method === 'POST' &&
         url.pathname === `/api/v10/channels/${chatChannelId}/messages`
       ) {
@@ -773,11 +796,16 @@ test('restore job replays guild extras and bans without deleting existing struct
     'restore must replay widget settings'
   );
 
-  const panelPosts=calls.filter(call=>
-    call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
+  const panelWrites=calls.filter(call=>
+    (call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`)||
+    (call.method==='PATCH'&&call.path===`/api/v10/channels/${chatChannelId}/messages/723456789012345678`)
   );
-  assert.ok(panelPosts.length>=2,'verification panel must be recreated during restore');
-  const restoredPanel=panelPosts.at(-1)?.body;
+  assert.ok(panelWrites.length>=2,'verification panel must be refreshed during restore');
+  assert.ok(
+    panelWrites.some(call=>call.method==='PATCH'),
+    'an existing legacy verification panel must be upgraded in place'
+  );
+  const restoredPanel=panelWrites.at(-1)?.body;
   const restoredButton=restoredPanel?.components?.[0]?.components?.[0];
   assert.equal(restoredButton?.style,5);
   assert.equal(restoredButton?.custom_id,undefined);
