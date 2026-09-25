@@ -740,7 +740,7 @@ export default function VendingManager({
           ) : (
             <>
               <nav className="vending-section-nav" aria-label="自販機の管理メニュー">
-                {([['panel','パネル'],['products','商品・在庫'],['settings','クーポン・通知']] as const).map(([id,label])=>(
+                {([['panel','パネル'],['products','商品・在庫'],['settings','クーポン・通知・実績']] as const).map(([id,label])=>(
                   <button type="button" key={id} aria-pressed={activeSection===id} onClick={()=>setActiveSection(id)}>{label}</button>
                 ))}
               </nav>
