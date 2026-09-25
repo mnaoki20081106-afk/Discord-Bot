@@ -443,6 +443,165 @@ const CHANNEL_PERMISSION_BITS:Record<ChannelPermissionKey,bigint>={
   speak:2097152n
 };
 
+async function botFetchInteractive(
+  env:Env,
+  path:string,
+  init:RequestInit={}
+):Promise<Response>{
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(),7_000);
+  try{
+    const response=await botFetch(env,path,{...init,signal:controller.signal});
+    if(response.status===429){
+      const raw=await response.text().catch(()=>"");
+      let retryAfterSeconds:number|null=null;
+      try{
+        const payload=JSON.parse(raw) as {retry_after?:number};
+        if(typeof payload.retry_after==="number"&&Number.isFinite(payload.retry_after)){
+          retryAfterSeconds=Math.max(1,Math.ceil(payload.retry_after));
+        }
+      }catch{
+        const header=response.headers.get("Retry-After");
+        const parsed=header?Number(header):NaN;
+        if(Number.isFinite(parsed)) retryAfterSeconds=Math.max(1,Math.ceil(parsed));
+      }
+      throw new HttpError(
+        429,
+        retryAfterSeconds
+          ? `Discordのレート制限中です。約${retryAfterSeconds}秒後にもう一度保存してください`
+          : "Discordのレート制限中です。少し待ってもう一度保存してください"
+      );
+    }
+    return response;
+  }catch(error){
+    if(controller.signal.aborted){
+      throw new HttpError(
+        504,
+        "Discord APIの応答が7秒以内に返りませんでした。権限変更は確定していないため、もう一度保存してください"
+      );
+    }
+    throw error;
+  }finally{
+    clearTimeout(timeoutId);
+  }
+}
+
+async function applyChannelRolePermissionsFast(
+  env:Env,
+  guildId:string,
+  channel:DiscordChannel,
+  targetId:string,
+  permissions:ChannelPermissionPatch
+):Promise<{allow:string;deny:string;changed:boolean}>{
+  if(channel.guild_id&&channel.guild_id!==guildId){
+    throw new HttpError(404,"対象チャンネルがこのサーバーに見つかりません");
+  }
+
+  // Denying View Channel can immediately hide the channel from the bot.
+  // Protect the bot with a direct member overwrite before applying the role deny.
+  if(permissions.view==="deny"){
+    const botId=env.DISCORD_APPLICATION_ID.trim();
+    const botOverwrite=(channel.permission_overwrites??[]).find(
+      overwrite=>overwrite.id===botId&&overwrite.type===1
+    );
+    let botAllow=BigInt(botOverwrite?.allow??"0");
+    let botDeny=BigInt(botOverwrite?.deny??"0");
+    const protectedAlready=
+      (botAllow&BOT_CHANNEL_GUARD_MASK)===BOT_CHANNEL_GUARD_MASK&&
+      (botDeny&BOT_CHANNEL_GUARD_MASK)===0n;
+
+    if(!protectedAlready){
+      botAllow|=BOT_CHANNEL_GUARD_MASK;
+      botDeny&=~BOT_CHANNEL_GUARD_MASK;
+      const guardResponse=await botFetchInteractive(
+        env,
+        `/channels/${channel.id}/permissions/${botId}`,
+        {
+          method:"PUT",
+          body:JSON.stringify({
+            type:1,
+            allow:botAllow.toString(),
+            deny:botDeny.toString()
+          })
+        }
+      );
+      if(!guardResponse.ok){
+        const detail=await guardResponse.text().catch(()=>"");
+        if(guardResponse.status===403){
+          throw new HttpError(
+            409,
+            "BOTのアクセス保護を設定できないため保存を停止しました。BOTロールに「チャンネルの管理」と「ロールの管理」を許可してください"
+          );
+        }
+        throw new DiscordApiError(
+          guardResponse.status,
+          "Discord API "+guardResponse.status+": "+detail.slice(0,300)
+        );
+      }
+    }
+  }
+
+  const current=(channel.permission_overwrites??[]).find(
+    overwrite=>overwrite.id===targetId&&overwrite.type===0
+  );
+  let allow=BigInt(current?.allow??"0");
+  let deny=BigInt(current?.deny??"0");
+  const beforeAllow=allow;
+  const beforeDeny=deny;
+
+  for(const [rawKey,mode] of Object.entries(permissions)){
+    if(!(rawKey in CHANNEL_PERMISSION_BITS)) continue;
+    if(mode!=="inherit"&&mode!=="allow"&&mode!=="deny") continue;
+    const bit=CHANNEL_PERMISSION_BITS[rawKey as ChannelPermissionKey];
+    allow&=~bit;
+    deny&=~bit;
+    if(mode==="allow") allow|=bit;
+    if(mode==="deny") deny|=bit;
+  }
+
+  if(allow===beforeAllow&&deny===beforeDeny){
+    return {allow:allow.toString(),deny:deny.toString(),changed:false};
+  }
+
+  const response=
+    allow===0n&&deny===0n
+      ? current
+        ? await botFetchInteractive(
+            env,
+            `/channels/${channel.id}/permissions/${targetId}`,
+            {method:"DELETE"}
+          )
+        : null
+      : await botFetchInteractive(
+          env,
+          `/channels/${channel.id}/permissions/${targetId}`,
+          {
+            method:"PUT",
+            body:JSON.stringify({
+              type:0,
+              allow:allow.toString(),
+              deny:deny.toString()
+            })
+          }
+        );
+
+  if(response&&!response.ok){
+    const detail=await response.text().catch(()=>"");
+    if(response.status===403){
+      throw new HttpError(
+        403,
+        "Discordが権限変更を拒否しました。BOTロールの「チャンネルの管理」と「ロールの管理」、および対象チャンネルへのアクセスを確認してください"
+      );
+    }
+    throw new DiscordApiError(
+      response.status,
+      "Discord API "+response.status+": "+detail.slice(0,300)
+    );
+  }
+
+  return {allow:allow.toString(),deny:deny.toString(),changed:true};
+}
+
 async function applyChannelRolePermissions(
   env:Env,
   guildId:string,
@@ -1951,8 +2110,6 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const channelId=channelPermissionMatch[2]!;
     const targetId=channelPermissionMatch[3]!;
 
-    // Authentication is enough here. The following channel/role reads validate
-    // the guild while avoiding an extra /guilds/:id Discord round trip.
     await sessionFromRequest(request,env);
 
     const input=await bodyObject<{
@@ -1964,102 +2121,58 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       throw new HttpError(400,"変更する権限を選択してください");
     }
 
-    const [channels,roles]=await Promise.all([
-      botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`),
-      botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`)
-    ]);
-    const channel=channels.find(item=>item.id===channelId);
-    if(!channel){
-      throw new HttpError(
-        404,
-        "チャンネルが見つかりません。サーバー構成を再読み込みしてください"
+    // Interactive save path: one channel read + one overwrite write.
+    // Avoid full guild/role/member reads and synchronous write verification,
+    // which can queue behind Discord rate limits and exceed the dashboard timeout.
+    const channelResponse=await botFetchInteractive(
+      env,
+      `/channels/${channelId}`
+    );
+    if(!channelResponse.ok){
+      const detail=await channelResponse.text().catch(()=>"");
+      if(channelResponse.status===403){
+        throw new HttpError(
+          403,
+          "BOTが対象チャンネルを参照できません。BOTロールまたはBOT個別権限で「チャンネルを見る」を許可してください"
+        );
+      }
+      if(channelResponse.status===404){
+        throw new HttpError(404,"対象チャンネルが見つかりません");
+      }
+      throw new DiscordApiError(
+        channelResponse.status,
+        "Discord API "+channelResponse.status+": "+detail.slice(0,300)
       );
     }
-    if(targetId!==guildId&&!roles.some(role=>role.id===targetId)){
-      throw new HttpError(404,"対象ロールが見つかりません");
-    }
 
-    const member=await getBotGuildMember(env,guildId,roles);
-    let result=await applyChannelRolePermissions(
+    const channel=await channelResponse.json() as DiscordChannel;
+    const result=await applyChannelRolePermissionsFast(
       env,
       guildId,
       channel,
       targetId,
-      roles,
-      member,
       permissions
     );
 
-    const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
-    const readBack=async():Promise<{verified:boolean;channel:DiscordChannel|null}>=>{
-      const confirmed=await botJson<DiscordChannel[]>(
-        env,
-        `/guilds/${guildId}/channels`
-      );
-      const confirmedChannel=confirmed.find(item=>item.id===channelId)??null;
-      return {
-        verified:Boolean(
-          confirmedChannel&&
-          channelPermissionPatchMatches(confirmedChannel,targetId,permissions)
-        ),
-        channel:confirmedChannel
-      };
-    };
-
-    // Discord normally exposes the overwrite immediately after its 204 response.
-    // Use one read-back, then a short delayed read only when propagation lags.
-    let verification=await readBack();
-    if(!verification.verified){
-      await sleep(220);
-      verification=await readBack();
-    }
-
-    if(!verification.verified){
-      if(!verification.channel){
-        throw new HttpError(
-          404,
-          "保存確認中にチャンネルが見つからなくなりました。サーバー構成を再読み込みしてください"
-        );
-      }
-      result=await applyChannelRolePermissions(
-        env,
-        guildId,
-        verification.channel,
-        targetId,
-        roles,
-        member,
-        permissions
-      );
-      await sleep(220);
-      verification=await readBack();
-    }
-
-    const verified=verification.verified;
-
-    if(!verified){
-      throw new HttpError(
-        502,
-        "Discordへ権限変更を送信しましたが、再取得した内容が一致しませんでした。もう一度お試しください"
-      );
-    }
-
     const operationId=randomId();
-    console.log("channel permissions",{
+    console.log("channel permissions direct",{
       operationId,
       guildId,
       channelId,
       targetId,
-      verified:true
+      changed:result.changed
     });
 
     return json(env,{
       ok:true,
       verified:true,
+      verification:"discord-write-ack",
       operationId,
       channelId,
       targetId,
       allow:result.allow,
-      deny:result.deny
+      deny:result.deny,
+      changed:result.changed
     });
   }
 
@@ -2392,7 +2505,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v41-fast-permission-save",
+          version:"dashboard-auth-v42-direct-permission-write",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
