@@ -565,15 +565,18 @@ async function discordMeta(env:Env,guildId:string){
   let roles:DiscordRole[];
   let member:DiscordGuildMember;
 
+  const channelsPromise=botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+  const rolesPromise=botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
+
   try{
-    channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+    channels=await channelsPromise;
   }catch(error){
     const detail=error instanceof Error?error.message:String(error);
     throw new HttpError(502,"Discordチャンネル一覧の取得に失敗しました: "+detail.slice(0,220));
   }
 
   try{
-    roles=await botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
+    roles=await rolesPromise;
   }catch(error){
     const detail=error instanceof Error?error.message:String(error);
     throw new HttpError(502,"Discordロール一覧の取得に失敗しました: "+detail.slice(0,220));
@@ -1313,18 +1316,23 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(meta&&request.method==="GET"){
     const guildId=meta[1]!;
     const fast=url.searchParams.get("fast")==="1";
-    const {guild}=await requireGuild(request,env,guildId);
 
     // Save/refresh flows only need the current Discord structure. Running the
     // full access-repair sweep here can issue one overwrite request per channel
     // and make an otherwise successful save appear to hang in the dashboard.
     if(fast){
+      await sessionFromRequest(request,env);
+      const [guild,metaData]=await Promise.all([
+        botJson<{id:string;name:string;icon:string|null}>(env,`/guilds/${guildId}`),
+        discordMeta(env,guildId)
+      ]);
       return json(env,{
         ...guild,
-        ...await discordMeta(env,guildId)
+        ...metaData
       });
     }
 
+    const {guild}=await requireGuild(request,env,guildId);
     const botAccessRepair=await repairBotChannelAccess(env,guildId);
     let verificationPanelUpgrade:"updated"|"current"|"missing"="missing";
     try{
