@@ -378,6 +378,68 @@ for (const legacy of [false, true]) {
     assert.equal(vm.status,201,JSON.stringify(vm.body));
     const vmList = await request(mf,`/api/guilds/${guildId}/vending`,token);
     assert.equal(vmList.body.length,1);
+
+    const missingInfiniteContent=await request(
+      mf,`/api/guilds/${guildId}/vending/${vm.body.id}/products`,token,'POST',
+      {name:'Broken infinite',pricePayPay:100,priceKyash:100,infiniteStock:true}
+    );
+    assert.equal(missingInfiniteContent.status,400);
+
+    const infiniteProduct=await request(
+      mf,`/api/guilds/${guildId}/vending/${vm.body.id}/products`,token,'POST',
+      {
+        name:'Infinite product',
+        pricePayPay:100,
+        priceKyash:100,
+        infiniteStock:true,
+        infiniteContent:'same delivery every time'
+      }
+    );
+    assert.equal(infiniteProduct.status,201,JSON.stringify(infiniteProduct.body));
+    assert.equal(infiniteProduct.body.infinite_stock,1);
+    assert.equal(infiniteProduct.body.infinite_content,'same delivery every time');
+
+    const invalidFiniteStock=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/products/${infiniteProduct.body.id}/stock`,
+      token,
+      'POST',
+      {lines:['should not be stored']}
+    );
+    assert.equal(invalidFiniteStock.status,409);
+
+    const secondVm=await request(
+      mf,`/api/guilds/${guildId}/vending`,token,'POST',{name:'Second machine'}
+    );
+    assert.equal(secondVm.status,201);
+    const crossMachineUpdate=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${secondVm.body.id}/products/${infiniteProduct.body.id}`,
+      token,
+      'PATCH',
+      {name:'must not move'}
+    );
+    assert.equal(crossMachineUpdate.status,404);
+
+    const finiteProduct=await request(
+      mf,`/api/guilds/${guildId}/vending/${vm.body.id}/products`,token,'POST',
+      {name:'Finite product',pricePayPay:200,priceKyash:200}
+    );
+    assert.equal(finiteProduct.status,201,JSON.stringify(finiteProduct.body));
+    assert.equal(finiteProduct.body.infinite_stock,0);
+    const finiteStock=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/products/${finiteProduct.body.id}/stock`,
+      token,
+      'POST',
+      {lines:['stock-a','stock-b'],notify:false}
+    );
+    assert.equal(finiteStock.status,200,JSON.stringify(finiteStock.body));
+    assert.equal(finiteStock.body.added,2);
+    const vmDetail=await request(mf,`/api/guilds/${guildId}/vending/${vm.body.id}`,token);
+    const finiteDetail=vmDetail.body.products.find(item=>item.id===finiteProduct.body.id);
+    assert.equal(finiteDetail.stock_count,2);
+
     const product = await request(mf,`/api/guilds/${guildId}/products`,token,'POST',{
       name:'Local text product',priceYen:100,deliveryType:'text',deliveryText:'test only'
     });
