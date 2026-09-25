@@ -96,9 +96,14 @@ export async function listVmProducts(env:Env,vmId:string){
   return (await env.DB.prepare("SELECT p.*,CASE WHEN p.infinite_stock=1 THEN -1 ELSE COALESCE((SELECT COUNT(*) FROM vending_stock s WHERE s.product_id=p.id AND s.state='available'),0) END AS stock_count FROM vending_products p WHERE p.vending_machine_id=? AND p.active=1 ORDER BY p.created_at ASC").bind(vmId).all<VmProduct&{stock_count:number}>()).results;
 }
 export async function getVmProduct(env:Env,id:string){ return await env.DB.prepare("SELECT * FROM vending_products WHERE id=? AND active=1").bind(id).first<VmProduct>()??null; }
-export async function createVmProduct(env:Env,vmId:string,input:{name:string;description:string;pricePayPay:number;priceKyash:number;emoji:string|null}){
+export async function createVmProduct(env:Env,vmId:string,input:{name:string;description:string;pricePayPay:number;priceKyash:number;emoji:string|null;infiniteStock?:boolean;infiniteContent?:string|null}){
   const id=randomId(),now=Date.now();
-  await env.DB.prepare("INSERT INTO vending_products(id,vending_machine_id,name,description,price_paypay,price_kyash,emoji,infinite_stock,infinite_content,sales_count,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,NULL,0,1,?,?)").bind(id,vmId,input.name,input.description,input.pricePayPay,input.priceKyash,input.emoji,now,now).run();
+  const infiniteStock=input.infiniteStock?1:0;
+  const infiniteContent=infiniteStock?String(input.infiniteContent??""):null;
+  await env.DB.prepare("INSERT INTO vending_products(id,vending_machine_id,name,description,price_paypay,price_kyash,emoji,infinite_stock,infinite_content,sales_count,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,0,1,?,?)").bind(
+    id,vmId,input.name,input.description,input.pricePayPay,input.priceKyash,input.emoji,
+    infiniteStock,infiniteContent,now,now
+  ).run();
   return getVmProduct(env,id);
 }
 export async function updateVmProduct(env:Env,id:string,vmId:string,p:Partial<{name:string;description:string;pricePayPay:number;priceKyash:number;emoji:string|null;infiniteStock:boolean;infiniteContent:string|null}>){
