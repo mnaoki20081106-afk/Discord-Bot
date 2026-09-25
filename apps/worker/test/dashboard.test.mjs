@@ -281,6 +281,16 @@ async function runtime(t, options = {}) {
           permission_overwrites:id===chatChannelId?channelOverwrites:[]
         });
       }
+      if (
+        request.method === 'PATCH' &&
+        /^\/api\/v10\/webhooks\/\d+\/[^/]+\/messages\/@original$/.test(url.pathname)
+      ) {
+        calls[calls.length-1].body=await request.clone().json().catch(()=>null);
+        return Response.json({
+          id:'823456789012345678',
+          ...calls[calls.length-1].body
+        });
+      }
       return Response.json({message:'Missing Access'}, {status:403});
     }
   });
@@ -321,6 +331,16 @@ async function signedInteraction(mf, privateKey, payload) {
     body
   });
   return {status:response.status,body:await response.json()};
+}
+
+async function eventually(fn, timeoutMs=1500) {
+  const deadline=Date.now()+timeoutMs;
+  while(Date.now()<deadline){
+    const value=await fn();
+    if(value) return value;
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  return fn();
 }
 
 for (const legacy of [false, true]) {
@@ -524,20 +544,35 @@ test('verification panel oauth stores recovery access before assigning the role'
   // It must create the same verification-purpose OAuth state and bind it to
   // the Discord user who pressed the button.
   const interactionStart = await signedInteraction(mf,interactionPrivateKey,{
+    id:'923456789012345678',
+    application_id:botId,
+    token:'verification-interaction-token',
     type:3,
     guild_id:guildId,
     member:{user:{id:verificationUserId,username:'Verifier'}},
     data:{custom_id:`verify:start:${guildId}`}
   });
   assert.equal(interactionStart.status,200,JSON.stringify(interactionStart.body));
-  const interactionUrl=new URL(interactionStart.body.data.components[0].components[0].url);
-  const interactionState=interactionUrl.searchParams.get('state');
-  assert.ok(interactionState);
-  const interactionStateRow=await db.prepare(
-    'SELECT purpose,expected_user_id FROM member_recovery_oauth_states WHERE state=?'
-  ).bind(interactionState).first();
+  assert.equal(interactionStart.body.type,5,'slow verification interaction must be deferred');
+  assert.equal(interactionStart.body.data.flags,64,'deferred response must remain ephemeral');
+
+  const interactionStateRow=await eventually(()=>db.prepare(
+    'SELECT state,purpose,expected_user_id FROM member_recovery_oauth_states WHERE expected_user_id=? ORDER BY expires_at DESC LIMIT 1'
+  ).bind(verificationUserId).first());
+  assert.ok(interactionStateRow?.state);
   assert.equal(interactionStateRow?.purpose,'verification');
   assert.equal(interactionStateRow?.expected_user_id,verificationUserId);
+
+  const deferredUpdate=await eventually(()=>calls.find(call=>
+    call.method==='PATCH'&&
+    call.path===`/api/v10/webhooks/${botId}/verification-interaction-token/messages/@original`
+  ));
+  assert.ok(deferredUpdate);
+  assert.match(
+    deferredUpdate.body?.data?.components?.[0]?.components?.[0]?.url??
+    deferredUpdate.body?.components?.[0]?.components?.[0]?.url??'',
+    /\/auth\/discord\/authorize|discord\.com\/oauth2\/authorize/
+  );
 
   const remaining = await db.prepare(
     'SELECT COUNT(*) AS count FROM verification_challenges'
