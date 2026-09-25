@@ -50,6 +50,7 @@ import {
   createVerificationRecoveryAuthorizeUrl,
   handleBackupApi,
   handleRecoveryOAuth,
+  upgradeTrackedVerificationPanel,
   verificationPanelPayload
 } from "./backup";
 import { recordPanelDeployment } from "./backup-db";
@@ -1124,10 +1125,19 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const guildId=meta[1]!;
     const {guild}=await requireGuild(request,env,guildId);
     const botAccessRepair=await repairBotChannelAccess(env,guildId);
+    let verificationPanelUpgrade:"updated"|"current"|"missing"="missing";
+    try{
+      verificationPanelUpgrade=await upgradeTrackedVerificationPanel(
+        env,guildId,new URL(request.url).origin
+      );
+    }catch(error){
+      console.warn("verification panel auto-upgrade failed",guildId,error);
+    }
     return json(env,{
       ...guild,
       ...await discordMeta(env,guildId),
-      botAccessRepair
+      botAccessRepair,
+      verificationPanelUpgrade
     });
   }
 
