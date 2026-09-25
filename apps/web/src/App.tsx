@@ -750,7 +750,7 @@ export default function App() {
                   guildName={meta.name}
                   meta={meta}
                   onRefresh={async () => {
-                  const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta`);
+                  const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta?fast=1`, {}, 12_000);
                   if(selectedGuildRef.current!==selectedId) return;
                   setMeta(serverMeta);
                   const messageChannels = serverMeta.channels.filter((channel) =>
@@ -775,7 +775,7 @@ export default function App() {
                   guildId={selectedId!}
                   roles={meta.roles}
                   onRefresh={async () => {
-                  const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta`);
+                  const serverMeta = await api<Meta>(`/api/guilds/${selectedId}/meta?fast=1`, {}, 12_000);
                   if(selectedGuildRef.current!==selectedId) return;
                   setMeta(serverMeta);
                   }}
