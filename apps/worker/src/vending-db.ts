@@ -25,6 +25,14 @@ export type VmOrder = {
   paid_at:number|null; delivered_at:number|null;
 };
 
+export type VmAchievementRoom = {
+  guild_id:string;
+  owner_id:string;
+  channel_id:string;
+  machine_ids:string[];
+  updated_at:number;
+};
+
 const schema=[
 "CREATE TABLE IF NOT EXISTS vending_machines (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,name TEXT NOT NULL,public_log_channel_id TEXT,local_log_channel_id TEXT,private_log_channel_id TEXT,role_id TEXT,panel_title TEXT,panel_description TEXT,panel_image_url TEXT,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE INDEX IF NOT EXISTS vending_machines_guild_idx ON vending_machines(guild_id,active)",
@@ -39,7 +47,8 @@ const schema=[
 "CREATE UNIQUE INDEX IF NOT EXISTS vending_orders_link_hash_unique ON vending_orders(payment_link_hash) WHERE payment_link_hash IS NOT NULL",
 "CREATE TABLE IF NOT EXISTS vending_payment_accounts (user_id TEXT PRIMARY KEY,paypay_phone_enc TEXT,paypay_password_enc TEXT,paypay_uuid TEXT,kyash_email_enc TEXT,kyash_password_enc TEXT,kyash_client_uuid TEXT,kyash_installation_uuid TEXT,kyash_access_token_enc TEXT,updated_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_payment_login_challenges (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,provider TEXT NOT NULL,payload_enc TEXT NOT NULL,expires_at INTEGER NOT NULL)",
-"CREATE TABLE IF NOT EXISTS vending_used_payment_links (link_hash TEXT PRIMARY KEY,provider TEXT NOT NULL,order_id TEXT NOT NULL,used_at INTEGER NOT NULL)"
+"CREATE TABLE IF NOT EXISTS vending_used_payment_links (link_hash TEXT PRIMARY KEY,provider TEXT NOT NULL,order_id TEXT NOT NULL,used_at INTEGER NOT NULL)",
+"CREATE TABLE IF NOT EXISTS vending_achievement_rooms (guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',updated_at INTEGER NOT NULL,PRIMARY KEY(guild_id,owner_id))"
 ];
 
 let ready=false;
@@ -120,6 +129,74 @@ export async function deleteCoupon(env:Env,vmId:string,ownerId:string,code:strin
 export async function saveStockNotify(env:Env,vmId:string,guildId:string,channelId:string,roleId:string){ await env.DB.prepare("INSERT INTO vending_stock_notifications(vending_machine_id,guild_id,channel_id,role_id,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(vending_machine_id) DO UPDATE SET guild_id=excluded.guild_id,channel_id=excluded.channel_id,role_id=excluded.role_id,updated_at=excluded.updated_at").bind(vmId,guildId,channelId,roleId,Date.now()).run(); }
 export async function getStockNotify(env:Env,vmId:string){ return await env.DB.prepare("SELECT guild_id,channel_id,role_id FROM vending_stock_notifications WHERE vending_machine_id=?").bind(vmId).first<{guild_id:string;channel_id:string;role_id:string}>()??null; }
 export async function deleteStockNotify(env:Env,vmId:string){ await env.DB.prepare("DELETE FROM vending_stock_notifications WHERE vending_machine_id=?").bind(vmId).run(); }
+
+export async function getAchievementRoom(
+  env:Env,
+  guildId:string,
+  ownerId:string
+):Promise<VmAchievementRoom|null>{
+  const row=await env.DB.prepare(
+    "SELECT guild_id,owner_id,channel_id,machine_ids_json,updated_at FROM vending_achievement_rooms WHERE guild_id=? AND owner_id=?"
+  ).bind(guildId,ownerId).first<{
+    guild_id:string;
+    owner_id:string;
+    channel_id:string;
+    machine_ids_json:string;
+    updated_at:number;
+  }>();
+  if(!row) return null;
+  let machineIds:string[]=[];
+  try{
+    const parsed=JSON.parse(row.machine_ids_json);
+    if(Array.isArray(parsed)){
+      machineIds=[...new Set(parsed.filter((value):value is string=>typeof value==="string"&&value.length>0))];
+    }
+  }catch{
+    machineIds=[];
+  }
+  return {
+    guild_id:row.guild_id,
+    owner_id:row.owner_id,
+    channel_id:row.channel_id,
+    machine_ids:machineIds,
+    updated_at:row.updated_at
+  };
+}
+
+export async function saveAchievementRoom(
+  env:Env,
+  input:{guildId:string;ownerId:string;channelId:string;machineIds:string[]}
+){
+  const machineIds=[...new Set(input.machineIds.filter(Boolean))];
+  await env.DB.prepare(
+    "INSERT INTO vending_achievement_rooms(guild_id,owner_id,channel_id,machine_ids_json,updated_at) VALUES (?,?,?,?,?) "+
+    "ON CONFLICT(guild_id,owner_id) DO UPDATE SET channel_id=excluded.channel_id,machine_ids_json=excluded.machine_ids_json,updated_at=excluded.updated_at"
+  ).bind(
+    input.guildId,
+    input.ownerId,
+    input.channelId,
+    JSON.stringify(machineIds),
+    Date.now()
+  ).run();
+  return getAchievementRoom(env,input.guildId,input.ownerId);
+}
+
+export async function deleteAchievementRoom(env:Env,guildId:string,ownerId:string){
+  const result=await env.DB.prepare(
+    "DELETE FROM vending_achievement_rooms WHERE guild_id=? AND owner_id=?"
+  ).bind(guildId,ownerId).run();
+  return (result.meta.changes??0)>0;
+}
+
+export async function getAchievementChannelForMachine(
+  env:Env,
+  guildId:string,
+  ownerId:string,
+  machineId:string
+):Promise<string|null>{
+  const room=await getAchievementRoom(env,guildId,ownerId);
+  return room?.machine_ids.includes(machineId)?room.channel_id:null;
+}
 
 export async function reserveOrder(env:Env,input:{vmId:string;product:VmProduct;guildId:string;userId:string;method:"paypay"|"kyash";quantity:number;discount:number}){
   const now=Date.now(),q=input.product.infinite_stock?1:input.quantity,unit=input.method==="kyash"?input.product.price_kyash:input.product.price_paypay,total=Math.max(0,(unit-input.discount)*q),orderId=randomId(),until=now+10*60_000;
