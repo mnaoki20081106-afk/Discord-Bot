@@ -62,11 +62,12 @@ import {
 } from "./vending";
 import {
   getMemberActivitySettings,
-  memberActivitySweep,
   primeMemberActivity,
   saveMemberActivitySettings,
   sendMemberActivityTest
 } from "./member-activity";
+import { ensureDiscordGateway } from "./discord-gateway";
+export { DiscordGateway } from "./discord-gateway";
 import {
   accountCreatedAt,
   corsHeaders,
@@ -1585,6 +1586,17 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
           throw error;
         }
       }
+      try{
+        await ensureDiscordGateway(env);
+      }catch(error){
+        console.error("discord gateway start failed",error);
+        if(saved.enabled){
+          throw new HttpError(
+            502,
+            "設定は保存されましたが、リアルタイム入退室検知の起動に失敗しました。少し待ってからもう一度保存してください"
+          );
+        }
+      }
       return json(env,saved);
     }
   }
@@ -2761,7 +2773,7 @@ export default {
       auditWatch(env),
       paymentSweep(env),
       vendingSweep(env),
-      memberActivitySweep(env),
+      ensureDiscordGateway(env),
       botAccessGuardSweep(env),
       backupRestoreSweep(env)
     ]).then(()=>undefined));

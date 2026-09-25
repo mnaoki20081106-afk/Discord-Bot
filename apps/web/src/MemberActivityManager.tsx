@@ -185,7 +185,7 @@ export default function MemberActivityManager({
             <strong>{settings.memberCount.toLocaleString("ja-JP")}人</strong>
           </div>
           <div>
-            <span>最終取得</span>
+            <span>最終イベント / 同期</span>
             <strong>{formatScanTime(settings.lastScanAt)}</strong>
           </div>
           <div>
@@ -205,7 +205,7 @@ export default function MemberActivityManager({
             <div>
               <strong>入退室通知を有効化</strong>
               <small>
-                1分ごとの巡回でメンバー差分を確認して通知します。
+                Discord Gatewayで入室・退室イベントをリアルタイム検知して通知します。
               </small>
             </div>
             <input

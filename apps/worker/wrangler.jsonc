@@ -6,6 +6,20 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISCORD_GATEWAY",
+        "class_name": "DiscordGateway"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "discord-gateway-v1",
+      "new_sqlite_classes": ["DiscordGateway"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB"

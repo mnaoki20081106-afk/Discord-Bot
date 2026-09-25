@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  DISCORD_GATEWAY: DurableObjectNamespace;
   WEB_ORIGIN: string;
   WEB_PUBLIC_URL: string;
   PAYPAY_ENV: "sandbox" | "staging" | "production";
