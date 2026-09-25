@@ -379,6 +379,30 @@ for (const legacy of [false, true]) {
     const vmList = await request(mf,`/api/guilds/${guildId}/vending`,token);
     assert.equal(vmList.body.length,1);
 
+    const imageUpload=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/panel-image`,
+      token,
+      'POST',
+      {dataUrl:'data:image/png;base64,aGVsbG8='}
+    );
+    assert.equal(imageUpload.status,200,JSON.stringify(imageUpload.body));
+    assert.match(imageUpload.body.url,/\/media\/vending\//);
+    const mediaResponse=await mf.dispatchFetch(imageUpload.body.url);
+    assert.equal(mediaResponse.status,200);
+    assert.equal(mediaResponse.headers.get('content-type'),'image/png');
+    assert.equal(await mediaResponse.text(),'hello');
+    const imageDetail=await request(mf,`/api/guilds/${guildId}/vending/${vm.body.id}`,token);
+    assert.equal(imageDetail.body.panel_image_url,imageUpload.body.url);
+    const imageDelete=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/panel-image`,
+      token,
+      'DELETE'
+    );
+    assert.equal(imageDelete.status,200);
+    assert.equal((await mf.dispatchFetch(imageUpload.body.url)).status,404);
+
     const missingInfiniteContent=await request(
       mf,`/api/guilds/${guildId}/vending/${vm.body.id}/products`,token,'POST',
       {name:'Broken infinite',pricePayPay:100,priceKyash:100,infiniteStock:true}
