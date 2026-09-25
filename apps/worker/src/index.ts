@@ -1312,7 +1312,19 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   const meta=url.pathname.match(/^\/api\/guilds\/(\d+)\/meta$/);
   if(meta&&request.method==="GET"){
     const guildId=meta[1]!;
+    const fast=url.searchParams.get("fast")==="1";
     const {guild}=await requireGuild(request,env,guildId);
+
+    // Save/refresh flows only need the current Discord structure. Running the
+    // full access-repair sweep here can issue one overwrite request per channel
+    // and make an otherwise successful save appear to hang in the dashboard.
+    if(fast){
+      return json(env,{
+        ...guild,
+        ...await discordMeta(env,guildId)
+      });
+    }
+
     const botAccessRepair=await repairBotChannelAccess(env,guildId);
     let verificationPanelUpgrade:"updated"|"current"|"missing"="missing";
     try{
@@ -1930,7 +1942,10 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const guildId=channelPermissionMatch[1]!;
     const channelId=channelPermissionMatch[2]!;
     const targetId=channelPermissionMatch[3]!;
-    await requireGuild(request,env,guildId);
+
+    // Authentication is enough here. The following channel/role reads validate
+    // the guild while avoiding an extra /guilds/:id Discord round trip.
+    await sessionFromRequest(request,env);
 
     const input=await bodyObject<{
       targetType?:"role";
@@ -1968,32 +1983,31 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     );
 
     const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
-    const verify=async():Promise<boolean>=>{
-      for(const delay of [0,180,420]){
-        if(delay>0) await sleep(delay);
-        const confirmed=await botJson<DiscordChannel[]>(
-          env,
-          `/guilds/${guildId}/channels`
-        );
-        const confirmedChannel=confirmed.find(item=>item.id===channelId);
-        if(
-          confirmedChannel&&
-          channelPermissionPatchMatches(confirmedChannel,targetId,permissions)
-        ){
-          return true;
-        }
-      }
-      return false;
-    };
-
-    let verified=await verify();
-    if(!verified){
-      const refreshedChannels=await botJson<DiscordChannel[]>(
+    const readBack=async():Promise<{verified:boolean;channel:DiscordChannel|null}>=>{
+      const confirmed=await botJson<DiscordChannel[]>(
         env,
         `/guilds/${guildId}/channels`
       );
-      const refreshedChannel=refreshedChannels.find(item=>item.id===channelId);
-      if(!refreshedChannel){
+      const confirmedChannel=confirmed.find(item=>item.id===channelId)??null;
+      return {
+        verified:Boolean(
+          confirmedChannel&&
+          channelPermissionPatchMatches(confirmedChannel,targetId,permissions)
+        ),
+        channel:confirmedChannel
+      };
+    };
+
+    // Discord normally exposes the overwrite immediately after its 204 response.
+    // Use one read-back, then a short delayed read only when propagation lags.
+    let verification=await readBack();
+    if(!verification.verified){
+      await sleep(220);
+      verification=await readBack();
+    }
+
+    if(!verification.verified){
+      if(!verification.channel){
         throw new HttpError(
           404,
           "保存確認中にチャンネルが見つからなくなりました。サーバー構成を再読み込みしてください"
@@ -2002,14 +2016,17 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       result=await applyChannelRolePermissions(
         env,
         guildId,
-        refreshedChannel,
+        verification.channel,
         targetId,
         roles,
         member,
         permissions
       );
-      verified=await verify();
+      await sleep(220);
+      verification=await readBack();
     }
+
+    const verified=verification.verified;
 
     if(!verified){
       throw new HttpError(
@@ -2367,7 +2384,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"dashboard-auth-v40-channel-permission-verify",
+          version:"dashboard-auth-v41-fast-permission-save",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
