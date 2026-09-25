@@ -89,7 +89,9 @@ export default function MemberActivityManager({
     return () => {
       cancelled = true;
     };
-  }, [guildId, onError]);
+    // onError is intentionally omitted: App recreates the callback on render,
+    // and depending on it would retry the same failed request in a render loop.
+  }, [guildId]);
 
   function patch(next: Partial<MemberActivitySettings>) {
     setSettings(current => ({ ...current, ...next }));
