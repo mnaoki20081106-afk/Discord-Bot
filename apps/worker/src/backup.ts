@@ -143,6 +143,7 @@ type GuildSnapshot = {
 };
 
 type RestoreStats = {
+  workerOrigin?:string;
   rolesCreated:number;
   rolesUpdated:number;
   channelsCreated:number;
@@ -521,6 +522,8 @@ function publicBackup(row:any){
 }
 
 function publicJob(row:RestoreJobRow){
+  const result=parseStats(row.result_json);
+  const {workerOrigin:_,...publicResult}=result;
   return {
     id:row.id,
     backupId:row.backup_id,
@@ -528,7 +531,7 @@ function publicJob(row:RestoreJobRow){
     status:row.status,
     phase:row.phase,
     cursor:row.cursor,
-    result:parseStats(row.result_json),
+    result:publicResult,
     error:row.error,
     createdAt:row.created_at,
     updatedAt:row.updated_at
@@ -1149,6 +1152,13 @@ async function restorePanels(
       let objectId=panel.objectId;
       if(panel.kind==="verification"){
         objectId="";
+        const workerOrigin=String(stats.workerOrigin??"").replace(/\/$/,"");
+        if(!/^https?:\/\//.test(workerOrigin)){
+          stats.warnings.push(
+            "認証パネルの復元に必要なWorker URLが見つからなかったため、このパネルだけ復元をスキップしました。管理画面から再設置してください。"
+          );
+          continue;
+        }
         payload={
           embeds:[{
             title:"サーバー認証",
@@ -1156,7 +1166,10 @@ async function restorePanels(
             color:5793266
           }],
           components:[{type:1,components:[{
-            type:2,custom_id:"verify:start:"+job.target_guild_id,label:"認証する",style:3
+            type:2,
+            style:5,
+            label:"認証する",
+            url:workerOrigin+"/auth/verification/start?guild_id="+encodeURIComponent(job.target_guild_id)
           }]}]
         };
       }else if(panel.kind==="ticket"){
@@ -1633,7 +1646,7 @@ export async function handleBackupApi(
     const target=String(body.targetGuildId??"");
     if(!/^\d+$/.test(target)) throw new BackupHttpError(400,"復元先サーバーが不正です");
     await restorePreview(env,restore[1]!,target);
-    const job=await createRestoreJob(env,restore[1]!,target);
+    const job=await createRestoreJob(env,restore[1]!,target,url.origin);
     if(!job) throw new BackupHttpError(404,"バックアップが削除されたため復元を開始できませんでした。");
     if(job.backup_id!==restore[1]) throw new BackupHttpError(409,"このサーバーでは別のバックアップを復元中です。完了または停止してから再試行してください。");
     return json(env,publicJob(job),202);
