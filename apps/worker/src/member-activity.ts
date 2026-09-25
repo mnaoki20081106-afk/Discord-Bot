@@ -488,6 +488,174 @@ export async function sendMemberActivityTest(
   await sendActivityMessage(env, channelId, "leave", bot, Math.max(0, count - 1), guild.name);
 }
 
+
+export type GatewayMemberActivityEvent = {
+  guild_id: string;
+  user: DiscordUser & { bot?: boolean };
+  joined_at?: string | null;
+};
+
+export async function hasEnabledMemberActivity(env: Env): Promise<boolean> {
+  await ensureMemberActivitySchema(env);
+  const row = await env.DB.prepare(`
+    SELECT guild_id FROM member_activity_settings
+    WHERE enabled=1 AND channel_id IS NOT NULL
+    LIMIT 1
+  `).first<{ guild_id: string }>();
+  return Boolean(row);
+}
+
+async function snapshotMember(
+  env: Env,
+  guildId: string,
+  userId: string
+): Promise<MemberSnapshotRow | null> {
+  return (
+    await env.DB.prepare(
+      "SELECT * FROM member_activity_members WHERE guild_id=? AND user_id=?"
+    ).bind(guildId, userId).first<MemberSnapshotRow>()
+  ) ?? null;
+}
+
+async function retryActivityMessage(
+  env: Env,
+  channelId: string,
+  kind: "join" | "leave",
+  user: DiscordUser,
+  memberCount: number,
+  guildName: string
+): Promise<void> {
+  try {
+    await sendActivityMessage(
+      env,
+      channelId,
+      kind,
+      user,
+      memberCount,
+      guildName
+    );
+  } catch (firstError) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    try {
+      await sendActivityMessage(
+        env,
+        channelId,
+        kind,
+        user,
+        memberCount,
+        guildName
+      );
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+export async function handleMemberActivityGatewayEvent(
+  env: Env,
+  kind: "join" | "leave",
+  event: GatewayMemberActivityEvent
+): Promise<void> {
+  if (!event?.guild_id || !event.user?.id) return;
+
+  const row = await getSettingsRow(env, event.guild_id);
+  if (row.enabled !== 1 || !row.channel_id) return;
+
+  // If an old configuration has not been primed yet, establish the baseline
+  // instead of treating every existing member as a new event.
+  if (row.initialized !== 1) {
+    await syncGuild(env, row);
+    return;
+  }
+
+  const existing = await snapshotMember(env, event.guild_id, event.user.id);
+
+  // Gateway sessions can replay dispatches during RESUME. The snapshot is our
+  // idempotency guard so a replay never emits a duplicate notification.
+  if (kind === "join" && existing) {
+    return;
+  }
+  if (kind === "leave" && !existing) {
+    return;
+  }
+
+  const now = Date.now();
+  const memberCount =
+    kind === "join"
+      ? Math.max(0, row.last_member_count) + 1
+      : Math.max(0, row.last_member_count - 1);
+
+  const shouldNotify =
+    kind === "join" ? row.join_enabled === 1 : row.leave_enabled === 1;
+
+  const notificationUser: DiscordUser =
+    kind === "leave" && existing
+      ? {
+          id: existing.user_id,
+          username: existing.username,
+          global_name: existing.global_name,
+          avatar: existing.avatar
+        }
+      : event.user;
+
+  if (shouldNotify) {
+    const guild = await botJson<{ name: string }>(
+      env,
+      `/guilds/${event.guild_id}`
+    );
+    await retryActivityMessage(
+      env,
+      row.channel_id,
+      kind,
+      notificationUser,
+      memberCount,
+      guild.name
+    );
+  }
+
+  if (kind === "join") {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO member_activity_members(
+          guild_id,user_id,username,global_name,avatar,is_bot,first_seen_at,last_seen_at
+        ) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(guild_id,user_id) DO UPDATE SET
+          username=excluded.username,
+          global_name=excluded.global_name,
+          avatar=excluded.avatar,
+          is_bot=excluded.is_bot,
+          last_seen_at=excluded.last_seen_at
+      `).bind(
+        event.guild_id,
+        event.user.id,
+        event.user.username,
+        event.user.global_name ?? null,
+        event.user.avatar ?? null,
+        event.user.bot ? 1 : 0,
+        now,
+        now
+      ),
+      env.DB.prepare(`
+        UPDATE member_activity_settings
+        SET last_scan_at=?,last_member_count=?,last_error=NULL,updated_at=?
+        WHERE guild_id=?
+      `).bind(now, memberCount, now, event.guild_id)
+    ]);
+    return;
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(
+      "DELETE FROM member_activity_members WHERE guild_id=? AND user_id=?"
+    ).bind(event.guild_id, event.user.id),
+    env.DB.prepare(`
+      UPDATE member_activity_settings
+      SET last_scan_at=?,last_member_count=?,last_error=NULL,updated_at=?
+      WHERE guild_id=?
+    `).bind(now, memberCount, now, event.guild_id)
+  ]);
+}
+
 export async function memberActivitySweep(env: Env): Promise<void> {
   await ensureMemberActivitySchema(env);
   const rows = await env.DB.prepare(`
