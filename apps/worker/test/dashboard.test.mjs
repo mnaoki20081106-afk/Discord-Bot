@@ -995,19 +995,21 @@ test('channel permission edit does not require direct channel access', async t =
   assert.equal(result.body.targetId,targetRoleId);
   assert.equal(result.body.deny,'2048');
   assert.equal(
-    calls.some(call=>call.path===`/api/v10/channels/${chatChannelId}`),
+    calls.some(
+      call=>
+        call.method==='GET' &&
+        call.path===`/api/v10/channels/${chatChannelId}`
+    ),
     false,
     'permission editing must not GET the inaccessible channel directly'
   );
-  assert.equal(
-    calls.some(
-      call=>
-        call.method==='PUT' &&
-        call.path===`/api/v10/channels/${chatChannelId}/permissions/${targetRoleId}`
-    ),
-    true,
-    'permission overwrite should still be written'
+  const atomicWrite = calls.find(
+    call=>
+      call.method==='PATCH' &&
+      call.path===`/api/v10/channels/${chatChannelId}`
   );
+  assert.ok(atomicWrite,'channel overwrites should be written atomically');
+  assert.equal(result.body.verified,true);
 });
 
 
@@ -1056,20 +1058,32 @@ test('editing @everyone protects the bot member before applying the deny', async
   );
   assert.equal(result.status,200,JSON.stringify(result.body));
 
-  const botGuardIndex = calls.findIndex(call=>
-    call.method==='PUT' &&
-    call.path===`/api/v10/channels/${chatChannelId}/permissions/${botId}`
+  const atomicWrite = calls.find(call=>
+    call.method==='PATCH' &&
+    call.path===`/api/v10/channels/${chatChannelId}` &&
+    Array.isArray(call.body?.permission_overwrites)
   );
-  const everyoneIndex = calls.findIndex(call=>
-    call.method==='PUT' &&
-    call.path===`/api/v10/channels/${chatChannelId}/permissions/${guildId}`
+  assert.ok(atomicWrite,'permission update must use one atomic channel patch');
+
+  const everyoneOverwrite = atomicWrite.body.permission_overwrites.find(
+    overwrite=>overwrite.id===guildId&&overwrite.type===0
   );
-  assert.ok(botGuardIndex>=0,'bot member overwrite must be written');
-  assert.ok(everyoneIndex>=0,'@everyone overwrite must be written');
-  assert.ok(
-    botGuardIndex<everyoneIndex,
-    'bot protection must be applied before @everyone is denied'
+  const botOverwrite = atomicWrite.body.permission_overwrites.find(
+    overwrite=>overwrite.id===botId&&overwrite.type===1
   );
+  assert.ok(everyoneOverwrite,'@everyone overwrite must be present');
+  assert.ok(botOverwrite,'bot member protection overwrite must be present');
+  assert.equal(
+    (BigInt(everyoneOverwrite.deny)&1024n)===1024n,
+    true,
+    '@everyone View Channel must be denied'
+  );
+  assert.equal(
+    (BigInt(botOverwrite.allow)&1024n)===1024n,
+    true,
+    'bot View Channel must remain allowed in the same atomic write'
+  );
+  assert.equal(result.body.verified,true);
 });
 
 
