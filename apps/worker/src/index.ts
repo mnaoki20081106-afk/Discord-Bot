@@ -2121,31 +2121,36 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       throw new HttpError(400,"変更する権限を選択してください");
     }
 
-    // Interactive save path: one channel read + one overwrite write.
-    // Avoid full guild/role/member reads and synchronous write verification,
-    // which can queue behind Discord rate limits and exceed the dashboard timeout.
-    const channelResponse=await botFetchInteractive(
+    // Interactive save path: one guild-channel-list read + one overwrite
+    // write. We intentionally do not GET /channels/:id here: that endpoint can
+    // return Missing Access for the exact hidden channel the dashboard is trying
+    // to repair. Get Guild Channels remains usable for this recovery workflow.
+    const channelsResponse=await botFetchInteractive(
       env,
-      `/channels/${channelId}`
+      `/guilds/${guildId}/channels`
     );
-    if(!channelResponse.ok){
-      const detail=await channelResponse.text().catch(()=>"");
-      if(channelResponse.status===403){
+    if(!channelsResponse.ok){
+      const detail=await channelsResponse.text().catch(()=>"");
+      if(channelsResponse.status===403){
         throw new HttpError(
           403,
-          "BOTが対象チャンネルを参照できません。BOTロールまたはBOT個別権限で「チャンネルを見る」を許可してください"
+          "BOTがサーバーのチャンネル一覧を取得できません。BOTがサーバーに参加しているか確認してください"
         );
       }
-      if(channelResponse.status===404){
-        throw new HttpError(404,"対象チャンネルが見つかりません");
-      }
       throw new DiscordApiError(
-        channelResponse.status,
-        "Discord API "+channelResponse.status+": "+detail.slice(0,300)
+        channelsResponse.status,
+        "Discord API "+channelsResponse.status+": "+detail.slice(0,300)
       );
     }
 
-    const channel=await channelResponse.json() as DiscordChannel;
+    const channels=await channelsResponse.json() as DiscordChannel[];
+    const channel=channels.find(item=>item.id===channelId);
+    if(!channel){
+      throw new HttpError(
+        404,
+        "対象チャンネルが見つかりません。サーバー構成を再読み込みしてください"
+      );
+    }
     const result=await applyChannelRolePermissionsFast(
       env,
       guildId,
