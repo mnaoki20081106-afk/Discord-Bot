@@ -1772,6 +1772,11 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(verifyPanel&&request.method==="POST"){
     const guildId=verifyPanel[1]!;
     await requireGuild(request,env,guildId);
+    await ensureSchema(env);
+    const verificationSettings=await getGuildSettings(env,guildId);
+    if(!verificationSettings.verifiedRoleId){
+      throw new HttpError(409,"先に「認証後ロール」を設定して保存してください");
+    }
     const {channelId}=await bodyObject<{channelId?:string}>(request);
     if(!channelId) throw new HttpError(400,"設置先チャンネルを選択してください");
     await requireMessageChannel(env,guildId,channelId);
