@@ -39,6 +39,14 @@ type MachineDetail = Machine & {
   coupons: Coupon[];
 };
 
+type AchievementRoom = {
+  guild_id:string;
+  owner_id:string;
+  channel_id:string|null;
+  machine_ids:string[];
+  updated_at:number;
+};
+
 type Props = {
   guildId:string;
   channels:Channel[];
@@ -86,6 +94,8 @@ export default function VendingManager({
   const [panelMessageUrl,setPanelMessageUrl]=useState("");
   const [notifyChannel,setNotifyChannel]=useState("");
   const [notifyRole,setNotifyRole]=useState("");
+  const [achievementChannel,setAchievementChannel]=useState("");
+  const [achievementMachineIds,setAchievementMachineIds]=useState<string[]>([]);
 
   const [newProduct,setNewProduct]=useState(emptyProduct);
   const [editingProduct,setEditingProduct]=useState<Product|null>(null);
@@ -210,10 +220,18 @@ export default function VendingManager({
     }
   }
 
+  async function loadAchievementRoom(){
+    const room=await api<AchievementRoom>(
+      `/api/guilds/${guildId}/vending/achievement-room`
+    );
+    setAchievementChannel(room.channel_id??"");
+    setAchievementMachineIds(room.machine_ids);
+  }
+
   useEffect(()=>{
     void (async()=>{
       try{
-        await Promise.all([loadMachines(),loadPaymentStatus()]);
+        await Promise.all([loadMachines(),loadPaymentStatus(),loadAchievementRoom()]);
       }catch(reason){ onError(reason); }
     })();
   },[guildId]);
@@ -339,6 +357,45 @@ export default function VendingManager({
       setNotifyChannel("");
       setNotifyRole("");
       onNotice("在庫追加通知を解除しました");
+    }catch(reason){onError(reason);}
+    finally{setBusy(false);}
+  }
+
+  async function saveAchievementRoom(){
+    if(!achievementChannel||achievementMachineIds.length===0) return;
+    setBusy(true);
+    try{
+      const validIds=achievementMachineIds.filter(id=>machines.some(machine=>machine.id===id));
+      if(validIds.length===0){
+        throw new Error("通知する自販機を1つ以上選択してください");
+      }
+      const room=await api<AchievementRoom>(
+        `/api/guilds/${guildId}/vending/achievement-room`,
+        {
+          method:"PUT",
+          body:JSON.stringify({
+            channelId:achievementChannel,
+            machineIds:validIds
+          })
+        }
+      );
+      setAchievementChannel(room.channel_id??"");
+      setAchievementMachineIds(room.machine_ids);
+      onNotice("実績部屋の通知設定を保存しました");
+    }catch(reason){onError(reason);}
+    finally{setBusy(false);}
+  }
+
+  async function clearAchievementRoom(){
+    setBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/vending/achievement-room`,
+        {method:"DELETE"}
+      );
+      setAchievementChannel("");
+      setAchievementMachineIds([]);
+      onNotice("実績部屋の通知を解除しました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
@@ -1066,6 +1123,86 @@ export default function VendingManager({
                     <button className="secondary" onClick={()=>void saveStockNotification()} disabled={!notifyChannel||!notifyRole}>通知設定を保存</button>
                     <button className="danger" onClick={()=>void clearStockNotification()} disabled={!notifyChannel&&!notifyRole}>解除</button>
                   </div>
+                </div>
+
+                <div className="vending-tabs-section">
+                  <span className="eyebrow">ACHIEVEMENT ROOM</span>
+                  <h3>実績部屋</h3>
+                  <p className="muted">
+                    購入完了時に「🎉 商品購入ログ」を送信します。通知したい自販機だけ選べます。
+                  </p>
+                  <label className="field"><span>実績を送るチャンネル</span>
+                    <select value={achievementChannel} onChange={e=>setAchievementChannel(e.target.value)}>
+                      <option value="">選択</option>
+                      {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+                    </select>
+                  </label>
+                  <div className="field">
+                    <span>通知する自販機</span>
+                    <div className="role-picker">
+                      {machines.map(machine=>{
+                        const checked=achievementMachineIds.includes(machine.id);
+                        return (
+                          <label
+                            key={machine.id}
+                            className={`role-choice ${checked?"selected":""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={event=>{
+                                setAchievementMachineIds(current=>
+                                  event.target.checked
+                                    ? [...new Set([...current,machine.id])]
+                                    : current.filter(id=>id!==machine.id)
+                                );
+                              }}
+                            />
+                            <span>{machine.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="button-row">
+                    <button
+                      className="secondary"
+                      type="button"
+                      onClick={()=>setAchievementMachineIds(machines.map(machine=>machine.id))}
+                      disabled={machines.length===0}
+                    >
+                      すべて選択
+                    </button>
+                    <button
+                      className="secondary"
+                      type="button"
+                      onClick={()=>setAchievementMachineIds([])}
+                      disabled={achievementMachineIds.length===0}
+                    >
+                      全解除
+                    </button>
+                  </div>
+                  <div className="button-row">
+                    <button
+                      className="primary"
+                      type="button"
+                      onClick={()=>void saveAchievementRoom()}
+                      disabled={!achievementChannel||achievementMachineIds.length===0||busy}
+                    >
+                      実績部屋を保存
+                    </button>
+                    <button
+                      className="danger"
+                      type="button"
+                      onClick={()=>void clearAchievementRoom()}
+                      disabled={!achievementChannel&&achievementMachineIds.length===0}
+                    >
+                      実績部屋を解除
+                    </button>
+                  </div>
+                  <small className="muted">
+                    通知内容: 購入者 / 商品名 / 個数 / 注文ID
+                  </small>
                 </div>
               </div>
             </>
