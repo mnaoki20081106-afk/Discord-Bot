@@ -164,6 +164,15 @@ export default function ServerEditor({
   const [parentId, setParentId] = useState("");
   const [createType, setCreateType] = useState<"text" | "voice" | "category">("text");
   const [saving, setSaving] = useState(false);
+  const [permissionSaving, setPermissionSaving] = useState(false);
+  const [permissionSaveFeedback, setPermissionSaveFeedback] = useState<{
+    kind: "idle" | "saving" | "success" | "error";
+    message: string;
+    detail?: string;
+  }>({
+    kind: "idle",
+    message: "権限を変更して「権限を保存」を押してください"
+  });
   const [dragging, setDragging] = useState<
     { kind: "channel" | "category"; id: string } | null
   >(null);
@@ -296,6 +305,10 @@ export default function ServerEditor({
     setParentId(channel.parentId ?? "");
     setPermissionTargetId(permissionPreviewRoleId);
     setPermissionDraft(draftFor(channel, permissionPreviewRoleId));
+    setPermissionSaveFeedback({
+      kind: "idle",
+      message: "権限を変更して「権限を保存」を押してください"
+    });
   }
 
   function openCategory(id: string) {
@@ -510,32 +523,72 @@ export default function ServerEditor({
   }
 
   async function savePermissions() {
-    if (!selectedChannel) return;
-    setSaving(true);
+    if (!selectedChannel || permissionSaving) return;
+
+    const channelId = selectedChannel.id;
+    const channelName = selectedChannel.name;
+    const targetId = permissionTargetId;
+    const targetName =
+      targetId === guildId
+        ? "@everyone"
+        : meta.roles.find((role) => role.id === targetId)
+          ? `@${meta.roles.find((role) => role.id === targetId)!.name}`
+          : targetId;
+
+    setPermissionSaving(true);
+    setPermissionSaveFeedback({
+      kind: "saving",
+      message: "Discordへ権限を反映して確認中…",
+      detail: `#${channelName} / ${targetName}`
+    });
+
     try {
-      await api(
-        `/api/guilds/${guildId}/channels/${selectedChannel.id}/permissions/${permissionTargetId}`,
+      const result = await api<{
+        ok: boolean;
+        verified?: boolean;
+        operationId?: string;
+      }>(
+        `/api/guilds/${guildId}/channels/${channelId}/permissions/${targetId}`,
         {
           method: "PATCH",
           body: JSON.stringify({
             targetType: "role",
             permissions: permissionDraft
           })
-        }
+        },
+        30_000
       );
-      setSaving(false);
-      onNotice("チャンネル権限を保存しました");
+
+      if (!result.ok || result.verified !== true) {
+        throw new Error("Discord側の反映確認が完了しませんでした");
+      }
+
+      setPermissionSaveFeedback({
+        kind: "success",
+        message: "成功しました：Discordへの反映を確認しました",
+        detail:
+          `#${channelName} / ${targetName}` +
+          (result.operationId ? ` / ID: ${result.operationId.slice(0, 8)}` : "")
+      });
+      onNotice("チャンネル権限を保存し、Discordへの反映を確認しました");
+
       void onRefresh().catch(() => {
         onError(
           new Error(
-            "権限の保存は完了しましたが、最新表示の再取得に失敗しました。画面を再読み込みすると反映を確認できます"
+            "Discordへの反映は確認できましたが、管理画面の最新表示を再取得できませんでした。画面を再読み込みしてください"
           )
         );
       });
     } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setPermissionSaveFeedback({
+        kind: "error",
+        message: "権限の保存に失敗しました",
+        detail: message
+      });
       onError(reason);
     } finally {
-      setSaving(false);
+      setPermissionSaving(false);
     }
   }
 
@@ -1632,6 +1685,10 @@ export default function ServerEditor({
                           setPermissionTargetId(targetId);
                           setPermissionPreviewRoleId(targetId);
                           setPermissionDraft(draftFor(selectedChannel, targetId));
+                          setPermissionSaveFeedback({
+                            kind: "idle",
+                            message: "権限を変更して「権限を保存」を押してください"
+                          });
                           localStorage.setItem(
                             `dsm_permission_preview_role_${guildId}`,
                             targetId
@@ -1684,11 +1741,33 @@ export default function ServerEditor({
                     <button
                       type="button"
                       className="secondary permission-save"
-                      disabled={saving}
+                      disabled={saving || permissionSaving}
                       onClick={() => void savePermissions()}
                     >
-                      {saving ? "保存中…" : "権限を保存"}
+                      {permissionSaving ? "反映確認中…" : "権限を保存"}
                     </button>
+
+                    <div
+                      className={`bulk-apply-log ${permissionSaveFeedback.kind}`}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <div className="bulk-apply-log-title">
+                        <span>
+                          {permissionSaveFeedback.kind === "saving"
+                            ? "⏳"
+                            : permissionSaveFeedback.kind === "success"
+                              ? "✓"
+                              : permissionSaveFeedback.kind === "error"
+                                ? "!"
+                                : "i"}
+                        </span>
+                        <strong>{permissionSaveFeedback.message}</strong>
+                      </div>
+                      {permissionSaveFeedback.detail && (
+                        <small>{permissionSaveFeedback.detail}</small>
+                      )}
+                    </div>
                   </div>
                 </>
               )}
