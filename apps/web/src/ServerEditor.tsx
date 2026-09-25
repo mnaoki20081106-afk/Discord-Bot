@@ -540,7 +540,7 @@ export default function ServerEditor({
       verified?: boolean;
       operationId?: string;
     }>(
-      \`/api/guilds/\${guildId}/channels/\${channel.id}/permissions/\${targetId}?client=save-all-v48\`,
+      `/api/guilds/${guildId}/channels/${channel.id}/permissions/${targetId}?client=save-all-v48`,
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -567,14 +567,14 @@ export default function ServerEditor({
       targetId === guildId
         ? "@everyone"
         : meta.roles.find((role) => role.id === targetId)
-          ? \`@\${meta.roles.find((role) => role.id === targetId)!.name}\`
+          ? `@${meta.roles.find((role) => role.id === targetId)!.name}`
           : targetId;
 
     setPermissionSaving(true);
     setPermissionSaveFeedback({
       kind: "saving",
       message: "Discordへ権限を反映して確認中…",
-      detail: \`#\${channelName} / \${targetName} / save-all-v48\`
+      detail: `#${channelName} / ${targetName} / save-all-v48`
     });
 
     try {
@@ -588,8 +588,8 @@ export default function ServerEditor({
         kind: "success",
         message: "成功しました：Discordへの反映を確認しました",
         detail:
-          \`#\${channelName} / \${targetName}\` +
-          (result.operationId ? \` / ID: \${result.operationId.slice(0, 8)}\` : "")
+          `#${channelName} / ${targetName}` +
+          (result.operationId ? ` / ID: ${result.operationId.slice(0, 8)}` : "")
       });
       onNotice("チャンネル権限を保存し、Discordへの反映を確認しました");
 
@@ -670,12 +670,12 @@ export default function ServerEditor({
         targetId === guildId
           ? "@everyone"
           : meta.roles.find((role) => role.id === targetId)
-            ? \`@\${meta.roles.find((role) => role.id === targetId)!.name}\`
+            ? `@${meta.roles.find((role) => role.id === targetId)!.name}`
             : targetId;
       setPermissionSaveFeedback({
         kind: "saving",
         message: "Discordへ権限を反映して確認中…",
-        detail: \`#\${channel.name} / \${targetName} / save-all-v48\`
+        detail: `#${channel.name} / ${targetName} / save-all-v48`
       });
     }
 
@@ -696,14 +696,14 @@ export default function ServerEditor({
           targetId === guildId
             ? "@everyone"
             : meta.roles.find((role) => role.id === targetId)
-              ? \`@\${meta.roles.find((role) => role.id === targetId)!.name}\`
+              ? `@${meta.roles.find((role) => role.id === targetId)!.name}`
               : targetId;
         setPermissionSaveFeedback({
           kind: "success",
           message: "成功しました：Discordへの反映を確認しました",
           detail:
-            \`#\${channel.name} / \${targetName}\` +
-            (permissionOperationId ? \` / ID: \${permissionOperationId.slice(0, 8)}\` : "")
+            `#${channel.name} / ${targetName}` +
+            (permissionOperationId ? ` / ID: ${permissionOperationId.slice(0, 8)}` : "")
         });
       }
 
@@ -723,7 +723,7 @@ export default function ServerEditor({
                   : {})
               };
 
-        await api(\`/api/guilds/\${guildId}/channels/\${selection.id}\`, {
+        await api(`/api/guilds/${guildId}/channels/${selection.id}`, {
           method: "PATCH",
           body: JSON.stringify(body)
         });
