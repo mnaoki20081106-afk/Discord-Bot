@@ -479,7 +479,14 @@ export default function ServerEditor({
         });
       }
 
-      await onRefresh();
+      let refreshWarning = false;
+      try {
+        await onRefresh();
+      } catch {
+        // Discord writes were already verified by the Worker. A secondary
+        // dashboard refresh must not turn a confirmed save into a failure.
+        refreshWarning = true;
+      }
 
       if (failures.length > 0) {
         const details = failures
@@ -498,7 +505,8 @@ export default function ServerEditor({
         message: `完了しました：${verifiedUpdated}/${bulkSelectedChannels.length}チャンネル反映済み`,
         detail:
           `Discord再取得で確認済み / ${targetName} / ${changedLabels.join("・")}` +
-          (operationIds.length ? ` / ID: ${operationIds.map((id) => id.slice(0, 8)).join(", ")}` : "")
+          (operationIds.length ? ` / ID: ${operationIds.map((id) => id.slice(0, 8)).join(", ")}` : "") +
+          (refreshWarning ? " / 管理画面の表示更新のみ後で再取得します" : "")
       });
       onNotice(
         `${bulkSelectedChannels.length}チャンネルの${targetName}権限を更新しました`
@@ -573,10 +581,15 @@ export default function ServerEditor({
       onNotice("チャンネル権限を保存し、Discordへの反映を確認しました");
 
       void onRefresh().catch(() => {
-        onError(
-          new Error(
-            "Discordへの反映は確認できましたが、管理画面の最新表示を再取得できませんでした。画面を再読み込みしてください"
-          )
+        setPermissionSaveFeedback((current) =>
+          current.kind === "success"
+            ? {
+                ...current,
+                detail:
+                  (current.detail ? current.detail + " / " : "") +
+                  "Discord反映済み・管理画面の表示更新のみ後で再取得します"
+              }
+            : current
         );
       });
     } catch (reason) {
