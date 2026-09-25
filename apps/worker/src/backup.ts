@@ -1664,13 +1664,13 @@ export async function handleBackupApi(
 }
 
 function escapeHtmlText(value:string):string{
-  return value.replace(/[&<>"']/g,char=>({
-    "&":"&amp;",
-    "<":"&lt;",
-    ">":"&gt;",
-    '"':"&quot;",
-    "'":"&#39;"
-  }[char]!));
+  return value.replace(/[&<>"']/g,char=>{
+    if(char==="&") return "&amp;";
+    if(char==="<") return "&lt;";
+    if(char===">") return "&gt;";
+    if(char==='"') return "&quot;";
+    return "&#39;";
+  });
 }
 
 function recoveryAuthorizeUrl(
