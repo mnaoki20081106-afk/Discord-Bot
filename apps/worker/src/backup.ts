@@ -5,6 +5,7 @@ import { ensureVendingSchema } from "./vending-db";
 import { accountCreatedAt, decrypt, encrypt, json, randomId, randomToken, sha256Hex } from "./utils";
 import {
   cancelRestoreJob,
+  cleanExpiredRecoveryOAuthStates,
   countRecoveryMembers,
   createBackupRecord,
   createRestoreJob,
@@ -1149,7 +1150,11 @@ async function restorePanels(
       if(panel.kind==="verification"){
         objectId="";
         payload={
-          embeds:[{title:"サーバー認証",description:"下のボタンから認証を完了してください。",color:5793266}],
+          embeds:[{
+            title:"サーバー認証",
+            description:"下のボタンから認証を開始してください。認証完了時に、サーバー復旧用のメンバー登録も同時に行われます。",
+            color:5793266
+          }],
           components:[{type:1,components:[{
             type:2,custom_id:"verify:start:"+job.target_guild_id,label:"認証する",style:3
           }]}]
@@ -1441,6 +1446,7 @@ async function processRestoreJob(env:Env,job:RestoreJobRow):Promise<void>{
 
 export async function backupRestoreSweep(env:Env):Promise<void>{
   await ensureBackupSchema(env);
+  await cleanExpiredRecoveryOAuthStates(env);
   const owner=randomId();
   const lease=await env.DB.prepare(`
     INSERT INTO backup_sweep_lease(id,owner,expires_at) VALUES (1,?,?)
@@ -1657,6 +1663,16 @@ export async function handleBackupApi(
   return null;
 }
 
+function escapeHtmlText(value:string):string{
+  return value.replace(/[&<>"']/g,char=>({
+    "&":"&amp;",
+    "<":"&lt;",
+    ">":"&gt;",
+    '"':"&quot;",
+    "'":"&#39;"
+  }[char]!));
+}
+
 function recoveryAuthorizeUrl(
   env:Env,origin:string,state:string,forceConsent=true
 ):string{
@@ -1815,7 +1831,7 @@ export async function handleRecoveryOAuth(
       const roleName=await grantVerifiedRoleAfterOAuth(env,guildId,userId);
       title="認証完了";
       heading="認証が完了しました";
-      detail="認証ロール @"+roleName+" を付与し、同時にサーバー復旧対象メンバーとして登録しました。";
+      detail="認証ロール @"+escapeHtmlText(roleName)+" を付与し、同時にサーバー復旧対象メンバーとして登録しました。";
     }
 
     return new Response(
@@ -1824,7 +1840,13 @@ export async function handleRecoveryOAuth(
       "<main style='max-width:560px;margin:auto;background:#10172a;border:1px solid #202943;border-radius:20px;padding:28px'>"+
       "<h1>"+heading+"</h1><p>"+detail+"</p>"+
       "<p>このページは閉じて大丈夫です。</p></main></body>",
-      {headers:{"Content-Type":"text/html; charset=utf-8"}}
+      {headers:{
+        "Content-Type":"text/html; charset=utf-8",
+        "Cache-Control":"no-store",
+        "Referrer-Policy":"no-referrer",
+        "X-Content-Type-Options":"nosniff",
+        "Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+      }}
     );
   }
 
