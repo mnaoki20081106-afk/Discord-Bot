@@ -698,6 +698,23 @@ test('restore job replays guild extras and bans without deleting existing struct
   assert.equal(login.status,200);
   const token=login.body.token;
 
+  const settings=await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    token,
+    'PUT',
+    {verifiedRoleId:targetRoleId,minAccountAgeDays:0}
+  );
+  assert.equal(settings.status,200,JSON.stringify(settings.body));
+  const verificationPanel=await request(
+    mf,
+    `/api/guilds/${guildId}/verification/panel`,
+    token,
+    'POST',
+    {channelId:chatChannelId}
+  );
+  assert.equal(verificationPanel.status,200,JSON.stringify(verificationPanel.body));
+
   const created=await request(
     mf,
     `/api/guilds/${guildId}/backups`,
@@ -715,6 +732,11 @@ test('restore job replays guild extras and bans without deleting existing struct
     {targetGuildId:guildId}
   );
   assert.equal(started.status,202,JSON.stringify(started.body));
+  assert.equal(started.body.result.workerOrigin,undefined);
+  const storedJob=await (await mf.getD1Database('DB')).prepare(
+    'SELECT result_json FROM guild_restore_jobs WHERE id=?'
+  ).bind(started.body.id).first();
+  assert.equal(JSON.parse(storedJob.result_json).workerOrigin,'https://worker.example');
 
   const worker=await mf.getWorker();
   let job=started.body;
@@ -750,6 +772,20 @@ test('restore job replays guild extras and bans without deleting existing struct
     ),
     'restore must replay widget settings'
   );
+
+  const panelPosts=calls.filter(call=>
+    call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
+  );
+  assert.ok(panelPosts.length>=2,'verification panel must be recreated during restore');
+  const restoredPanel=panelPosts.at(-1)?.body;
+  const restoredButton=restoredPanel?.components?.[0]?.components?.[0];
+  assert.equal(restoredButton?.style,5);
+  assert.equal(restoredButton?.custom_id,undefined);
+  const restoredUrl=new URL(restoredButton?.url);
+  assert.equal(restoredUrl.origin,'https://worker.example');
+  assert.equal(restoredUrl.pathname,'/auth/verification/start');
+  assert.equal(restoredUrl.searchParams.get('guild_id'),guildId);
+
   assert.equal(
     calls.some(call=>call.method==='DELETE'&&/\/channels\/\d+$/.test(call.path)),
     false,
