@@ -177,6 +177,7 @@ async function runtime(t, options = {}) {
         request.method === 'POST' &&
         url.pathname === `/api/v10/channels/${chatChannelId}/messages`
       ) {
+        calls[calls.length-1].body=await request.clone().json().catch(()=>null);
         return Response.json({id:'723456789012345678',channel_id:chatChannelId},{status:200});
       }
       if (
@@ -338,6 +339,43 @@ for (const legacy of [false, true]) {
     assert.equal((await request(mf,'/api/me',token)).status,401);
   });
 }
+
+test('verification panel deployment points directly to unified oauth', async t => {
+  const {mf,calls,db} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const token=login.body.token;
+
+  const deployed=await request(
+    mf,
+    `/api/guilds/${guildId}/verification/panel`,
+    token,
+    'POST',
+    {channelId:chatChannelId}
+  );
+  assert.equal(deployed.status,200,JSON.stringify(deployed.body));
+
+  const post=calls.find(call=>
+    call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
+  );
+  assert.ok(post?.body,'verification panel payload must be sent to Discord');
+  const button=post.body.components?.[0]?.components?.[0];
+  assert.equal(button?.style,5);
+  assert.equal(button?.custom_id,undefined);
+  const panelUrl=new URL(button?.url);
+  assert.equal(panelUrl.origin,'https://worker.example');
+  assert.equal(panelUrl.pathname,'/auth/verification/start');
+  assert.equal(panelUrl.searchParams.get('guild_id'),guildId);
+  assert.match(post.body.embeds?.[0]?.description??'',/復旧/);
+
+  const deployment=await db.prepare(
+    "SELECT channel_id,message_id FROM panel_deployments WHERE guild_id=? AND kind='verification'"
+  ).bind(guildId).first();
+  assert.equal(deployment?.channel_id,chatChannelId);
+  assert.ok(deployment?.message_id);
+});
 
 test('verification panel oauth stores recovery access before assigning the role', async t => {
   const {mf,calls,db,interactionPrivateKey,verificationMemberRoles} = await runtime(t);
