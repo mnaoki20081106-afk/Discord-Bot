@@ -764,7 +764,7 @@ title={`${permissionPreviewRoleName}: ${label}`}
 </span>
 );
 }
-async function saveExisting(event: FormEvent) {
+  async function saveExisting(event: FormEvent) {
 event.preventDefault();
 if (!selection || selection.kind === "create" || !name.trim()) return;
 const channel = selectedChannel;
@@ -878,7 +878,7 @@ onError(reason);
 setSaving(false);
 }
 }
-async function createItem(event: FormEvent) {
+  async function createItem(event: FormEvent) {
 event.preventDefault();
 if (!name.trim()) return;
 setSaving(true);
