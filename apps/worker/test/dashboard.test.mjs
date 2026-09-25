@@ -367,6 +367,47 @@ for (const legacy of [false, true]) {
   });
 }
 
+test('dashboard load upgrades tracked legacy verification panel to one click', async t => {
+  const {mf,calls,db} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const token=login.body.token;
+
+  const recovery=await request(
+    mf,
+    `/api/guilds/${guildId}/recovery/status`,
+    token
+  );
+  assert.equal(recovery.status,200,JSON.stringify(recovery.body));
+
+  await db.prepare(`
+    INSERT INTO panel_deployments(
+      guild_id,kind,object_id,channel_id,message_id,created_at,updated_at
+    ) VALUES (?,?,?,?,?,?,?)
+  `).bind(
+    guildId,'verification','',chatChannelId,'723456789012345678',Date.now(),Date.now()
+  ).run();
+
+  const meta=await request(mf,`/api/guilds/${guildId}/meta`,token);
+  assert.equal(meta.status,200,JSON.stringify(meta.body));
+  assert.equal(meta.body.verificationPanelUpgrade,'updated');
+
+  const patch=calls.find(call=>
+    call.method==='PATCH'&&
+    call.path===`/api/v10/channels/${chatChannelId}/messages/723456789012345678`
+  );
+  assert.ok(patch?.body,'legacy verification panel must be patched');
+  const button=patch.body.components?.[0]?.components?.[0];
+  assert.equal(button?.style,5);
+  assert.equal(button?.custom_id,undefined);
+  const panelUrl=new URL(button?.url);
+  assert.equal(panelUrl.origin,'https://worker.example');
+  assert.equal(panelUrl.pathname,'/auth/verification/start');
+  assert.equal(panelUrl.searchParams.get('guild_id'),guildId);
+});
+
 test('verification panel deployment points directly to unified oauth', async t => {
   const {mf,calls,db} = await runtime(t);
   const login = await request(mf, '/api/login', null, 'POST', {
