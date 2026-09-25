@@ -348,6 +348,30 @@ test('verification panel deployment points directly to unified oauth', async t =
   assert.equal(login.status,200);
   const token=login.body.token;
 
+  const rejected=await request(
+    mf,
+    `/api/guilds/${guildId}/verification/panel`,
+    token,
+    'POST',
+    {channelId:chatChannelId}
+  );
+  assert.equal(rejected.status,409,JSON.stringify(rejected.body));
+  assert.match(rejected.body.message,/認証後ロール/);
+  assert.equal(
+    calls.some(call=>call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`),
+    false,
+    'an unusable verification panel must not be posted'
+  );
+
+  const settings=await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    token,
+    'PUT',
+    {verifiedRoleId:targetRoleId,minAccountAgeDays:0}
+  );
+  assert.equal(settings.status,200,JSON.stringify(settings.body));
+
   const deployed=await request(
     mf,
     `/api/guilds/${guildId}/verification/panel`,
