@@ -58,6 +58,43 @@ export function verificationPanelPayload(workerOrigin:string,guildId:string):unk
   };
 }
 
+export async function upgradeTrackedVerificationPanel(
+  env:Env,guildId:string,workerOrigin:string
+):Promise<"updated"|"current"|"missing">{
+  await ensureBackupSchema(env);
+  const deployment=(await listPanelDeployments(env,guildId)).find(row=>
+    row.kind==="verification"&&row.object_id===""&&Boolean(row.message_id)
+  );
+  if(!deployment?.message_id) return "missing";
+
+  let message:any;
+  try{
+    message=await botJson<any>(
+      env,"/channels/"+deployment.channel_id+"/messages/"+deployment.message_id
+    );
+  }catch(error){
+    if(error instanceof DiscordApiError&&error.status===404) return "missing";
+    throw error;
+  }
+
+  const desired=verificationPanelPayload(workerOrigin,guildId) as any;
+  const desiredButton=desired.components?.[0]?.components?.[0];
+  const currentButton=message?.components?.[0]?.components?.[0];
+  if(
+    currentButton?.style===5&&
+    currentButton?.url===desiredButton?.url&&
+    currentButton?.custom_id===undefined
+  ){
+    return "current";
+  }
+
+  await botJson(env,"/channels/"+deployment.channel_id+"/messages/"+deployment.message_id,{
+    method:"PATCH",
+    body:JSON.stringify(desired)
+  });
+  return "updated";
+}
+
 type SnapshotRole = {
   id:string;
   name:string;
