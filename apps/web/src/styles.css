@@ -4159,3 +4159,30 @@ body.dsm-touch-reordering .discord-category {
     flex-direction: column;
   }
 }
+
+
+.vending-image-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+}
+
+.vending-image-upload-button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 700px) {
+  .vending-image-upload-row {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .vending-image-upload-row > * {
+    width: 100%;
+  }
+}
