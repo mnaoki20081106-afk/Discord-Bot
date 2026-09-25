@@ -266,6 +266,7 @@ async function runtime(t, options = {}) {
       ) {
         const id = url.pathname.split('/').at(-1);
         const body = await request.clone().json().catch(() => ({}));
+        calls[calls.length-1].body=body;
         if (id === chatChannelId && Array.isArray(body.permission_overwrites)) {
           channelOverwrites = body.permission_overwrites.map(overwrite => ({
             id:String(overwrite.id),
