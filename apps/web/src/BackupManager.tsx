@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { API_BASE, api } from "./api";
+import { useEffect, useState } from "react";
+import { api } from "./api";
 
 type Backup = {
   id:string;
@@ -72,8 +72,8 @@ type Preview = {
 
 type RecoveryStatus = {
   registered:number;
-  authorizePath:string;
-  redirectPath:string;
+  registrationMode?:"verification";
+  separatePanelAvailable?:boolean;
 };
 
 type Props = {
@@ -110,36 +110,15 @@ function phaseLabel(phase:string){
 }
 
 export default function BackupManager({
-  guildId,channels,onNotice,onError
+  guildId,onNotice,onError
 }:Props){
   const [backups,setBackups]=useState<Backup[]>([]);
   const [jobs,setJobs]=useState<RestoreJob[]>([]);
   const [recovery,setRecovery]=useState<RecoveryStatus|null>(null);
   const [label,setLabel]=useState("");
-  const [panelChannel,setPanelChannel]=useState("");
   const [busy,setBusy]=useState<string|null>(null);
   const [preview,setPreview]=useState<{backup:Backup;data:Preview}|null>(null);
   const [confirmText,setConfirmText]=useState("");
-
-  const postableChannels=useMemo(
-    ()=>channels.filter(channel=>
-      (channel.type==="text"||channel.type==="announcement")&&channel.botCanPost!==false
-    ),
-    [channels]
-  );
-
-  const apiOrigin=useMemo(()=>{
-    try{
-      return new URL(API_BASE||location.origin,location.href).origin;
-    }catch{
-      return location.origin;
-    }
-  },[]);
-
-  const callbackUrl=apiOrigin+(recovery?.redirectPath??"/auth/discord/callback");
-  const selfRegisterUrl=recovery
-    ?apiOrigin+recovery.authorizePath
-    :"";
 
   async function load(){
     try{
@@ -151,11 +130,6 @@ export default function BackupManager({
       setBackups(backupRows);
       setJobs(jobRows);
       setRecovery(recoveryRow);
-      setPanelChannel(current=>
-        postableChannels.some(channel=>channel.id===current)
-          ?current
-          :postableChannels[0]?.id??""
-      );
     }catch(reason){
       onError(reason instanceof Error?reason.message:String(reason));
     }
@@ -238,22 +212,6 @@ export default function BackupManager({
       await api("/api/backups/"+backup.id,{method:"DELETE"});
       onNotice("バックアップを削除しました");
       await load();
-    }catch(reason){
-      onError(reason instanceof Error?reason.message:String(reason));
-    }finally{
-      setBusy(null);
-    }
-  }
-
-  async function installRecoveryPanel(){
-    if(!panelChannel) return;
-    setBusy("panel");
-    try{
-      await api("/api/guilds/"+guildId+"/recovery/panel",{
-        method:"POST",
-        body:JSON.stringify({channelId:panelChannel})
-      });
-      onNotice("メンバー復旧登録パネルを設置しました");
     }catch(reason){
       onError(reason instanceof Error?reason.message:String(reason));
     }finally{
@@ -374,43 +332,23 @@ export default function BackupManager({
             <span className="backup-count">{recovery?.registered??0} 登録</span>
           </div>
           <p className="muted">
-            現在の認証フローでは、認証完了と同時に公式OAuthの
-            <code>guilds.join</code> も登録されます。つまり新しく認証済みになったメンバーは
-            そのまま自動復元対象です。下のパネルは、旧認証方式ですでに認証済みのメンバーを
-            復旧登録へ移行する用途にも使えます。
+            復旧用メンバー登録は「認証」タブの認証パネルへ統合されています。
+            ユーザーは認証を1回完了するだけで、認証ロールの付与と公式OAuthの
+            <code>guilds.join</code> 登録が同時に完了し、そのまま自動復元対象になります。
           </p>
-          <label className="field">
-            <span>復旧登録パネル設置先</span>
-            <select value={panelChannel} onChange={event=>setPanelChannel(event.target.value)}>
-              {postableChannels.map(channel=>(
-                <option key={channel.id} value={channel.id}>#{channel.name}</option>
-              ))}
-            </select>
-          </label>
-          <div className="button-row">
-            <button
-              className="primary"
-              onClick={()=>void installRecoveryPanel()}
-              disabled={busy!==null||!panelChannel}
-            >
-              {busy==="panel"?"設置中...":"復旧登録パネルを設置"}
-            </button>
-            {selfRegisterUrl&&(
-              <a className="secondary" href={selfRegisterUrl} target="_blank" rel="noreferrer">
-                自分で登録テスト
-              </a>
-            )}
+          <div className="backup-callout">
+            <strong>別の復旧認証は不要</strong>
+            <span>
+              新しい「復旧登録パネル」は設置しません。認証パネルを唯一の登録導線として使うため、
+              通常のメンバーが2種類の認証を行う必要はありません。
+            </span>
           </div>
-          <div className="backup-callback">
-            <small>Discord Developer Portal の Redirect URI</small>
-            <code>{callbackUrl}</code>
-            <button
-              type="button"
-              className="text-button"
-              onClick={()=>void navigator.clipboard?.writeText(callbackUrl)}
-            >
-              コピー
-            </button>
+          <div className="backup-callout">
+            <strong>旧方式からの移行</strong>
+            <span>
+              以前の認証方式ですでに認証済みでも、この登録数に含まれていないメンバーだけは、
+              認証パネルから一度認証し直すと復旧対象へ統合されます。
+            </span>
           </div>
         </article>
       </div>
