@@ -63,9 +63,13 @@ async function fixture(t){
       }
     }
     if(/^\/channels\/\d+\/messages$/.test(p)) return Response.json([]);
-    if(/^\/channels\/\d+$/.test(p)&&method==='PATCH'){
-      const row=Object.values(channels).flat().find(x=>x.id===p.split('/').at(-1));
-      assert.ok(row);Object.assign(row,body);return Response.json(row);
+    if(/^\/channels\/\d+$/.test(p)){
+      const channelId=p.split('/').at(-1);
+      const guildEntry=Object.entries(channels).find(([,rows])=>rows.some(x=>x.id===channelId));
+      if(!guildEntry) return Response.json({message:'Unknown Channel'},{status:404});
+      const row=guildEntry[1].find(x=>x.id===channelId);
+      if(method==='GET') return Response.json({...row,guild_id:guildEntry[0]});
+      if(method==='PATCH'){Object.assign(row,body);return Response.json(row);}
     }
     if(p.endsWith('/audit-logs')) return Response.json({audit_log_entries:[]});
     return Response.json({message:'Unexpected fixture request: '+method+' '+p},{status:404});
@@ -171,6 +175,38 @@ test('a second backup cannot silently substitute an active restore job',async t=
  await f.start(first);
  const res=await f.request(`/api/backups/${second.id}/restore`,'POST',{targetGuildId:target});
  assert.equal(res.status,409);
+});
+
+test('vending achievement room stores a channel and selected machines only',async t=>{
+ const f=await fixture(t);
+ await f.request(`/api/guilds/${source}/vending`);
+ await f.db.prepare(
+  'INSERT INTO vending_machines(id,guild_id,owner_id,name,created_at,updated_at) VALUES (?,?,?,?,1,1)'
+ ).bind('achievement-vm-a',source,'shared-dashboard','Shop A').run();
+ await f.db.prepare(
+  'INSERT INTO vending_machines(id,guild_id,owner_id,name,created_at,updated_at) VALUES (?,?,?,?,1,1)'
+ ).bind('achievement-vm-b',source,'shared-dashboard','Shop B').run();
+ const saved=await f.request(
+  `/api/guilds/${source}/vending/achievement-room`,
+  'PUT',
+  {channelId:channelA,machineIds:['achievement-vm-b','achievement-vm-a','achievement-vm-b']}
+ );
+ assert.equal(saved.status,200,JSON.stringify(saved));
+ assert.equal(saved.body.channel_id,channelA);
+ assert.deepEqual(new Set(saved.body.machine_ids),new Set(['achievement-vm-a','achievement-vm-b']));
+ const fresh=await f.request(`/api/guilds/${source}/vending/achievement-room`);
+ assert.equal(fresh.status,200,JSON.stringify(fresh));
+ assert.equal(fresh.body.channel_id,channelA);
+ assert.deepEqual(new Set(fresh.body.machine_ids),new Set(['achievement-vm-a','achievement-vm-b']));
+ const invalid=await f.request(
+  `/api/guilds/${source}/vending/achievement-room`,
+  'PUT',
+  {channelId:channelA,machineIds:['missing-machine']}
+ );
+ assert.equal(invalid.status,400,JSON.stringify(invalid));
+ const cleared=await f.request(`/api/guilds/${source}/vending/achievement-room`,'DELETE');
+ assert.equal(cleared.status,200);
+ assert.equal((await f.request(`/api/guilds/${source}/vending/achievement-room`)).body.channel_id,null);
 });
 
 test('same-guild identity restores renamed and moved channels without making duplicates',async t=>{
