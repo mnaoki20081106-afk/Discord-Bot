@@ -1245,10 +1245,18 @@ async function restorePanels(
       );
       if(prior?.message_id){
         try{
+          if(panel.kind==="verification"){
+            await botJson(env,"/channels/"+channelId+"/messages/"+prior.message_id,{
+              method:"PATCH",
+              body:JSON.stringify(payload)
+            });
+            stats.panelsRestored++;
+            continue;
+          }
           await botJson(env,"/channels/"+channelId+"/messages/"+prior.message_id);
           continue;
         }catch{
-          // The recorded panel is gone; recreate it below.
+          // The recorded panel is gone or cannot be updated; recreate it below.
         }
       }
 
