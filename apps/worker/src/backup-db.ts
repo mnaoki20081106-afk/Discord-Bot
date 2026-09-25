@@ -232,6 +232,19 @@ export type RecoveryOAuthState = {
   purpose:"manual"|"verification";
 };
 
+export async function cleanExpiredRecoveryOAuthStates(env:Env):Promise<void>{
+  await ensureBackupSchema(env);
+  const now=Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      "DELETE FROM member_recovery_oauth_states WHERE expires_at<?"
+    ).bind(now),
+    env.DB.prepare(
+      "DELETE FROM member_recovery_states WHERE expires_at<?"
+    ).bind(now)
+  ]);
+}
+
 export async function putRecoveryOAuthState(
   env:Env,
   state:string,
