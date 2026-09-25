@@ -943,13 +943,15 @@ export default function App() {
                   aria-labelledby="admin-tab-members"
                   hidden={activeView !== "members"}
                 >
-                  <MemberActivityManager
-                    key={"MemberActivityManager:"+selectedId}
-                    guildId={selectedId!}
-                    channels={meta.channels}
-                    onNotice={flash}
-                    onError={fail}
-                  />
+                  {activeView === "members" && (
+                    <MemberActivityManager
+                      key={"MemberActivityManager:"+selectedId}
+                      guildId={selectedId!}
+                      channels={meta.channels}
+                      onNotice={flash}
+                      onError={fail}
+                    />
+                  )}
                 </section>
 
                 <section
