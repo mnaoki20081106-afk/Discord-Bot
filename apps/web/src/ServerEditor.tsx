@@ -530,53 +530,66 @@ export default function ServerEditor({
     }
   }
 
+  async function persistChannelPermissions(
+    channel: ServerEditorMeta["channels"][number],
+    targetId: string,
+    draft: Record<PermissionKey, PermissionMode>
+  ) {
+    const result = await api<{
+      ok: boolean;
+      verified?: boolean;
+      operationId?: string;
+    }>(
+      \`/api/guilds/\${guildId}/channels/\${channel.id}/permissions/\${targetId}?client=save-all-v48\`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          targetType: "role",
+          permissions: draft
+        })
+      },
+      18_000
+    );
+
+    if (!result.ok || result.verified !== true) {
+      throw new Error("Discord側の反映確認が完了しませんでした");
+    }
+    return result;
+  }
+
   async function savePermissions() {
     if (!selectedChannel || permissionSaving) return;
 
-    const channelId = selectedChannel.id;
-    const channelName = selectedChannel.name;
+    const channel = selectedChannel;
+    const channelName = channel.name;
     const targetId = permissionTargetId;
     const targetName =
       targetId === guildId
         ? "@everyone"
         : meta.roles.find((role) => role.id === targetId)
-          ? `@${meta.roles.find((role) => role.id === targetId)!.name}`
+          ? \`@\${meta.roles.find((role) => role.id === targetId)!.name}\`
           : targetId;
 
     setPermissionSaving(true);
     setPermissionSaveFeedback({
       kind: "saving",
       message: "Discordへ権限を反映して確認中…",
-      detail: `#${channelName} / ${targetName} / atomic-v47`
+      detail: \`#\${channelName} / \${targetName} / save-all-v48\`
     });
 
     try {
-      const result = await api<{
-        ok: boolean;
-        verified?: boolean;
-        operationId?: string;
-      }>(
-        `/api/guilds/${guildId}/channels/${channelId}/permissions/${targetId}?client=atomic-v47`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            targetType: "role",
-            permissions: permissionDraft
-          })
-        },
-        18_000
+      const result = await persistChannelPermissions(
+        channel,
+        targetId,
+        { ...permissionDraft }
       );
-
-      if (!result.ok || result.verified !== true) {
-        throw new Error("Discord側の反映確認が完了しませんでした");
-      }
 
       setPermissionSaveFeedback({
         kind: "success",
         message: "成功しました：Discordへの反映を確認しました",
         detail:
-          `#${channelName} / ${targetName}` +
-          (result.operationId ? ` / ID: ${result.operationId.slice(0, 8)}` : "")
+          \`#\${channelName} / \${targetName}\` +
+          (result.operationId ? \` / ID: \${result.operationId.slice(0, 8)}\` : "")
       });
       onNotice("チャンネル権限を保存し、Discordへの反映を確認しました");
 
@@ -626,27 +639,122 @@ export default function ServerEditor({
   async function saveExisting(event: FormEvent) {
     event.preventDefault();
     if (!selection || selection.kind === "create" || !name.trim()) return;
-    setSaving(true);
-    try {
-      const body =
-        selection.kind === "category"
-          ? { name: name.trim() }
-          : {
-              name: name.trim(),
-              parentId: parentId || null,
-              ...(selectedChannel &&
-              ["text", "announcement", "forum", "media"].includes(selectedChannel.type ?? "text")
-                ? { topic }
-                : {})
-            };
 
-      await api(`/api/guilds/${guildId}/channels/${selection.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(body)
+    const channel = selectedChannel;
+    const targetId = permissionTargetId;
+    const baselineDraft = channel ? draftFor(channel, targetId) : null;
+    const permissionChanged =
+      channel !== null &&
+      baselineDraft !== null &&
+      (Object.keys(permissionDraft) as PermissionKey[]).some(
+        (key) => permissionDraft[key] !== baselineDraft[key]
+      );
+
+    const metadataChanged =
+      selection.kind === "category"
+        ? name.trim() !== selectedCategory?.name
+        : channel !== null &&
+          (
+            name.trim() !== channel.name ||
+            (parentId || null) !== (channel.parentId || null) ||
+            (
+              ["text", "announcement", "forum", "media"].includes(channel.type ?? "text") &&
+              topic !== (channel.topic ?? "")
+            )
+          );
+
+    setSaving(true);
+
+    if (permissionChanged && channel) {
+      const targetName =
+        targetId === guildId
+          ? "@everyone"
+          : meta.roles.find((role) => role.id === targetId)
+            ? \`@\${meta.roles.find((role) => role.id === targetId)!.name}\`
+            : targetId;
+      setPermissionSaveFeedback({
+        kind: "saving",
+        message: "Discordへ権限を反映して確認中…",
+        detail: \`#\${channel.name} / \${targetName} / save-all-v48\`
       });
-      await onRefresh();
-      onNotice(selection.kind === "category" ? "カテゴリを更新しました" : "チャンネルを更新しました");
+    }
+
+    try {
+      let permissionOperationId: string | undefined;
+
+      // The main "save changes" action must include permission edits. Previously
+      // it only sent name/parent/topic, so role permission changes were silently
+      // ignored even though the button showed "保存中…".
+      if (permissionChanged && channel) {
+        const result = await persistChannelPermissions(
+          channel,
+          targetId,
+          { ...permissionDraft }
+        );
+        permissionOperationId = result.operationId;
+        const targetName =
+          targetId === guildId
+            ? "@everyone"
+            : meta.roles.find((role) => role.id === targetId)
+              ? \`@\${meta.roles.find((role) => role.id === targetId)!.name}\`
+              : targetId;
+        setPermissionSaveFeedback({
+          kind: "success",
+          message: "成功しました：Discordへの反映を確認しました",
+          detail:
+            \`#\${channel.name} / \${targetName}\` +
+            (permissionOperationId ? \` / ID: \${permissionOperationId.slice(0, 8)}\` : "")
+        });
+      }
+
+      // Avoid the generic channel PATCH entirely when only permissions changed.
+      // That removes an unnecessary Discord round trip and the old 20s timeout
+      // path from the common permission-edit workflow.
+      if (metadataChanged) {
+        const body =
+          selection.kind === "category"
+            ? { name: name.trim() }
+            : {
+                name: name.trim(),
+                parentId: parentId || null,
+                ...(channel &&
+                ["text", "announcement", "forum", "media"].includes(channel.type ?? "text")
+                  ? { topic }
+                  : {})
+              };
+
+        await api(\`/api/guilds/\${guildId}/channels/\${selection.id}\`, {
+          method: "PATCH",
+          body: JSON.stringify(body)
+        });
+      }
+
+      if (permissionChanged || metadataChanged) {
+        await onRefresh();
+      }
+
+      if (permissionChanged && metadataChanged) {
+        onNotice("チャンネル設定とロール権限を更新しました");
+      } else if (permissionChanged) {
+        onNotice("チャンネル権限を保存し、Discordへの反映を確認しました");
+      } else if (metadataChanged) {
+        onNotice(selection.kind === "category" ? "カテゴリを更新しました" : "チャンネルを更新しました");
+      } else {
+        onNotice("変更はありません");
+      }
     } catch (reason) {
+      if (permissionChanged) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setPermissionSaveFeedback((current) =>
+          current.kind === "success"
+            ? current
+            : {
+                kind: "error",
+                message: "権限の保存に失敗しました",
+                detail: message
+              }
+        );
+      }
       onError(reason);
     } finally {
       setSaving(false);
@@ -1787,7 +1895,7 @@ export default function ServerEditor({
 
               <div className="editor-action-row">
                 <button className="primary" type="submit" disabled={saving}>
-                  {saving ? "保存中…" : "変更を保存"}
+                  {saving ? "保存中…" : "すべての変更を保存"}
                 </button>
                 <button className="danger" type="button" disabled={saving} onClick={() => void deleteSelected()}>
                   削除
