@@ -35,6 +35,14 @@ export type VmAchievementRoom = {
   updated_at:number;
 };
 
+export type VmPanelImage = {
+  vending_machine_id:string;
+  owner_id:string;
+  mime_type:string;
+  content_base64:string;
+  updated_at:number;
+};
+
 const schema=[
 "CREATE TABLE IF NOT EXISTS vending_machines (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,name TEXT NOT NULL,public_log_channel_id TEXT,local_log_channel_id TEXT,private_log_channel_id TEXT,role_id TEXT,panel_title TEXT,panel_description TEXT,panel_image_url TEXT,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE INDEX IF NOT EXISTS vending_machines_guild_idx ON vending_machines(guild_id,active)",
@@ -52,7 +60,8 @@ const schema=[
 "CREATE TABLE IF NOT EXISTS vending_used_payment_links (link_hash TEXT PRIMARY KEY,provider TEXT NOT NULL,order_id TEXT NOT NULL,used_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_achievement_rooms (guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',updated_at INTEGER NOT NULL,PRIMARY KEY(guild_id,owner_id))",
 "CREATE TABLE IF NOT EXISTS vending_achievement_routes (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
-"CREATE INDEX IF NOT EXISTS vending_achievement_routes_owner_idx ON vending_achievement_routes(guild_id,owner_id,created_at)"
+"CREATE INDEX IF NOT EXISTS vending_achievement_routes_owner_idx ON vending_achievement_routes(guild_id,owner_id,created_at)",
+"CREATE TABLE IF NOT EXISTS vending_panel_images (vending_machine_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,mime_type TEXT NOT NULL,content_base64 TEXT NOT NULL,updated_at INTEGER NOT NULL)"
 ];
 
 let ready=false;
@@ -90,7 +99,47 @@ export async function updateMachine(env:Env,id:string,ownerId:string,p:Partial<{
   ).run();
   return (r.meta.changes??0)>0;
 }
-export async function deleteMachine(env:Env,id:string,ownerId:string){ const r=await env.DB.prepare("UPDATE vending_machines SET active=0,updated_at=? WHERE id=? AND owner_id=? AND active=1").bind(Date.now(),id,ownerId).run(); return (r.meta.changes??0)>0; }
+export async function deleteMachine(env:Env,id:string,ownerId:string){
+  const r=await env.DB.prepare("UPDATE vending_machines SET active=0,updated_at=? WHERE id=? AND owner_id=? AND active=1").bind(Date.now(),id,ownerId).run();
+  if((r.meta.changes??0)>0){
+    await env.DB.prepare("DELETE FROM vending_panel_images WHERE vending_machine_id=? AND owner_id=?").bind(id,ownerId).run();
+    return true;
+  }
+  return false;
+}
+
+export async function saveVmPanelImage(
+  env:Env,
+  vmId:string,
+  ownerId:string,
+  mimeType:string,
+  contentBase64:string
+):Promise<number>{
+  const now=Date.now();
+  await env.DB.prepare(`
+    INSERT INTO vending_panel_images(vending_machine_id,owner_id,mime_type,content_base64,updated_at)
+    VALUES (?,?,?,?,?)
+    ON CONFLICT(vending_machine_id) DO UPDATE SET
+      owner_id=excluded.owner_id,
+      mime_type=excluded.mime_type,
+      content_base64=excluded.content_base64,
+      updated_at=excluded.updated_at
+  `).bind(vmId,ownerId,mimeType,contentBase64,now).run();
+  return now;
+}
+
+export async function getVmPanelImage(env:Env,vmId:string):Promise<VmPanelImage|null>{
+  return await env.DB.prepare(
+    "SELECT vending_machine_id,owner_id,mime_type,content_base64,updated_at FROM vending_panel_images WHERE vending_machine_id=?"
+  ).bind(vmId).first<VmPanelImage>()??null;
+}
+
+export async function deleteVmPanelImage(env:Env,vmId:string,ownerId:string):Promise<boolean>{
+  const result=await env.DB.prepare(
+    "DELETE FROM vending_panel_images WHERE vending_machine_id=? AND owner_id=?"
+  ).bind(vmId,ownerId).run();
+  return (result.meta.changes??0)>0;
+}
 
 export async function listVmProducts(env:Env,vmId:string){
   return (await env.DB.prepare("SELECT p.*,CASE WHEN p.infinite_stock=1 THEN -1 ELSE COALESCE((SELECT COUNT(*) FROM vending_stock s WHERE s.product_id=p.id AND s.state='available'),0) END AS stock_count FROM vending_products p WHERE p.vending_machine_id=? AND p.active=1 ORDER BY p.created_at ASC").bind(vmId).all<VmProduct&{stock_count:number}>()).results;
