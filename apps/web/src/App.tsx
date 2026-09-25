@@ -780,7 +780,7 @@ export default function App() {
                   <article className="metric card">
                   <span>VERIFICATION</span>
                   <strong>{settings.verifiedRoleId ? "READY" : "SETUP"}</strong>
-                  <small>Challenge + account age</small>
+                  <small>Discord OAuth + account age + recovery</small>
                   </article>
                   <article className="metric card">
                   <span>CHANNELS</span>
