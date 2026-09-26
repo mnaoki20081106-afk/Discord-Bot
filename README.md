@@ -15,19 +15,23 @@ Webダッシュボードからまとめて管理するモノレポです。
 
 ### Security
 
-- Discord AutoModによるAnti-Spam
-- Discord AutoModによる招待リンクのブロック
-- Discord AutoModによる大量メンション保護
-- Discord標準Raid Protectionを利用
-- Cloudflare Cron + Audit LogベースのAnti-Nuke
-  - 大量チャンネル削除
-  - 大量ロール削除
-  - 大量BAN
-  - 危険なロール権限昇格
-- Trusted User / Trusted Role
-- Security Log
-- 危険操作実行者から編集可能な危険権限ロールを解除
-- 誤検知時の被害を抑えるため、検知だけで即BANはしません
+主要な防御は独立リポジトリ **mnaoki20081106-afk/Discord-Security** の別Discord Bot / 別Workerへ分離しています。
+管理画面は本リポジトリのWeb Dashboardだけを使用し、認証済みMain WorkerがHMAC署名付き内部APIでSecurity Workerを操作します。
+
+- Main Bot
+  - Discord AutoModによるAnti-Spam / Invite / Mentionの予備防御
+  - 認証 / Ticket / 自販機 / サーバー管理
+  - バックアップ / 復元
+- Security Bot
+  - Discord GatewayによるリアルタイムAnti-Nuke / Anti-Raid
+  - Cross-action Risk
+  - Scam / Phishing / Dangerous Attachment
+  - Bot / Webhook / Role / Permission / AutoMod Guard
+  - 危険権限剥奪 / Timeout / 悪性Bot除去
+  - Emergency Lockdown + Lockdown状態の独立D1保存
+- Main Botは恒久的にSecurity BotのWhitelistへ入れません。
+  正常な管理操作とバックアップ復元時だけ、短時間の署名付きMaintenance Leaseを発行します。
+- Security Bot未接続環境では、従来のCron + Audit Log Anti-Nukeがフォールバックとして残ります。
 
 ### Verification
 
@@ -84,24 +88,24 @@ See [docs/VENDING.md](./docs/VENDING.md) for the full feature map and design.
 GitHub Pages
   React Dashboard
         |
-        | HTTPS
         v
-Cloudflare Workers
-  OAuth / Discord Interactions / REST API / Vending
-        |
-        +---- Discord REST API + AutoMod
-        +---- PayPay / Kyash payment adapters
-        |
-        v
-Cloudflare D1
+Main Cloudflare Worker ----------------------+
+  OAuth / Interactions / Vending / Backup    |
+        |                                    | HMAC signed bridge
+        v                                    v
+     Main D1                         Discord-Security Worker
+                                            |
+                                            +-- Durable Object Gateway
+                                            +-- Security D1
+                                            +-- Discord REST containment
 ```
 
-常時起動サーバーはありません。Render / Koyeb / Railway / keepalive は不要です。
+Main Botの通常機能とSecurity Botの防御実行系は別Worker・別Discord Token・別D1です。
+Main側が停止しても、既に接続済みのSecurity Gatewayは独立して防御を継続できます。
+管理画面だけは1つに統合したままです。
 
-DiscordのMessage/Member Gatewayイベントはサーバーレスでは常時受信しません。
-その代わり、Spam・招待リンク・大量メンションはDiscord AutoMod、
-大量破壊はCloudflare CronによるAudit Log監視で保護します。
-参加イベント依存のAnti-RaidはDiscord標準Raid Protectionを使用します。
+Main側のSpam・招待リンク・大量メンション保護にはDiscord AutoModも残し、
+Security Botが未設定の環境では従来のCron Anti-Nukeをフォールバックとして使用します。
 
 Cloudflare Workers Free/D1 Freeの利用上限を超えた場合はその日の処理が制限される
 可能性がありますが、時間経過だけで30日後にDBが失効する構成ではありません。
