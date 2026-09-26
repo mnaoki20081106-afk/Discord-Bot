@@ -282,7 +282,7 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
       if(lines.filter(Boolean).length>500) throw new VendingHttpError(413,"在庫は1回500件まで追加できます");
       const count=await addStock(env,productId,lines);
       const notification=await getStockNotify(env,vmId);
-      if(count>0&&b.notify!==false&&notification){
+      if(count>0&&b.notify!==false&&notification?.enabled){
         const productInfo=await getVmProduct(env,productId);
         if(productInfo){
           await send(env,notification.channel_id,{
@@ -337,10 +337,24 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     await machineOwned(env,vmId,session.user_id);
     if(request.method==="GET") return json(env,await getStockNotify(env,vmId));
     if(request.method==="POST"){
-      const b=await input<{channelId:string;roleId:string}>(request);
-      if(!b.channelId||!b.roleId) throw new VendingHttpError(400,"チャンネルとロールを選択してください");
-      await saveStockNotify(env,vmId,guildId,b.channelId,b.roleId);
-      return json(env,{ok:true});
+      const b=await input<{channelId?:string|null;roleId?:string|null;enabled?:boolean}>(request);
+      const current=await getStockNotify(env,vmId);
+      const channelId=String(b.channelId??current?.channel_id??"").trim();
+      const roleId=String(b.roleId??current?.role_id??"").trim();
+      const enabled=Boolean(b.enabled);
+
+      if((channelId&&!roleId)||(!channelId&&roleId)){
+        throw new VendingHttpError(400,"通知チャンネルとメンションロールは両方選択してください");
+      }
+      if(enabled&&(!channelId||!roleId)){
+        throw new VendingHttpError(400,"通知をオンにするにはチャンネルとロールを選択してください");
+      }
+      if(!channelId&&!roleId){
+        return json(env,{ok:true,enabled:false});
+      }
+
+      await saveStockNotify(env,vmId,guildId,channelId,roleId,enabled);
+      return json(env,{ok:true,enabled});
     }
     if(request.method==="DELETE"){
       await deleteStockNotify(env,vmId);
