@@ -5,6 +5,7 @@ import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
+import SecurityManager from "./SecurityManager";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -154,7 +155,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "members" | "verification" | "tickets" | "vending" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -677,6 +678,17 @@ export default function App() {
                 onClick={() => setActiveView("server")}
               >
                 サーバー管理
+              </button>
+              <button
+                type="button"
+                id="admin-tab-security"
+                role="tab"
+                aria-controls="admin-panel-security"
+                aria-selected={activeView === "security"}
+                className={activeView === "security" ? "active" : ""}
+                onClick={() => setActiveView("security")}
+              >
+                セキュリティ
               </button>
               <button
                 type="button"
@@ -1211,6 +1223,24 @@ export default function App() {
                 </section>
               </>
             )}
+
+            <section
+              id="admin-panel-security"
+              className="admin-tab-panel"
+              role="tabpanel"
+              aria-labelledby="admin-tab-security"
+              hidden={activeView !== "security"}
+            >
+              {activeView === "security" && (
+                <SecurityManager
+                  key={"SecurityManager:"+selectedId}
+                  guildId={selectedId!}
+                  channels={meta.channels}
+                  onNotice={flash}
+                  onError={fail}
+                />
+              )}
+            </section>
 
             <section
               id="admin-panel-backup"
