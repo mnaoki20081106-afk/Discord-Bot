@@ -797,9 +797,9 @@ export default function App() {
 
                   <section className="metric-grid">
                   <article className="metric card">
-                  <span>SECURITY</span>
+                  <span>NATIVE GUARD</span>
                   <strong>{settings.securityEnabled ? "ACTIVE" : "OFF"}</strong>
-                  <small>Discord AutoMod + Audit protection</small>
+                  <small>Discord AutoMod fallback</small>
                   </article>
                   <article className="metric card">
                   <span>VERIFICATION</span>
@@ -822,8 +822,8 @@ export default function App() {
                     <article className="card">
                     <div className="section-head">
                     <div>
-                    <span className="eyebrow">SECURITY</span>
-                    <h2>セキュリティ</h2>
+                    <span className="eyebrow">DISCORD NATIVE GUARD</span>
+                    <h2>補助保護</h2>
                     </div>
                     <button className="primary" onClick={() => void saveSettings()} disabled={busy}>
                     設定を保存
@@ -834,8 +834,8 @@ export default function App() {
                     <Toggle
                     checked={settings.securityEnabled}
                     onChange={(value) => setSettings({ ...settings, securityEnabled: value })}
-                    title="Security Engine"
-                    description="全セキュリティ機能のマスタースイッチ"
+                    title="Discord AutoMod Guard"
+                    description="独立Security Botとは別に、Discord標準AutoModを予備防御として維持します"
                     />
                     <Toggle
                     checked={settings.antiSpam}
@@ -849,20 +849,14 @@ export default function App() {
                     title="Invite Guard"
                     description="外部Discord招待リンクをブロック"
                     />
-                    <Toggle
-                    checked={settings.antiNuke}
-                    onChange={(value) => setSettings({ ...settings, antiNuke: value })}
-                    title="Anti-Nuke"
-                    description="Cloudflare Cronで監査ログを監視し大量破壊を検知"
-                    />
                     </div>
                     
                     <div className="serverless-note">
-                    <strong>Anti-Raidについて</strong>
+                    <strong>主要な防御は「セキュリティ」タブへ移動しました</strong>
                     <span>
-                    常駐Gatewayを使わない0円構成のため、参加イベント監視はDiscord標準の
-                    Raid Protectionを使用します。Spam・大量メンション・招待リンクはAutoMod、
-                    大量破壊は下のAnti-Nukeで保護します。
+                    Anti-Nuke / Anti-Raid / Scam・Phishing / Permission Guard / Lockdownは
+                    独立Security BotがリアルタイムGatewayで担当します。ここはDiscord AutoModの
+                    予備防御だけを管理します。
                     </span>
                     </div>
                     
@@ -873,15 +867,6 @@ export default function App() {
                     value={settings.mentionLimit}
                     onChange={(e) =>
                     setSettings({ ...settings, mentionLimit: Number(e.target.value) })
-                    }
-                    />
-                    </Field>
-                    <Field label="Nuke操作回数">
-                    <input
-                    type="number"
-                    value={settings.nukeActions}
-                    onChange={(e) =>
-                    setSettings({ ...settings, nukeActions: Number(e.target.value) })
                     }
                     />
                     </Field>
@@ -900,27 +885,6 @@ export default function App() {
                     <option key={channel.id} value={channel.id}>#{channel.name}</option>
                     ))}
                     </select>
-                    </Field>
-                    <Field label="Nuke監視秒">
-                    <input
-                    type="number"
-                    value={settings.nukeWindowSeconds}
-                    onChange={(e) =>
-                    setSettings({ ...settings, nukeWindowSeconds: Number(e.target.value) })
-                    }
-                    />
-                    </Field>
-                    <Field label="信頼ユーザーID" hint="カンマ区切り">
-                    <input
-                    value={trustedUsersText}
-                    onChange={(e) => setTrustedUsersText(e.target.value)}
-                    />
-                    </Field>
-                    <Field label="信頼ロールID" hint="カンマ区切り">
-                    <input
-                    value={trustedRolesText}
-                    onChange={(e) => setTrustedRolesText(e.target.value)}
-                    />
                     </Field>
                     </div>
                     </article>
