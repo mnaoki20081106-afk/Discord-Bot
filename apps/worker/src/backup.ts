@@ -4,6 +4,10 @@ import { ensureSchema, getDashboardSession, getGuildSettings } from "./db";
 import { ensureVendingSchema } from "./vending-db";
 import { accountCreatedAt, decrypt, encrypt, json, randomId, randomToken, sha256Hex } from "./utils";
 import {
+  openSecurityMaintenanceLease,
+  securityBridgeConfigured
+} from "./security-bridge";
+import {
   cancelRestoreJob,
   cleanExpiredRecoveryOAuthStates,
   countRecoveryMembers,
@@ -1531,6 +1535,17 @@ async function runBackupRestoreSweep(env:Env):Promise<void>{
   const job=await nextRestoreJob(env);
   if(job){
     try{
+      // Restore legitimately performs many privileged actions. Security Bot
+      // receives only a short lease for the Main Bot and only while a restore
+      // batch is actually running; Main Bot is not permanently whitelisted.
+      if(securityBridgeConfigured(env)){
+        await openSecurityMaintenanceLease(
+          env,
+          job.target_guild_id,
+          "restore",
+          300
+        );
+      }
       await processRestoreJob(env,job);
     }catch(error){
       const message=error instanceof Error?error.message:String(error);
