@@ -73,6 +73,8 @@ type SecuritySettings = {
 
 type Overview = {
   configured: boolean;
+  installed?: boolean;
+  inviteUrl?: string;
   unreachable?: boolean;
   message?: string;
   settings: SecuritySettings | null;
@@ -346,11 +348,19 @@ export default function SecurityManager({
         </article>
         <article className="metric card">
           <span>SECURITY BOT</span>
-          <strong>{overview.status.connected ? "ONLINE" : "OFFLINE"}</strong>
+          <strong>
+            {!overview.installed
+              ? "NOT INSTALLED"
+              : overview.status.connected
+                ? "ONLINE"
+                : "OFFLINE"}
+          </strong>
           <small>
-            {overview.status.lastEventAt
-              ? "Last event " + new Date(overview.status.lastEventAt).toLocaleTimeString("ja-JP")
-              : "Gateway waiting"}
+            {!overview.installed
+              ? "このサーバーへ追加が必要です"
+              : overview.status.lastEventAt
+                ? "Last event " + new Date(overview.status.lastEventAt).toLocaleTimeString("ja-JP")
+                : "Gateway waiting"}
           </small>
         </article>
         <article className="metric card">
@@ -373,6 +383,16 @@ export default function SecurityManager({
             <p>Main Botとは別Token・別Worker・別Gatewayで稼働します。</p>
           </div>
           <div className="button-row">
+            {!overview.installed && overview.inviteUrl && (
+              <a
+                className="button-link"
+                href={overview.inviteUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Security Botを追加
+              </a>
+            )}
             <button type="button" className="secondary" disabled={busy} onClick={() => void load()}>
               更新
             </button>
