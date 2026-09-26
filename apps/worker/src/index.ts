@@ -2965,7 +2965,7 @@ export default {
         }
 
         return json(env,{
-          version:"gateway-guild-membership-v61",
+          version:"guild-root-cause-v62",
           live:{status:liveStatus,count:liveCount,error:liveError},
           persisted:{
             cacheCount:cached.length,
@@ -3022,7 +3022,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"gateway-guild-membership-v61",
+          version:"guild-root-cause-v62",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
