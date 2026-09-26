@@ -1781,6 +1781,13 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     }
   }
 
+  const repairMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/bot-access\/repair$/);
+  if(repairMatch&&request.method==="POST"){
+    const guildId=repairMatch[1]!;
+    await requireGuild(request,env,guildId);
+    return json(env,await repairBotChannelAccess(env,guildId));
+  }
+
   const meta=url.pathname.match(/^\/api\/guilds\/(\d+)\/meta$/);
   if(meta&&request.method==="GET"){
     const guildId=meta[1]!;
