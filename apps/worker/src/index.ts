@@ -2910,6 +2910,39 @@ export default {
       if(request.method==="OPTIONS"){
         return new Response(null,{status:204,headers:corsHeaders(env)});
       }
+      if(url.pathname==="/_diag/security-cause-v1"&&request.method==="GET"){
+        await ensureSchema(env);
+        const knownIds=await listKnownGuildIds(env).catch(()=>[]);
+        if(!knownIds[0]||!securityBridgeConfigured(env)){
+          return json(env,{ok:false,reason:"unavailable"});
+        }
+        const overview=await securityBridgeJson<any>(
+          env,
+          `/internal/guilds/${knownIds[0]}/overview?limit=50`
+        );
+        const incidents=Array.isArray(overview?.incidents)?overview.incidents:[];
+        return json(env,{
+          ok:true,
+          incidents:incidents.slice(0,20).map((incident:any)=>({
+            kind:String(incident?.kind??""),
+            severity:String(incident?.severity??""),
+            actorIsMainBot:String(incident?.actorId??"")===
+              env.DISCORD_APPLICATION_ID.trim(),
+            targetIsMainBot:String(incident?.data?.targetId??"")===
+              env.DISCORD_APPLICATION_ID.trim(),
+            actionType:typeof incident?.data?.actionType==="number"
+              ?incident.data.actionType:null,
+            actionCount:typeof incident?.data?.actionCount==="number"
+              ?incident.data.actionCount:null,
+            crossActionScore:typeof incident?.data?.crossActionScore==="number"
+              ?incident.data.crossActionScore:null,
+            securitySelfOverwrite:Boolean(incident?.data?.securitySelfOverwrite),
+            createdAt:typeof incident?.createdAt==="number"
+              ?incident.createdAt:null
+          }))
+        });
+      }
+
       if(url.pathname==="/"||url.pathname==="/health"){
         let d1Reachable=false;
         let d1Error:string|null=null;
@@ -2955,7 +2988,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"main-security-guard-v66",
+          version:"security-cause-v67",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
