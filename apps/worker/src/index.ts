@@ -20,6 +20,7 @@ import {
   getSession,
   listAllGuildSettings,
   listBotGuildCache,
+  listKnownGuildIds,
   listPendingPayments,
   listProducts,
   markDelivered,
@@ -1643,14 +1644,10 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(url.pathname==="/api/guilds"&&request.method==="GET"){
     await sessionFromRequest(request,env);
 
-    const [cached,configured]=await Promise.all([
+    const [cached,knownIds]=await Promise.all([
       listBotGuildCache(env,24*60*60_000).catch(()=>[]),
-      listAllGuildSettings(env,200).catch(()=>[])
+      listKnownGuildIds(env).catch(()=>[])
     ]);
-    const knownIds=[
-      ...cached.map(guild=>guild.id),
-      ...configured.map(row=>row.guild_id)
-    ];
 
     try{
       const live=await botJson<DashboardGuild[]>(
@@ -2919,7 +2916,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"guild-list-reconcile-v59",
+          version:"guild-list-reconcile-v60",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
