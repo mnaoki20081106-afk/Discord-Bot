@@ -1784,38 +1784,18 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   const meta=url.pathname.match(/^\/api\/guilds\/(\d+)\/meta$/);
   if(meta&&request.method==="GET"){
     const guildId=meta[1]!;
-    const fast=url.searchParams.get("fast")==="1";
+    await sessionFromRequest(request,env);
 
-    // Save/refresh flows only need the current Discord structure. Running the
-    // full access-repair sweep here can issue one overwrite request per channel
-    // and make an otherwise successful save appear to hang in the dashboard.
-    if(fast){
-      await sessionFromRequest(request,env);
-      const [guild,metaData]=await Promise.all([
-        botJson<{id:string;name:string;icon:string|null}>(env,`/guilds/${guildId}`),
-        discordMeta(env,guildId)
-      ]);
-      return json(env,{
-        ...guild,
-        ...metaData
-      });
-    }
-
-    const {guild}=await requireGuild(request,env,guildId);
-    const botAccessRepair=await repairBotChannelAccess(env,guildId);
-    let verificationPanelUpgrade:"updated"|"current"|"missing"="missing";
-    try{
-      verificationPanelUpgrade=await upgradeTrackedVerificationPanel(
-        env,guildId,new URL(request.url).origin
-      );
-    }catch(error){
-      console.warn("verification panel auto-upgrade failed",guildId,error);
-    }
+    // This endpoint is intentionally read-only. Previous code repaired channel
+    // overwrites while merely opening the dashboard, which generated dozens of
+    // audit-log entries and could trip Discord-Security's anti-nuke rules.
+    const [guild,metaData]=await Promise.all([
+      botJson<{id:string;name:string;icon:string|null}>(env,`/guilds/${guildId}`),
+      discordMeta(env,guildId)
+    ]);
     return json(env,{
       ...guild,
-      ...await discordMeta(env,guildId),
-      botAccessRepair,
-      verificationPanelUpgrade
+      ...metaData
     });
   }
 
@@ -3059,7 +3039,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"guild-diagnostic-v64",
+          version:"read-only-meta-v65",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
