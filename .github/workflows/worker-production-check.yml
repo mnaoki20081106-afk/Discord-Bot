@@ -27,9 +27,6 @@ jobs:
             echo "Attempt $attempt: $body"
             if printf '%s' "$body" | grep -Fq "\"version\":\"$expected\""; then
               echo "Production Worker is up to date."
-              echo "Guild diagnostic:"
-              curl -fsS --max-time 20 https://discord-bot.c53gftun651-tiktok.workers.dev/_diag/guilds-v1 || true
-              echo
               exit 0
             fi
             sleep 5
