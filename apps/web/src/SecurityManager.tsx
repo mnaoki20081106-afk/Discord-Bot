@@ -90,6 +90,12 @@ type Overview = {
     requiredReady: boolean;
     maximumProtection: boolean;
     roleAboveManagedBots: boolean | null;
+    roleAboveDangerousRoles: boolean | null;
+    dangerousRolesNotBelow: Array<{
+      id: string;
+      name: string;
+      position: number;
+    }>;
     highestRoleName: string | null;
     highestRolePosition: number | null;
     missingPermissions: string[];
@@ -437,22 +443,31 @@ export default function SecurityManager({
       {overview.installed && overview.capabilities && (
         !overview.capabilities.requiredReady ||
         overview.capabilities.roleAboveManagedBots === false ||
+        overview.capabilities.roleAboveDangerousRoles === false ||
         !overview.capabilities.maximumProtection
       ) && (
         <article className="card serverless-note">
           <strong>
-            {!overview.capabilities.requiredReady
+            {overview.capabilities.missingPermissions.length > 0
               ? "Security Botの権限が不足しています"
-              : overview.capabilities.roleAboveManagedBots === false
-                ? "Security BotのロールをMain Botより上へ移動してください"
-                : "現在はHardenedモードです"}
+              : overview.capabilities.roleAboveDangerousRoles === false
+                ? "Security Botより上に危険権限ロールがあります"
+                : overview.capabilities.roleAboveManagedBots === false
+                  ? "Security BotのロールをMain Botより上へ移動してください"
+                  : "現在はHardenedモードです"}
           </strong>
           <span>
-            {!overview.capabilities.requiredReady
+            {overview.capabilities.missingPermissions.length > 0
               ? "不足: " + overview.capabilities.missingPermissions.join(" / ")
-              : overview.capabilities.roleAboveManagedBots === false
-                ? "攻撃時にMain Botや管理ロールを止めるため、Security Botの最高ロールをMain Botより上に配置してください。"
-                : "最大保護ではSecurity BotへAdministratorを付与します。Administratorはチャンネル個別拒否をバイパスできる一方、Security Botトークンの管理はより重要になります。"}
+              : overview.capabilities.roleAboveDangerousRoles === false
+                ? "Security Botが止められない危険ロール: " +
+                  overview.capabilities.dangerousRolesNotBelow
+                    .map(role => role.name)
+                    .join(" / ") +
+                  "。Security Botの最高ロールを、Administrator・ロール管理・チャンネル管理・BAN/Kick等の危険権限を持つ全ロールより上へ配置してください。"
+                : overview.capabilities.roleAboveManagedBots === false
+                  ? "攻撃時にMain Botを止めるため、Security Botの最高ロールをMain Botより上に配置してください。"
+                  : "最大保護ではSecurity BotへAdministratorを付与します。Administratorはチャンネル個別拒否をバイパスできる一方、Security Botトークンの管理はより重要になります。"}
           </span>
           {overview.maximumInviteUrl && !overview.capabilities.maximumProtection && (
             <a
