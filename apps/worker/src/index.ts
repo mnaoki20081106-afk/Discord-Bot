@@ -1538,6 +1538,10 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         ));
       }catch(error){
         console.error("security center overview failed",error);
+        // This endpoint feeds a dedicated dashboard state. Returning a
+        // successful envelope lets the UI render "Security Bot unreachable"
+        // instead of the shared API client converting the response into a
+        // generic exception before SecurityManager can inspect it.
         return json(env,{
           configured:true,
           unreachable:true,
@@ -1546,7 +1550,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
           status:{connected:false,lastHeartbeatAck:null,lastEventAt:null,reconnectAttempts:0,botUserId:null},
           incidents:[],
           lockdown:{active:false,expiresAt:null,reason:null}
-        },502);
+        });
       }
     }
     if(request.method==="PUT"){

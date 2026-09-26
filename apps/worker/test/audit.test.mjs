@@ -42,6 +42,9 @@ async function fixture(t,options={}){
         signature:req.headers.get('X-Security-Signature')
       });
       assert.match(req.headers.get('X-Security-Signature')??'',/^[a-f0-9]{64}$/);
+      if(options.securityBridgeFailure){
+        return Response.json({error:'simulated_unavailable'},{status:503});
+      }
       if(u.pathname.endsWith('/maintenance')){
         return Response.json({id:'lease-test',expiresAt:Date.now()+30000},{status:201});
       }
@@ -329,4 +332,15 @@ test('Security bridge authorizes Main mutations and restore batches with short l
   assert.ok(restoreLease,'restore batch did not request a Security restore lease');
   assert.equal(restoreLease.body.actorId,bot);
   assert.ok(Number(restoreLease.body.seconds)>=300);
+});
+
+
+test('Security Center renders an unreachable state without turning it into a generic API failure',async t=>{
+  const f=await fixture(t,{securityBridge:true,securityBridgeFailure:true});
+  const res=await f.request(`/api/guilds/${source}/security-center`);
+  assert.equal(res.status,200,JSON.stringify(res));
+  assert.equal(res.body.configured,true);
+  assert.equal(res.body.unreachable,true);
+  assert.equal(res.body.settings,null);
+  assert.match(res.body.message,/Security Bot API 503/);
 });
