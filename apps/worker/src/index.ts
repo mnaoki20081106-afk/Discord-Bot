@@ -19,10 +19,12 @@ import {
   getProduct,
   getSession,
   listAllGuildSettings,
+  listBotGuildCache,
   listPendingPayments,
   listProducts,
   markDelivered,
   putOAuthState,
+  replaceBotGuildCache,
   saveGuildSettings,
   setAuditCursor,
   setPaymentStatus
@@ -433,26 +435,30 @@ async function repairBotChannelAccess(
 }
 
 async function botAccessGuardSweep(env:Env):Promise<void>{
-  let guilds:Array<{id:string}>;
-  try{
-    guilds=await botJson<Array<{id:string}>>(env,"/users/@me/guilds?limit=200");
-  }catch(error){
-    console.error("bot access guard: guild list failed",error);
-    return;
-  }
+  // Do not consume Discord's /users/@me/guilds rate-limit bucket from the
+  // every-minute cron. The dashboard owns live guild-list refreshes; the guard
+  // can safely operate on recently cached/known guild IDs.
+  const [cached,configured]=await Promise.all([
+    listBotGuildCache(env,24*60*60_000).catch(()=>[]),
+    listAllGuildSettings(env,200).catch(()=>[])
+  ]);
+  const guildIds=[...new Set([
+    ...cached.map(guild=>guild.id),
+    ...configured.map(row=>row.guild_id)
+  ])];
 
-  for(const guild of guilds){
+  for(const guildId of guildIds){
     try{
-      const result=await repairBotChannelAccess(env,guild.id);
+      const result=await repairBotChannelAccess(env,guildId);
       if(result.failed.length>0){
         console.warn(
           "bot access guard: repair incomplete",
-          guild.id,
+          guildId,
           result.failed
         );
       }
     }catch(error){
-      console.error("bot access guard: guild repair failed",guild.id,error);
+      console.error("bot access guard: guild repair failed",guildId,error);
     }
   }
 }
@@ -1606,6 +1612,9 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       const guilds=await botJson<Array<{id:string;name:string;icon:string|null}>>(
         env,"/users/@me/guilds?limit=200"
       );
+      await replaceBotGuildCache(env,guilds).catch(error=>
+        console.error("bot guild cache update failed",error)
+      );
       return json(env,guilds.map(guild=>({
         id:guild.id,
         name:guild.name,
@@ -1614,6 +1623,21 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       })));
     }catch(error){
       console.error("bot guild list failed",error);
+      const recoverable=
+        !(error instanceof DiscordApiError)||
+        [429,500,502,503,504].includes(error.status);
+      if(recoverable){
+        const cached=await listBotGuildCache(env,6*60*60_000).catch(()=>[]);
+        if(cached.length){
+          console.warn("bot guild list: serving recent cache",cached.length);
+          return json(env,cached.map(guild=>({
+            id:guild.id,
+            name:guild.name,
+            icon:guild.icon,
+            botInstalled:true
+          })));
+        }
+      }
       const detail=error instanceof Error?error.message:"unknown";
       throw new HttpError(502,"BOT参加サーバー一覧の取得に失敗しました: "+detail.slice(0,160));
     }
@@ -2800,7 +2824,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"security-service-binding-v57",
+          version:"guild-list-cache-v58",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
