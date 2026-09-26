@@ -41,3 +41,10 @@ test("gateway guild events maintain the dashboard guild cache", () => {
   assert.match(gatewaySource, /deleteBotGuildCache/);
   assert.match(gatewaySource, /!guild\.unavailable/);
 });
+
+test("fresh READY seeds all guild IDs for the dashboard", () => {
+  assert.match(gatewaySource, /ready\.guilds/);
+  assert.match(gatewaySource, /replaceBotGuildMembership/);
+  assert.match(gatewaySource, /GUILD_MEMBERSHIP_SEED_KEY/);
+  assert.match(gatewaySource, /seed guild membership/);
+});
