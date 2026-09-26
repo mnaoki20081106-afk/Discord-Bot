@@ -24,6 +24,7 @@ async function runtime(t, options = {}) {
   const discordPublicKey = Buffer.from(publicKeyDer).subarray(-32).toString('hex');
   let verificationMemberRoles = [...(options.verificationMemberRoles ?? [])];
   let rateLimitGuild = true;
+  let chatChannelName = options.chatChannelName ?? 'chat';
   const botPermissions = options.botPermissions ?? nonAdminBotPermissions;
   const botRolePosition = options.botRolePosition ?? 2;
   const targetRolePosition = options.targetRolePosition ?? 1;
@@ -77,7 +78,7 @@ async function runtime(t, options = {}) {
         {id:'323456789012345678',name:'General',type:4,position:0},
         {
           id:chatChannelId,
-          name:'chat',
+          name:chatChannelName,
           type:0,
           parent_id:'323456789012345678',
           position:1,
@@ -166,7 +167,7 @@ async function runtime(t, options = {}) {
         request.method === 'GET' &&
         url.pathname === `/api/v10/channels/${chatChannelId}`
       ) {
-        return Response.json({id:chatChannelId,guild_id:guildId,name:'chat',type:0});
+        return Response.json({id:chatChannelId,guild_id:guildId,name:chatChannelName,type:0});
       }
       if (
         request.method === 'GET' &&
@@ -275,9 +276,12 @@ async function runtime(t, options = {}) {
             deny:String(overwrite.deny ?? '0')
           }));
         }
+        if (id === chatChannelId && typeof body.name === 'string') {
+          chatChannelName = body.name;
+        }
         return Response.json({
           id,
-          name:id===chatChannelId?'chat':'General',
+          name:id===chatChannelId?chatChannelName:'General',
           type:id===chatChannelId?0:4,
           permission_overwrites:id===chatChannelId?channelOverwrites:[]
         });
@@ -566,6 +570,89 @@ test('legacy stock notification settings migrate as enabled', async t => {
     'SELECT enabled FROM vending_stock_notifications WHERE vending_machine_id=?'
   ).bind('legacy-machine').first();
   assert.equal(migrated?.enabled,1,'previously configured stock alerts should remain enabled after migration');
+});
+
+test('achievement channel count display defaults off and restores channel name', async t => {
+  const {mf,calls,db}=await runtime(t);
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  assert.equal(login.status,200);
+  const token=login.body.token;
+
+  const machine=await request(
+    mf,`/api/guilds/${guildId}/vending`,token,'POST',{name:'Count machine'}
+  );
+  assert.equal(machine.status,201,JSON.stringify(machine.body));
+
+  const savedOff=await request(
+    mf,`/api/guilds/${guildId}/vending/achievement-room`,token,'PUT',
+    {rooms:[{channelId:chatChannelId,machineIds:[machine.body.id]}]}
+  );
+  assert.equal(savedOff.status,200,JSON.stringify(savedOff.body));
+  assert.equal(savedOff.body.rooms.length,1);
+  assert.equal(savedOff.body.rooms[0].count_display_enabled,0);
+  assert.equal(savedOff.body.rooms[0].achievement_count,0);
+  assert.equal(
+    calls.filter(call=>
+      call.method==='PATCH'&&
+      call.path===`/api/v10/channels/${chatChannelId}`&&
+      typeof call.body?.name==='string'
+    ).length,
+    0,
+    'count display must be off by default'
+  );
+
+  const routeId=savedOff.body.rooms[0].id;
+  const savedOn=await request(
+    mf,`/api/guilds/${guildId}/vending/achievement-room`,token,'PUT',
+    {rooms:[{
+      id:routeId,
+      channelId:chatChannelId,
+      machineIds:[machine.body.id],
+      countDisplayEnabled:true
+    }]}
+  );
+  assert.equal(savedOn.status,200,JSON.stringify(savedOn.body));
+  assert.equal(savedOn.body.rooms[0].count_display_enabled,1);
+  const initialRename=calls.filter(call=>
+    call.method==='PATCH'&&call.path===`/api/v10/channels/${chatChannelId}`
+  ).at(-1);
+  assert.equal(initialRename?.body?.name,'chat0件');
+
+  await db.prepare(
+    'UPDATE vending_achievement_routes SET achievement_count=12,count_name_synced_at=0 WHERE id=?'
+  ).bind(routeId).run();
+
+  const resynced=await request(
+    mf,`/api/guilds/${guildId}/vending/achievement-room`,token,'PUT',
+    {rooms:[{
+      id:routeId,
+      channelId:chatChannelId,
+      machineIds:[machine.body.id],
+      countDisplayEnabled:true
+    }]}
+  );
+  assert.equal(resynced.status,200,JSON.stringify(resynced.body));
+  assert.equal(resynced.body.rooms[0].achievement_count,12);
+  const countRename=calls.filter(call=>
+    call.method==='PATCH'&&call.path===`/api/v10/channels/${chatChannelId}`
+  ).at(-1);
+  assert.equal(countRename?.body?.name,'chat12件');
+
+  const savedDisabled=await request(
+    mf,`/api/guilds/${guildId}/vending/achievement-room`,token,'PUT',
+    {rooms:[{
+      id:routeId,
+      channelId:chatChannelId,
+      machineIds:[machine.body.id],
+      countDisplayEnabled:false
+    }]}
+  );
+  assert.equal(savedDisabled.status,200,JSON.stringify(savedDisabled.body));
+  assert.equal(savedDisabled.body.rooms[0].count_display_enabled,0);
+  const restore=calls.filter(call=>
+    call.method==='PATCH'&&call.path===`/api/v10/channels/${chatChannelId}`
+  ).at(-1);
+  assert.equal(restore?.body?.name,'chat');
 });
 
 test('dashboard load upgrades tracked legacy verification panel to one click', async t => {
