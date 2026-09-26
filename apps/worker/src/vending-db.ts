@@ -416,15 +416,20 @@ export async function incrementAchievementRoomCount(
 export async function updateAchievementCountNameState(
   env:Env,
   roomId:string,
-  patch:{baseChannelName?:string|null;countNameSyncedAt?:number}
+  patch:{
+    baseChannelName?:string|null;
+    countNameSyncedAt?:number;
+    achievementCount?:number;
+  }
 ):Promise<void>{
   const room=await getAchievementRoomById(env,roomId);
   if(!room) return;
   await env.DB.prepare(
-    "UPDATE vending_achievement_routes SET base_channel_name=?,count_name_synced_at=?,updated_at=? WHERE id=?"
+    "UPDATE vending_achievement_routes SET base_channel_name=?,count_name_synced_at=?,achievement_count=?,updated_at=? WHERE id=?"
   ).bind(
     patch.baseChannelName===undefined?room.base_channel_name:patch.baseChannelName,
     patch.countNameSyncedAt===undefined?room.count_name_synced_at:patch.countNameSyncedAt,
+    patch.achievementCount===undefined?room.achievement_count:Math.max(0,Math.trunc(patch.achievementCount)),
     Date.now(),
     roomId
   ).run();
