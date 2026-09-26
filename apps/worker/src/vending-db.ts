@@ -31,6 +31,10 @@ export type VmAchievementRoom = {
   owner_id:string;
   channel_id:string;
   machine_ids:string[];
+  count_display_enabled:number;
+  achievement_count:number;
+  base_channel_name:string|null;
+  count_name_synced_at:number;
   created_at:number;
   updated_at:number;
 };
@@ -59,7 +63,7 @@ const schema=[
 "CREATE TABLE IF NOT EXISTS vending_payment_login_challenges (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,provider TEXT NOT NULL,payload_enc TEXT NOT NULL,expires_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_used_payment_links (link_hash TEXT PRIMARY KEY,provider TEXT NOT NULL,order_id TEXT NOT NULL,used_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_achievement_rooms (guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',updated_at INTEGER NOT NULL,PRIMARY KEY(guild_id,owner_id))",
-"CREATE TABLE IF NOT EXISTS vending_achievement_routes (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
+"CREATE TABLE IF NOT EXISTS vending_achievement_routes (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',count_display_enabled INTEGER NOT NULL DEFAULT 0,achievement_count INTEGER NOT NULL DEFAULT 0,base_channel_name TEXT,count_name_synced_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE INDEX IF NOT EXISTS vending_achievement_routes_owner_idx ON vending_achievement_routes(guild_id,owner_id,created_at)",
 "CREATE TABLE IF NOT EXISTS vending_panel_images (vending_machine_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,mime_type TEXT NOT NULL,content_base64 TEXT NOT NULL,updated_at INTEGER NOT NULL)"
 ];
@@ -80,6 +84,31 @@ export async function ensureVendingSchema(env:Env){
     // Preserve that behavior while keeping new notification settings off by default.
     await env.DB.prepare(
       "UPDATE vending_stock_notifications SET enabled=1"
+    ).run();
+  }
+
+  const achievementRouteColumns=(await env.DB.prepare(
+    "PRAGMA table_info(vending_achievement_routes)"
+  ).all<{name:string}>()).results;
+  const achievementRouteColumnNames=new Set(achievementRouteColumns.map(column=>column.name));
+  if(!achievementRouteColumnNames.has("count_display_enabled")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_achievement_routes ADD COLUMN count_display_enabled INTEGER NOT NULL DEFAULT 0"
+    ).run();
+  }
+  if(!achievementRouteColumnNames.has("achievement_count")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_achievement_routes ADD COLUMN achievement_count INTEGER NOT NULL DEFAULT 0"
+    ).run();
+  }
+  if(!achievementRouteColumnNames.has("base_channel_name")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_achievement_routes ADD COLUMN base_channel_name TEXT"
+    ).run();
+  }
+  if(!achievementRouteColumnNames.has("count_name_synced_at")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_achievement_routes ADD COLUMN count_name_synced_at INTEGER NOT NULL DEFAULT 0"
     ).run();
   }
 
@@ -239,7 +268,7 @@ async function migrateLegacyAchievementRoom(env:Env,guildId:string,ownerId:strin
   if(!legacy) return;
   const now=Date.now();
   await env.DB.prepare(
-    "INSERT INTO vending_achievement_routes(id,guild_id,owner_id,channel_id,machine_ids_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
+    "INSERT INTO vending_achievement_routes(id,guild_id,owner_id,channel_id,machine_ids_json,count_display_enabled,achievement_count,base_channel_name,count_name_synced_at,created_at,updated_at) VALUES (?,?,?,?,?,0,0,NULL,0,?,?)"
   ).bind(
     randomId(),guildId,ownerId,legacy.channel_id,legacy.machine_ids_json,
     legacy.updated_at||now,legacy.updated_at||now
@@ -253,9 +282,11 @@ export async function listAchievementRooms(
 ):Promise<VmAchievementRoom[]>{
   await migrateLegacyAchievementRoom(env,guildId,ownerId);
   const rows=(await env.DB.prepare(
-    "SELECT id,guild_id,owner_id,channel_id,machine_ids_json,created_at,updated_at FROM vending_achievement_routes WHERE guild_id=? AND owner_id=? ORDER BY created_at ASC"
+    "SELECT id,guild_id,owner_id,channel_id,machine_ids_json,count_display_enabled,achievement_count,base_channel_name,count_name_synced_at,created_at,updated_at FROM vending_achievement_routes WHERE guild_id=? AND owner_id=? ORDER BY created_at ASC"
   ).bind(guildId,ownerId).all<{
-    id:string;guild_id:string;owner_id:string;channel_id:string;machine_ids_json:string;created_at:number;updated_at:number;
+    id:string;guild_id:string;owner_id:string;channel_id:string;machine_ids_json:string;
+    count_display_enabled:number;achievement_count:number;base_channel_name:string|null;
+    count_name_synced_at:number;created_at:number;updated_at:number;
   }>()).results;
   return rows.map(row=>({
     id:row.id,
@@ -263,6 +294,10 @@ export async function listAchievementRooms(
     owner_id:row.owner_id,
     channel_id:row.channel_id,
     machine_ids:parseAchievementMachineIds(row.machine_ids_json),
+    count_display_enabled:Number(row.count_display_enabled||0),
+    achievement_count:Number(row.achievement_count||0),
+    base_channel_name:row.base_channel_name??null,
+    count_name_synced_at:Number(row.count_name_synced_at||0),
     created_at:row.created_at,
     updated_at:row.updated_at
   }));
@@ -273,23 +308,42 @@ export async function replaceAchievementRooms(
   input:{
     guildId:string;
     ownerId:string;
-    rooms:Array<{id?:string;channelId:string;machineIds:string[]}>;
+    rooms:Array<{
+      id?:string;
+      channelId:string;
+      machineIds:string[];
+      countDisplayEnabled?:boolean;
+    }>;
   }
 ):Promise<VmAchievementRoom[]>{
   const now=Date.now();
-  const normalized=input.rooms.map(room=>({
-    id:room.id&&room.id.trim()?room.id.trim():randomId(),
-    channelId:room.channelId.trim(),
-    machineIds:[...new Set(room.machineIds.filter(Boolean))]
-  }));
+  const existing=await listAchievementRooms(env,input.guildId,input.ownerId);
+  const existingById=new Map(existing.map(room=>[room.id,room]));
+  const normalized=input.rooms.map(room=>{
+    const id=room.id&&room.id.trim()?room.id.trim():randomId();
+    const previous=existingById.get(id);
+    const channelId=room.channelId.trim();
+    const channelChanged=Boolean(previous&&previous.channel_id!==channelId);
+    return {
+      id,
+      channelId,
+      machineIds:[...new Set(room.machineIds.filter(Boolean))],
+      countDisplayEnabled:Boolean(room.countDisplayEnabled),
+      achievementCount:previous?.achievement_count??0,
+      baseChannelName:channelChanged?null:(previous?.base_channel_name??null),
+      countNameSyncedAt:channelChanged?0:(previous?.count_name_synced_at??0)
+    };
+  });
   await env.DB.batch([
     env.DB.prepare(
       "DELETE FROM vending_achievement_routes WHERE guild_id=? AND owner_id=?"
     ).bind(input.guildId,input.ownerId),
     ...normalized.map((room,index)=>env.DB.prepare(
-      "INSERT INTO vending_achievement_routes(id,guild_id,owner_id,channel_id,machine_ids_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
+      "INSERT INTO vending_achievement_routes(id,guild_id,owner_id,channel_id,machine_ids_json,count_display_enabled,achievement_count,base_channel_name,count_name_synced_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
     ).bind(
-      room.id,input.guildId,input.ownerId,room.channelId,JSON.stringify(room.machineIds),now+index,now
+      room.id,input.guildId,input.ownerId,room.channelId,JSON.stringify(room.machineIds),
+      room.countDisplayEnabled?1:0,room.achievementCount,room.baseChannelName,
+      room.countNameSyncedAt,now+index,now
     ))
   ]);
   await env.DB.prepare(
@@ -310,6 +364,95 @@ export async function getAchievementChannelsForMachine(
       .filter(room=>room.machine_ids.includes(machineId))
       .map(room=>room.channel_id)
   )];
+}
+
+export async function getAchievementRoomsForMachine(
+  env:Env,
+  guildId:string,
+  ownerId:string,
+  machineId:string
+):Promise<VmAchievementRoom[]>{
+  const rooms=await listAchievementRooms(env,guildId,ownerId);
+  return rooms.filter(room=>room.machine_ids.includes(machineId));
+}
+
+export async function getAchievementRoomById(
+  env:Env,
+  roomId:string
+):Promise<VmAchievementRoom|null>{
+  const row=await env.DB.prepare(
+    "SELECT id,guild_id,owner_id,channel_id,machine_ids_json,count_display_enabled,achievement_count,base_channel_name,count_name_synced_at,created_at,updated_at FROM vending_achievement_routes WHERE id=?"
+  ).bind(roomId).first<{
+    id:string;guild_id:string;owner_id:string;channel_id:string;machine_ids_json:string;
+    count_display_enabled:number;achievement_count:number;base_channel_name:string|null;
+    count_name_synced_at:number;created_at:number;updated_at:number;
+  }>();
+  if(!row) return null;
+  return {
+    id:row.id,
+    guild_id:row.guild_id,
+    owner_id:row.owner_id,
+    channel_id:row.channel_id,
+    machine_ids:parseAchievementMachineIds(row.machine_ids_json),
+    count_display_enabled:Number(row.count_display_enabled||0),
+    achievement_count:Number(row.achievement_count||0),
+    base_channel_name:row.base_channel_name??null,
+    count_name_synced_at:Number(row.count_name_synced_at||0),
+    created_at:row.created_at,
+    updated_at:row.updated_at
+  };
+}
+
+export async function incrementAchievementRoomCount(
+  env:Env,
+  roomId:string
+):Promise<VmAchievementRoom|null>{
+  await env.DB.prepare(
+    "UPDATE vending_achievement_routes SET achievement_count=achievement_count+1,updated_at=? WHERE id=?"
+  ).bind(Date.now(),roomId).run();
+  return getAchievementRoomById(env,roomId);
+}
+
+export async function updateAchievementCountNameState(
+  env:Env,
+  roomId:string,
+  patch:{baseChannelName?:string|null;countNameSyncedAt?:number}
+):Promise<void>{
+  const room=await getAchievementRoomById(env,roomId);
+  if(!room) return;
+  await env.DB.prepare(
+    "UPDATE vending_achievement_routes SET base_channel_name=?,count_name_synced_at=?,updated_at=? WHERE id=?"
+  ).bind(
+    patch.baseChannelName===undefined?room.base_channel_name:patch.baseChannelName,
+    patch.countNameSyncedAt===undefined?room.count_name_synced_at:patch.countNameSyncedAt,
+    Date.now(),
+    roomId
+  ).run();
+}
+
+export async function listAchievementCountRooms(
+  env:Env
+):Promise<VmAchievementRoom[]>{
+  const rows=(await env.DB.prepare(
+    "SELECT id,guild_id,owner_id,channel_id,machine_ids_json,count_display_enabled,achievement_count,base_channel_name,count_name_synced_at,created_at,updated_at FROM vending_achievement_routes WHERE count_display_enabled=1 ORDER BY count_name_synced_at ASC LIMIT 25"
+  ).all<{
+    id:string;guild_id:string;owner_id:string;channel_id:string;machine_ids_json:string;
+    count_display_enabled:number;achievement_count:number;base_channel_name:string|null;
+    count_name_synced_at:number;created_at:number;updated_at:number;
+  }>()).results;
+  return rows.map(row=>({
+    id:row.id,
+    guild_id:row.guild_id,
+    owner_id:row.owner_id,
+    channel_id:row.channel_id,
+    machine_ids:parseAchievementMachineIds(row.machine_ids_json),
+    count_display_enabled:Number(row.count_display_enabled||0),
+    achievement_count:Number(row.achievement_count||0),
+    base_channel_name:row.base_channel_name??null,
+    count_name_synced_at:Number(row.count_name_synced_at||0),
+    created_at:row.created_at,
+    updated_at:row.updated_at
+  }));
 }
 
 export async function reserveOrder(env:Env,input:{vmId:string;product:VmProduct;guildId:string;userId:string;method:"paypay"|"kyash";quantity:number;discount:number}){
