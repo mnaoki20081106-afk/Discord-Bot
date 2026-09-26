@@ -1,8 +1,39 @@
 import type { Env } from "./types";
 
+function normalizeSecurityApiBaseUrl(raw?: string): string | null {
+  let value = raw?.trim() ?? "";
+  if (!value) return null;
+
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    value = value.slice(1, -1).trim();
+  }
+
+  value = value.replace(/^SECURITY_API_BASE_URL\s*=\s*/i, "").trim();
+  if (!value) return null;
+
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    value = "https://" + value;
+  }
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (!url.hostname) return null;
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/+$/, "") + "/";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export function securityBridgeConfigured(env: Env): boolean {
   return Boolean(
-    env.SECURITY_API_BASE_URL?.trim() &&
+    normalizeSecurityApiBaseUrl(env.SECURITY_API_BASE_URL) &&
     env.SECURITY_BRIDGE_SECRET?.trim() &&
     env.SECURITY_BRIDGE_SECRET.trim().length >= 32
   );
@@ -38,7 +69,12 @@ export async function securityBridgeFetch(
     throw new Error("Security Bot bridge is not configured");
   }
 
-  const base = env.SECURITY_API_BASE_URL!.replace(/\/$/, "") + "/";
+  const base = normalizeSecurityApiBaseUrl(env.SECURITY_API_BASE_URL);
+  if (!base) {
+    throw new Error(
+      "SECURITY_API_BASE_URL is invalid. Store only the Security Worker URL, for example https://discord-security.example.workers.dev"
+    );
+  }
   const url = new URL(path.replace(/^\//, ""), base);
   const body =
     typeof init.body === "string"
