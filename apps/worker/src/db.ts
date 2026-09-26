@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '3');
+INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '4');
 
 CREATE TABLE IF NOT EXISTS guild_settings (
   guild_id TEXT PRIMARY KEY,
@@ -100,6 +100,14 @@ CREATE TABLE IF NOT EXISTS audit_cursors (
   last_entry_id TEXT,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS bot_guild_cache (
+  guild_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  icon TEXT,
+  seen_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_guild_cache_seen_idx ON bot_guild_cache(seen_at);
 `;
 
 const schemaInitializations = new WeakMap<D1Database, Promise<void>>();
@@ -113,8 +121,8 @@ export async function ensureSchema(env: Env): Promise<void> {
       await env.DB.batch([
         ...statements.map(sql => env.DB.prepare(sql)),
         env.DB.prepare(`
-          INSERT INTO meta(key, value) VALUES ('schema_version', '3')
-          ON CONFLICT(key) DO UPDATE SET value='3'
+          INSERT INTO meta(key, value) VALUES ('schema_version', '4')
+          ON CONFLICT(key) DO UPDATE SET value='4'
         `)
       ]);
     })();
@@ -258,6 +266,54 @@ export async function listAllGuildSettings(env: Env, limit=20): Promise<Array<{g
   const result = await env.DB.prepare(
     "SELECT guild_id, config FROM guild_settings ORDER BY updated_at DESC LIMIT ?"
   ).bind(limit).all<{guild_id:string;config:string}>();
+  return result.results;
+}
+
+async function ensureBotGuildCacheTable(env: Env): Promise<void> {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS bot_guild_cache (
+      guild_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      icon TEXT,
+      seen_at INTEGER NOT NULL
+    )
+  `).run();
+}
+
+export type CachedBotGuild = {
+  id: string;
+  name: string;
+  icon: string | null;
+  seenAt: number;
+};
+
+export async function replaceBotGuildCache(
+  env: Env,
+  guilds: Array<{ id: string; name: string; icon: string | null }>
+): Promise<void> {
+  await ensureBotGuildCacheTable(env);
+  const seenAt = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM bot_guild_cache"),
+    ...guilds.map(guild =>
+      env.DB.prepare(
+        "INSERT INTO bot_guild_cache(guild_id,name,icon,seen_at) VALUES (?,?,?,?)"
+      ).bind(guild.id, guild.name, guild.icon, seenAt)
+    )
+  ]);
+}
+
+export async function listBotGuildCache(
+  env: Env,
+  maxAgeMs = 6 * 60 * 60_000
+): Promise<CachedBotGuild[]> {
+  await ensureBotGuildCacheTable(env);
+  const result = await env.DB.prepare(`
+    SELECT guild_id AS id, name, icon, seen_at AS seenAt
+    FROM bot_guild_cache
+    WHERE seen_at >= ?
+    ORDER BY name COLLATE NOCASE, guild_id
+  `).bind(Date.now() - Math.max(1, maxAgeMs)).all<CachedBotGuild>();
   return result.results;
 }
 
