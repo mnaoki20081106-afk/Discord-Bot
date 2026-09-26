@@ -1,6 +1,12 @@
 import type { Env, GuildSettings, ProductRow } from "./types";
 import { botFetch, botJson, DiscordApiError, syncAutoMod, type DiscordChannel, type DiscordRole } from "./discord";
-import { ensureSchema, getDashboardSession, getGuildSettings } from "./db";
+import {
+  ensureSchema,
+  getDashboardSession,
+  getGuildSettings,
+  listAllGuildSettings,
+  listBotGuildCache
+} from "./db";
 import { ensureVendingSchema } from "./vending-db";
 import { accountCreatedAt, decrypt, encrypt, json, randomId, randomToken, sha256Hex } from "./utils";
 import {
@@ -1561,15 +1567,19 @@ async function runBackupRestoreSweep(env:Env):Promise<void>{
   }
 
   // With the worker cron running every minute, create at most one stale guild snapshot
-  // per tick. Manual snapshots also postpone the next automatic snapshot for 24 hours.
-  let guilds:any[]=[];
-  try{
-    guilds=await botJson<any[]>(env,"/users/@me/guilds?limit=200");
-  }catch{
-    return;
-  }
-  for(const guild of guilds){
-    const guildId=String(guild.id??"");
+  // per tick. Do not call /users/@me/guilds here: the dashboard owns live guild-list
+  // refreshes and persists them in D1, which prevents cron work from competing with
+  // the user-facing server picker for Discord's REST rate-limit bucket.
+  const [cachedGuilds,configuredGuilds]=await Promise.all([
+    listBotGuildCache(env,24*60*60_000).catch(()=>[]),
+    listAllGuildSettings(env,200).catch(()=>[])
+  ]);
+  const guildIds=[...new Set([
+    ...cachedGuilds.map(guild=>guild.id),
+    ...configuredGuilds.map(row=>row.guild_id)
+  ])];
+
+  for(const guildId of guildIds){
     if(!guildId) continue;
     const rows=await listBackupRecords(env,guildId);
     const latest=rows[0];
