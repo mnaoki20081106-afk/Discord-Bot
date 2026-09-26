@@ -1,9 +1,12 @@
 import type { Env } from "./types";
 import {
   handleMemberActivityGatewayEvent,
-  hasEnabledMemberActivity,
   memberActivitySweep
 } from "./member-activity";
+import {
+  deleteBotGuildCache,
+  upsertBotGuildCache
+} from "./db";
 
 type StoredGatewayState = {
   sessionId: string | null;
@@ -59,11 +62,13 @@ function isFatalGatewayClose(code: number): boolean {
 export async function ensureDiscordGateway(env: Env): Promise<void> {
   if (!env.DISCORD_GATEWAY) return;
 
-  const enabled = await hasEnabledMemberActivity(env);
+  // Keep the gateway alive even when member activity notifications are disabled.
+  // GUILD_CREATE/GUILD_DELETE are also the authoritative membership feed used by
+  // the dashboard's server picker.
   const id = env.DISCORD_GATEWAY.idFromName("member-activity");
   const stub = env.DISCORD_GATEWAY.get(id);
   const response = await stub.fetch(
-    `https://discord-gateway.internal/${enabled ? "start" : "stop"}`,
+    "https://discord-gateway.internal/start",
     { method: "POST" }
   );
 
@@ -104,12 +109,6 @@ export class DiscordGateway {
 
   async alarm(): Promise<void> {
     try {
-      const enabled = await hasEnabledMemberActivity(this.env);
-      if (!enabled) {
-        await this.stop();
-        return;
-      }
-
       if (!this.socket) {
         await this.connect();
         return;
@@ -427,6 +426,34 @@ export class DiscordGateway {
     if (payload.t === "RESUMED") {
       stored.reconnectAttempts = 0;
       await this.saveState(stored);
+      return;
+    }
+
+    if (payload.t === "GUILD_CREATE") {
+      const guild = payload.d as {
+        id?: string;
+        name?: string;
+        icon?: string | null;
+      };
+      if (guild.id && guild.name) {
+        await upsertBotGuildCache(this.env, {
+          id: guild.id,
+          name: guild.name,
+          icon: guild.icon ?? null
+        });
+      }
+      return;
+    }
+
+    if (payload.t === "GUILD_DELETE") {
+      const guild = payload.d as {
+        id?: string;
+        unavailable?: boolean;
+      };
+      // unavailable=true is a temporary outage, not a real bot removal.
+      if (guild.id && !guild.unavailable) {
+        await deleteBotGuildCache(this.env, guild.id);
+      }
       return;
     }
 
