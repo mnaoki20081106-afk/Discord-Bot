@@ -2928,6 +2928,42 @@ export default {
           }
         }
 
+        let security:null|Record<string,unknown>=null;
+        if(securityBridgeConfigured(env)&&knownIds.length){
+          try{
+            const overview=await securityBridgeJson<any>(
+              env,
+              `/internal/guilds/${knownIds[0]}/overview?limit=30`
+            );
+            const incidents=Array.isArray(overview?.incidents)
+              ?overview.incidents
+              :[];
+            security={
+              installed:Boolean(overview?.installed),
+              lockdownActive:Boolean(overview?.lockdown?.active),
+              latestIncidents:incidents.slice(0,10).map((incident:any)=>({
+                kind:String(incident?.kind??""),
+                severity:String(incident?.severity??""),
+                actionType:
+                  typeof incident?.data?.actionType==="number"
+                    ?incident.data.actionType
+                    :null,
+                targetIsMainBot:
+                  String(incident?.data?.targetId??"")===
+                  env.DISCORD_APPLICATION_ID.trim(),
+                createdAt:
+                  typeof incident?.createdAt==="number"
+                    ?incident.createdAt
+                    :null
+              }))
+            };
+          }catch(error){
+            security={
+              error:error instanceof Error?error.message:String(error)
+            };
+          }
+        }
+
         return json(env,{
           version:"gateway-guild-membership-v61",
           live:{status:liveStatus,count:liveCount,error:liveError},
@@ -2936,7 +2972,8 @@ export default {
             knownIdCount:knownIds.length,
             membershipCount:Number(membershipRow?.count??0)
           },
-          directProbe:probe
+          directProbe:probe,
+          security
         });
       }
 
