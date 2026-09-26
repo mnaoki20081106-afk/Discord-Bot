@@ -45,6 +45,10 @@ type AchievementRoom = {
   owner_id:string;
   channel_id:string;
   machine_ids:string[];
+  count_display_enabled:number;
+  achievement_count:number;
+  base_channel_name:string|null;
+  count_name_synced_at:number;
   created_at:number;
   updated_at:number;
 };
@@ -53,6 +57,9 @@ type AchievementRoomDraft = {
   id:string;
   channelId:string;
   machineIds:string[];
+  countDisplayEnabled:boolean;
+  achievementCount:number;
+  baseChannelName:string|null;
 };
 
 type Props = {
@@ -313,7 +320,10 @@ export default function VendingManager({
     setAchievementRooms(result.rooms.map(room=>({
       id:room.id,
       channelId:room.channel_id,
-      machineIds:room.machine_ids
+      machineIds:room.machine_ids,
+      countDisplayEnabled:Boolean(room.count_display_enabled),
+      achievementCount:room.achievement_count,
+      baseChannelName:room.base_channel_name
     })));
   }
 
@@ -501,14 +511,17 @@ export default function VendingManager({
       {
         id:"new-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8),
         channelId:"",
-        machineIds:[]
+        machineIds:[],
+        countDisplayEnabled:false,
+        achievementCount:0,
+        baseChannelName:null
       }
     ]);
   }
 
   function updateAchievementRoom(
     roomId:string,
-    patch:Partial<Pick<AchievementRoomDraft,"channelId"|"machineIds">>
+    patch:Partial<Pick<AchievementRoomDraft,"channelId"|"machineIds"|"countDisplayEnabled">>
   ){
     setAchievementRooms(current=>current.map(room=>
       room.id===roomId?{...room,...patch}:room
@@ -548,7 +561,7 @@ export default function VendingManager({
 
     setBusy(true);
     try{
-      const result=await api<{rooms:AchievementRoom[]}>(
+      const result=await api<{rooms:AchievementRoom[];warnings?:string[]}>(
         `/api/guilds/${guildId}/vending/achievement-room`,
         {
           method:"PUT",
@@ -556,7 +569,8 @@ export default function VendingManager({
             rooms:achievementRooms.map(room=>({
               id:room.id.startsWith("new-")?undefined:room.id,
               channelId:room.channelId,
-              machineIds:room.machineIds
+              machineIds:room.machineIds,
+              countDisplayEnabled:room.countDisplayEnabled
             }))
           })
         }
@@ -564,9 +578,13 @@ export default function VendingManager({
       setAchievementRooms(result.rooms.map(room=>({
         id:room.id,
         channelId:room.channel_id,
-        machineIds:room.machine_ids
+        machineIds:room.machine_ids,
+        countDisplayEnabled:Boolean(room.count_display_enabled),
+        achievementCount:room.achievement_count,
+        baseChannelName:room.base_channel_name
       })));
-      onNotice("実績部屋の振り分け設定を保存しました");
+      const warningText=result.warnings?.length?" "+result.warnings.join(" "):"";
+      onNotice("実績部屋の振り分け設定を保存しました。"+warningText);
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
@@ -1569,8 +1587,41 @@ export default function VendingManager({
                             })}
                           </div>
                         </div>
+                        <div className="vending-achievement-count-setting">
+                          <label className="toggle-row compact-toggle">
+                            <span className="toggle-copy">
+                              <strong>チャンネル名に実績件数を表示</strong>
+                              <small>
+                                {room.countDisplayEnabled
+                                  ? "ON: チャンネル名の末尾に「"+room.achievementCount+"件」を表示します"
+                                  : "OFF: チャンネル名は変更しません"}
+                              </small>
+                            </span>
+                            <input
+                              type="checkbox"
+                              checked={room.countDisplayEnabled}
+                              onChange={event=>updateAchievementRoom(room.id,{
+                                countDisplayEnabled:event.target.checked
+                              })}
+                            />
+                          </label>
+                          <div className="vending-achievement-count-preview">
+                            <span>現在の実績件数</span>
+                            <strong>{room.achievementCount}件</strong>
+                            {room.countDisplayEnabled&&room.channelId&&(
+                              <small>
+                                表示例: #
+                                {(room.baseChannelName
+                                  ?? channels.find(channel=>channel.id===room.channelId)?.name
+                                  ?? "実績")
+                                  .replace(/\d+件$/,"")}
+                                {room.achievementCount}件
+                              </small>
+                            )}
+                          </div>
+                        </div>
                         <small className="muted">
-                          {room.machineIds.length}台の自販機をこの部屋へ振り分け
+                          {room.machineIds.length}台の自販機をこの部屋へ振り分け。件数表示はデフォルトOFFです。
                         </small>
                       </article>
                     ))}
@@ -1599,7 +1650,8 @@ export default function VendingManager({
                   </button>
                 </div>
                 <small className="muted">
-                  1台の自販機は1つの実績部屋に割り当てます。通知内容: 購入者 / 商品名 / 個数 / 注文ID
+                  1台の自販機は1つの実績部屋に割り当てます。通知内容: 購入者 / 商品名 / 個数 / 注文ID。
+                  件数は実績メッセージの送信成功時に加算され、Discordのチャンネル名変更制限を避けるため名前への反映は数分遅れる場合があります。
                 </small>
               </div>
             </>
