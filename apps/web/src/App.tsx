@@ -12,7 +12,7 @@ type Guild = {
   id: string;
   name: string;
   icon: string | null;
-  botInstalled: true;
+  botInstalled: boolean;
 };
 type Meta = {
   id: string;
@@ -197,18 +197,28 @@ export default function App() {
     [meta, ticketPanelChannel]
   );
 
-  const botAuthorizeUrl = useMemo(() => {
+  function inviteUrlForGuild(guildId?: string | null) {
     if (!status?.inviteUrl) return "";
-    if (!selectedId) return status.inviteUrl;
+    if (!guildId) return status.inviteUrl;
     const separator = status.inviteUrl.includes("?") ? "&" : "?";
     return (
       status.inviteUrl +
       separator +
       "guild_id=" +
-      encodeURIComponent(selectedId) +
+      encodeURIComponent(guildId) +
       "&disable_guild_select=true"
     );
-  }, [status?.inviteUrl, selectedId]);
+  }
+
+  const botAuthorizeUrl = useMemo(
+    () => inviteUrlForGuild(selectedId),
+    [status?.inviteUrl, selectedId]
+  );
+
+  const missingMainBotGuild = useMemo(
+    () => guilds.find((guild) => !guild.botInstalled) ?? null,
+    [guilds]
+  );
 
   function flash(message: string) {
     setNotice(message);
@@ -236,7 +246,7 @@ export default function App() {
       try {
         const serverList = await api<Guild[]>("/api/guilds");
         setGuilds(serverList);
-        const firstGuild = serverList[0];
+        const firstGuild = serverList.find((guild) => guild.botInstalled);
         if (!selectedId && firstGuild) {
           await selectGuild(firstGuild.id);
         }
@@ -585,25 +595,42 @@ export default function App() {
         <div className="server-list">
           <span className="side-label">SERVERS</span>
           {guilds.map((guild) => (
-            <button
-              key={guild.id}
-              className={`server-button ${selectedId === guild.id ? "active" : ""}`}
-              onClick={() => void selectGuild(guild.id)}
-            >
-              {guild.icon ? (
-                <img
-                  src={`https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=80`}
-                  alt=""
-                />
-              ) : (
-                <span className="server-fallback">{guild.name.slice(0, 2).toUpperCase()}</span>
-              )}
-              <span className="server-copy">
-                <strong>{guild.name}</strong>
-                <small>BOT導入済み</small>
-              </span>
-              <span className="dot online" />
-            </button>
+            guild.botInstalled ? (
+              <button
+                key={guild.id}
+                className={`server-button ${selectedId === guild.id ? "active" : ""}`}
+                onClick={() => void selectGuild(guild.id)}
+              >
+                {guild.icon ? (
+                  <img
+                    src={`https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=80`}
+                    alt=""
+                  />
+                ) : (
+                  <span className="server-fallback">{guild.name.slice(0, 2).toUpperCase()}</span>
+                )}
+                <span className="server-copy">
+                  <strong>{guild.name}</strong>
+                  <small>BOT導入済み</small>
+                </span>
+                <span className="dot online" />
+              </button>
+            ) : (
+              <a
+                key={guild.id}
+                className="server-button"
+                href={inviteUrlForGuild(guild.id)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span className="server-fallback">!</span>
+                <span className="server-copy">
+                  <strong>{guild.name}</strong>
+                  <small>Main Botの再追加が必要</small>
+                </span>
+                <span className="dot" />
+              </a>
+            )
           ))}
         </div>
 
@@ -652,8 +679,28 @@ export default function App() {
 
         {!selectedGuild && (
           <section className="empty-state card">
-            <h2>管理するサーバーを選んでください</h2>
-            <p>BOTを追加すると、参加済みサーバーがここに自動表示されます。</p>
+            {missingMainBotGuild ? (
+              <>
+                <h2>Main Botの再追加が必要です</h2>
+                <p>
+                  Security Botはこのサーバーを認識していますが、Main Bot本人が現在Discordサーバーに参加していません。
+                  再追加後に一覧を再読み込みしてください。
+                </p>
+                <a
+                  className="primary"
+                  href={inviteUrlForGuild(missingMainBotGuild.id)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Main Botをこのサーバーへ再追加
+                </a>
+              </>
+            ) : (
+              <>
+                <h2>管理するサーバーを選んでください</h2>
+                <p>BOTを追加すると、参加済みサーバーがここに自動表示されます。</p>
+              </>
+            )}
             {status?.discordError && (
               <div className="alert error">
                 Discord API: {status.discordError}
