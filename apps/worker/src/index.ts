@@ -377,6 +377,12 @@ async function repairBotChannelAccess(
   const botId=env.DISCORD_APPLICATION_ID.trim();
   const repairedIds=new Set<string>();
   const failedById=new Map<string,{id:string;name:string;status:number}>();
+  let repairLeaseReady=false;
+  const ensureRepairLease=async()=>{
+    if(repairLeaseReady) return;
+    await requireMainSecurityLease(env,guildId,"dashboard_edit",180);
+    repairLeaseReady=true;
+  };
 
   const ensureGuard=async(channel:DiscordChannel)=>{
     const current=(channel.permission_overwrites??[]).find(
@@ -392,7 +398,7 @@ async function repairBotChannelAccess(
     allow|=BOT_CHANNEL_GUARD_MASK;
     deny&=~BOT_CHANNEL_GUARD_MASK;
     try{
-      await requireMainSecurityLease(env,guildId,"dashboard_edit",45);
+      await ensureRepairLease();
       await writeBotChannelGuard(env,channel,allow,deny);
       repairedIds.add(channel.id);
       failedById.delete(channel.id);
