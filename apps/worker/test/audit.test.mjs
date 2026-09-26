@@ -6,8 +6,8 @@ const source='100000000000000001', target='100000000000000002', bot='10000000000
 const roleA='200000000000000001',roleB='200000000000000002';
 const category='300000000000000001',channelA='300000000000000002',channelB='300000000000000003';
 const member='400000000000000001';
-async function fixture(t){
-  const state={calls:[],failRoles:false,cancelOnRole:null,next:0,autoRules:null,failAutoMod:false};
+async function fixture(t,options={}){
+  const state={calls:[],securityCalls:[],failRoles:false,cancelOnRole:null,next:0,autoRules:null,failAutoMod:false};
   const roles={
     [source]:[{id:source,name:'@everyone',permissions:'0',position:0},
       {id:roleA,name:'Same name',permissions:'1024',position:1},
@@ -23,9 +23,31 @@ async function fixture(t){
   let db;
   const mf=new Miniflare({modules:true,scriptPath:'.test-worker/index.js',compatibilityDate:'2026-08-06',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{
     DISCORD_BOT_TOKEN:'test-only',DISCORD_APPLICATION_ID:bot,DASHBOARD_PASSWORD:'test-only',
-    SESSION_ENCRYPTION_KEY:'audit-test-only-encryption-key-32-characters',WEB_ORIGIN:'https://dashboard.example',WEB_PUBLIC_URL:'https://dashboard.example/',PAYPAY_ENV:'sandbox'
+    SESSION_ENCRYPTION_KEY:'audit-test-only-encryption-key-32-characters',WEB_ORIGIN:'https://dashboard.example',WEB_PUBLIC_URL:'https://dashboard.example/',PAYPAY_ENV:'sandbox',
+    ...(options.securityBridge?{
+      SECURITY_API_BASE_URL:'https://security.example',
+      SECURITY_BRIDGE_SECRET:'security-bridge-test-secret-32-characters'
+    }:{})
   },outboundService:async req=>{
     const u=new URL(req.url),p=u.pathname.replace('/api/v10',''),method=req.method;
+    if(u.hostname==='security.example'){
+      const raw=method==='GET'?'':await req.clone().text();
+      const body=raw?JSON.parse(raw):null;
+      state.securityCalls.push({
+        p:u.pathname+u.search,
+        method,
+        body,
+        timestamp:req.headers.get('X-Security-Timestamp'),
+        nonce:req.headers.get('X-Security-Nonce'),
+        signature:req.headers.get('X-Security-Signature')
+      });
+      assert.match(req.headers.get('X-Security-Signature')??'',/^[a-f0-9]{64}$/);
+      if(u.pathname.endsWith('/maintenance')){
+        return Response.json({id:'lease-test',expiresAt:Date.now()+30000},{status:201});
+      }
+      if(u.pathname.endsWith('/service-bots')) return Response.json({ok:true},{status:201});
+      return Response.json({ok:true});
+    }
     assert.equal(u.hostname,'discord.com');
     const body=method==='GET'?null:await req.clone().json().catch(()=>null);
     state.calls.push({p,method,body});
@@ -281,4 +303,30 @@ test('large product collections are captured completely and split into decryptab
  const snapshot=JSON.parse(new TextDecoder().decode(plaintext));
  assert.equal(snapshot.bot.vending.products.length,105);
  assert.equal(backup.schemaVersion,2);
+});
+
+
+test('Security bridge authorizes Main mutations and restore batches with short leases',async t=>{
+  const f=await fixture(t,{securityBridge:true});
+  const changed=await f.request(`/api/guilds/${source}/settings`,'PUT',{mentionLimit:9});
+  assert.equal(changed.status,200,JSON.stringify(changed));
+
+  const dashboardLease=f.state.securityCalls.find(
+    x=>x.p.endsWith(`/internal/guilds/${source}/maintenance`)&&x.body?.scope==='dashboard_edit'
+  );
+  assert.ok(dashboardLease,'dashboard mutation did not request a Security maintenance lease');
+  assert.equal(dashboardLease.body.actorId,bot);
+  assert.ok(dashboardLease.timestamp&&dashboardLease.nonce&&dashboardLease.signature);
+
+  const backup=await f.snapshot();
+  const job=await f.start(backup,target);
+  await f.tick();
+  assert.equal((await f.request('/api/restore-jobs/'+job.id)).status,200);
+
+  const restoreLease=f.state.securityCalls.find(
+    x=>x.p.endsWith(`/internal/guilds/${target}/maintenance`)&&x.body?.scope==='restore'
+  );
+  assert.ok(restoreLease,'restore batch did not request a Security restore lease');
+  assert.equal(restoreLease.body.actorId,bot);
+  assert.ok(Number(restoreLease.body.seconds)>=300);
 });
