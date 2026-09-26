@@ -463,9 +463,11 @@ export default function SecurityManager({
             description="Security Botのマスタースイッチ"
           />
           <Toggle value={draft.modules.antiNuke} onChange={v => setModule("antiNuke", v)}
-            title="Anti-Nuke" description="Role/Channelの大量破壊をGatewayでリアルタイム検知" />
+            title="Anti-Nuke" description="Channel破壊と複合攻撃をGatewayでリアルタイム検知" />
           <Toggle value={draft.modules.antiRaid} onChange={v => setModule("antiRaid", v)}
             title="Anti-Raid" description="短時間の大量参加を検知してLockdown・隔離" />
+          <Toggle value={draft.modules.antiSpam} onChange={v => setModule("antiSpam", v)}
+            title="Anti-Spam / Mention Flood" description="連投と大量メンションをリアルタイム遮断" />
           <Toggle value={draft.modules.antiPhishing} onChange={v => setModule("antiPhishing", v)}
             title="Scam / Phishing Guard" description="危険URL・偽ログイン誘導を遮断" />
           <Toggle value={draft.modules.dangerousAttachments} onChange={v => setModule("dangerousAttachments", v)}
@@ -474,8 +476,14 @@ export default function SecurityManager({
             title="Bot Guard" description="未許可Bot追加を即時検知・除去" />
           <Toggle value={draft.modules.webhookGuard} onChange={v => setModule("webhookGuard", v)}
             title="Webhook Guard" description="Webhookを悪用した攻撃を検知" />
-          <Toggle value={draft.modules.permissionGuard} onChange={v => setModule("permissionGuard", v)}
+          <Toggle value={draft.modules.roleGuard} onChange={v => setModule("roleGuard", v)}
+            title="Role Guard" description="Role作成・変更・削除の異常操作を監視" />
+                    <Toggle value={draft.modules.permissionGuard} onChange={v => setModule("permissionGuard", v)}
             title="Permission Guard" description="Administrator等の危険権限付与を即時ロールバック" />
+          <Toggle value={draft.modules.memberGuard} onChange={v => setModule("memberGuard", v)}
+            title="Member Guard" description="短時間の大量Kick・Banを検知" />
+          <Toggle value={draft.modules.guildGuard} onChange={v => setModule("guildGuard", v)}
+            title="Server / Integration Guard" description="サーバー設定・Integrationの異常変更を監視" />
           <Toggle value={draft.modules.automodGuard} onChange={v => setModule("automodGuard", v)}
             title="AutoMod Guard" description="AutoModの無断変更・削除を監視" />
         </div>
