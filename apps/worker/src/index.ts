@@ -136,6 +136,30 @@ async function requireMainSecurityLease(
   }
 }
 
+async function repairMainBotChannelAccessViaSecurity(
+  env:Env,
+  guildId:string,
+  channelId:string
+):Promise<boolean>{
+  if(!securityBridgeConfigured(env)) return false;
+  try{
+    await securityBridgeJson(
+      env,
+      `/internal/guilds/${guildId}/main-bot/channels/${channelId}/access`,
+      {method:"POST",body:"{}"}
+    );
+    return true;
+  }catch(error){
+    console.error(
+      "Security Bot channel access recovery failed",
+      guildId,
+      channelId,
+      error
+    );
+    return false;
+  }
+}
+
 async function requireGuild(
   request:Request,env:Env,guildId:string,_requireBot=true
 ):Promise<{session:DashboardActor;guild:{id:string;name:string;icon:string|null}}>{
@@ -342,6 +366,9 @@ async function protectBotChannelAccess(
     await writeBotChannelGuard(env,channel,allow,deny);
   }catch(error){
     if(error instanceof DiscordApiError&&error.status===403){
+      if(await repairMainBotChannelAccessViaSecurity(env,guildId,channel.id)){
+        return;
+      }
       throw new HttpError(
         409,
         "この変更を保存するとBOT自身がチャンネルから締め出される可能性があるため停止しました。対象カテゴリ/チャンネルでBOTの「チャンネルを見る」を許可し、BOTロールの「チャンネルの管理」「ロールの管理」を確認してください"
@@ -404,6 +431,14 @@ async function repairBotChannelAccess(
       failedById.delete(channel.id);
     }catch(error){
       if(error instanceof DiscordApiError){
+        if(
+          error.status===403&&
+          await repairMainBotChannelAccessViaSecurity(env,guildId,channel.id)
+        ){
+          repairedIds.add(channel.id);
+          failedById.delete(channel.id);
+          return;
+        }
         failedById.set(channel.id,{
           id:channel.id,
           name:channel.name,
@@ -2430,7 +2465,11 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const channelId=channelPermissionMatch[2]!;
     const targetId=channelPermissionMatch[3]!;
 
-    await sessionFromRequest(request,env);
+    // Every dashboard permission write must obtain a Security maintenance lease.
+    // This route previously authenticated the dashboard session only, so the
+    // independent Security Bot could misclassify legitimate Main Bot overwrite
+    // updates as hostile activity.
+    await requireGuild(request,env,guildId);
 
     const input=await bodyObject<{
       targetType?:"role";
@@ -2532,7 +2571,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       });
     }
 
-    const writeResponse=await botFetchInteractive(
+    let writeResponse=await botFetchInteractive(
       env,
       `/channels/${channelId}`,
       {
@@ -2540,12 +2579,84 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         body:JSON.stringify({permission_overwrites:replacement})
       }
     );
+
+    if(writeResponse.status===403){
+      // A prior Security incident or a private-channel overwrite can leave the
+      // Main Bot unable to repair itself. Ask the higher-privileged Security Bot
+      // to restore only the Main Bot's dashboard access bits, then retry this
+      // exact role permission change from fresh Discord state.
+      const recovered=await repairMainBotChannelAccessViaSecurity(
+        env,
+        guildId,
+        channelId
+      );
+      if(recovered){
+        const refreshedChannels=await botJson<DiscordChannel[]>(
+          env,
+          `/guilds/${guildId}/channels`
+        );
+        const refreshedChannel=refreshedChannels.find(item=>item.id===channelId);
+        if(!refreshedChannel){
+          throw new HttpError(
+            404,
+            "Security BotでBOTアクセスを復旧しましたが、対象チャンネルを再取得できませんでした"
+          );
+        }
+
+        const fallback=await applyChannelRolePermissionsFast(
+          env,
+          guildId,
+          refreshedChannel,
+          targetId,
+          permissions
+        );
+
+        const confirmedChannels=await botJson<DiscordChannel[]>(
+          env,
+          `/guilds/${guildId}/channels`
+        );
+        const confirmedChannel=confirmedChannels.find(item=>item.id===channelId);
+        if(
+          !confirmedChannel||
+          !channelPermissionPatchMatches(confirmedChannel,targetId,permissions)
+        ){
+          throw new HttpError(
+            502,
+            "BOTアクセスは復旧しましたが、Discordから再取得した権限が指定内容と一致しませんでした"
+          );
+        }
+
+        const persisted=(confirmedChannel.permission_overwrites??[]).find(
+          item=>item.id===targetId&&item.type===0
+        );
+        const operationId=randomId();
+        console.log("channel permissions recovered and verified",{
+          operationId,
+          guildId,
+          channelId,
+          targetId
+        });
+        return json(env,{
+          ok:true,
+          verified:true,
+          verification:"security-bot-repair-readback",
+          operationId,
+          channelId,
+          targetId,
+          allow:persisted?.allow??"0",
+          deny:persisted?.deny??"0",
+          changed:fallback.changed,
+          botAccessRecovered:true
+        });
+      }
+    }
+
     if(!writeResponse.ok){
       const detail=await writeResponse.text().catch(()=>"");
       if(writeResponse.status===403){
         throw new HttpError(
           403,
-          "Discordがチャンネル権限の変更を拒否しました。BOTロールの「チャンネルの管理」と対象チャンネルへのアクセスを確認してください"
+          "Discordがチャンネル権限の変更を拒否しました。Security Botによる自動復旧も完了できませんでした。BOTロールの「チャンネルの管理」「ロールの管理」、対象チャンネルへのアクセス、ロールの並び順を確認してください"
         );
       }
       throw new DiscordApiError(
