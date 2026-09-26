@@ -2904,103 +2904,6 @@ export default {
       if(request.method==="OPTIONS"){
         return new Response(null,{status:204,headers:corsHeaders(env)});
       }
-      if(url.pathname==="/_diag/guild-root-v2"&&request.method==="GET"){
-        await ensureSchema(env);
-        const knownIds=await listKnownGuildIds(env).catch(()=>[]);
-        const result:any={
-          version:"guild-root-v2",
-          mainBotId:env.DISCORD_APPLICATION_ID.trim(),
-          knownIdCount:knownIds.length,
-          guilds:[],
-          aggregate:null,
-          security:null
-        };
-
-        try{
-          const response=await botJson<DashboardGuild[]>(
-            env,"/users/@me/guilds?limit=200"
-          );
-          result.aggregate={ok:true,count:response.length};
-        }catch(error){
-          result.aggregate={
-            ok:false,
-            status:error instanceof DiscordApiError?error.status:null,
-            message:error instanceof Error?error.message:String(error)
-          };
-        }
-
-        for(const id of knownIds.slice(0,5)){
-          const probe:any={};
-          for(const [label,path] of [
-            ["guild",`/guilds/${id}`],
-            ["channels",`/guilds/${id}/channels`],
-            ["roles",`/guilds/${id}/roles`],
-            ["selfMember",`/guilds/${id}/members/${env.DISCORD_APPLICATION_ID.trim()}`]
-          ] as const){
-            try{
-              const value=await botJson<any>(env,path);
-              probe[label]={
-                ok:true,
-                count:Array.isArray(value)?value.length:undefined
-              };
-            }catch(error){
-              probe[label]={
-                ok:false,
-                status:error instanceof DiscordApiError?error.status:null,
-                message:error instanceof Error?error.message:String(error)
-              };
-            }
-          }
-          try{
-            const value=await discordMeta(env,id);
-            probe.discordMeta={
-              ok:true,
-              channels:value.channels.length,
-              categories:value.categories.length,
-              roles:value.roles.length,
-              botAdministrator:value.botAdministrator
-            };
-          }catch(error){
-            probe.discordMeta={
-              ok:false,
-              status:error instanceof HttpError?error.status:
-                error instanceof DiscordApiError?error.status:null,
-              message:error instanceof Error?error.message:String(error)
-            };
-          }
-          result.guilds.push(probe);
-        }
-
-        if(securityBridgeConfigured(env)&&knownIds[0]){
-          try{
-            const overview=await securityBridgeJson<any>(
-              env,
-              `/internal/guilds/${knownIds[0]}/overview?limit=50`
-            );
-            const incidents=Array.isArray(overview?.incidents)?overview.incidents:[];
-            result.security={
-              installed:Boolean(overview?.installed),
-              lockdownActive:Boolean(overview?.lockdown?.active),
-              incidents:incidents.slice(0,20).map((incident:any)=>({
-                kind:String(incident?.kind??""),
-                actionType:typeof incident?.data?.actionType==="number"
-                  ?incident.data.actionType:null,
-                actorIsMainBot:String(incident?.actorId??"")===
-                  env.DISCORD_APPLICATION_ID.trim(),
-                targetIsMainBot:String(incident?.data?.targetId??"")===
-                  env.DISCORD_APPLICATION_ID.trim(),
-                createdAt:typeof incident?.createdAt==="number"
-                  ?incident.createdAt:null
-              }))
-            };
-          }catch(error){
-            result.security={error:error instanceof Error?error.message:String(error)};
-          }
-        }
-
-        return json(env,result);
-      }
-
       if(url.pathname==="/"||url.pathname==="/health"){
         let d1Reachable=false;
         let d1Error:string|null=null;
@@ -3046,7 +2949,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"read-only-meta-v65",
+          version:"main-security-guard-v66",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
