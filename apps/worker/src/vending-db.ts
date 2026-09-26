@@ -51,7 +51,7 @@ const schema=[
 "CREATE TABLE IF NOT EXISTS vending_stock (id TEXT PRIMARY KEY,product_id TEXT NOT NULL,content TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'available',order_id TEXT,reserved_until INTEGER,created_at INTEGER NOT NULL,sold_at INTEGER)",
 "CREATE INDEX IF NOT EXISTS vending_stock_product_idx ON vending_stock(product_id,state,created_at)",
 "CREATE TABLE IF NOT EXISTS vending_coupons (code TEXT PRIMARY KEY,vending_machine_id TEXT NOT NULL,owner_id TEXT NOT NULL,discount INTEGER NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL)",
-"CREATE TABLE IF NOT EXISTS vending_stock_notifications (vending_machine_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,channel_id TEXT NOT NULL,role_id TEXT NOT NULL,updated_at INTEGER NOT NULL)",
+"CREATE TABLE IF NOT EXISTS vending_stock_notifications (vending_machine_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,channel_id TEXT NOT NULL,role_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_orders (id TEXT PRIMARY KEY,vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,payment_method TEXT NOT NULL,quantity INTEGER NOT NULL,unit_price INTEGER NOT NULL,discount_each INTEGER NOT NULL DEFAULT 0,total_amount INTEGER NOT NULL,status TEXT NOT NULL,payment_link_hash TEXT,payment_link_enc TEXT,reserved_until INTEGER,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,paid_at INTEGER,delivered_at INTEGER)",
 "CREATE INDEX IF NOT EXISTS vending_orders_status_idx ON vending_orders(status,reserved_until,created_at)",
 "CREATE UNIQUE INDEX IF NOT EXISTS vending_orders_link_hash_unique ON vending_orders(payment_link_hash) WHERE payment_link_hash IS NOT NULL",
@@ -68,6 +68,21 @@ let ready=false;
 export async function ensureVendingSchema(env:Env){
   if(ready) return;
   for(const sql of schema) await env.DB.prepare(sql).run();
+
+  const stockNotifyColumns=(await env.DB.prepare(
+    "PRAGMA table_info(vending_stock_notifications)"
+  ).all<{name:string}>()).results;
+  if(!stockNotifyColumns.some(column=>column.name==="enabled")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_stock_notifications ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0"
+    ).run();
+    // Rows that existed before the switch were effectively enabled already.
+    // Preserve that behavior while keeping new notification settings off by default.
+    await env.DB.prepare(
+      "UPDATE vending_stock_notifications SET enabled=1"
+    ).run();
+  }
+
   ready=true;
 }
 
@@ -184,8 +199,23 @@ export async function getCoupon(env:Env,vmId:string,code:string){ return await e
 export async function createCoupon(env:Env,vmId:string,ownerId:string,code:string,discount:number){ await env.DB.prepare("INSERT INTO vending_coupons(code,vending_machine_id,owner_id,discount,active,created_at) VALUES (?,?,?,?,1,?)").bind(code,vmId,ownerId,discount,Date.now()).run(); }
 export async function deleteCoupon(env:Env,vmId:string,ownerId:string,code:string){ const r=await env.DB.prepare("UPDATE vending_coupons SET active=0 WHERE vending_machine_id=? AND owner_id=? AND code=? AND active=1").bind(vmId,ownerId,code).run(); return (r.meta.changes??0)>0; }
 
-export async function saveStockNotify(env:Env,vmId:string,guildId:string,channelId:string,roleId:string){ await env.DB.prepare("INSERT INTO vending_stock_notifications(vending_machine_id,guild_id,channel_id,role_id,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(vending_machine_id) DO UPDATE SET guild_id=excluded.guild_id,channel_id=excluded.channel_id,role_id=excluded.role_id,updated_at=excluded.updated_at").bind(vmId,guildId,channelId,roleId,Date.now()).run(); }
-export async function getStockNotify(env:Env,vmId:string){ return await env.DB.prepare("SELECT guild_id,channel_id,role_id FROM vending_stock_notifications WHERE vending_machine_id=?").bind(vmId).first<{guild_id:string;channel_id:string;role_id:string}>()??null; }
+export async function saveStockNotify(
+  env:Env,
+  vmId:string,
+  guildId:string,
+  channelId:string,
+  roleId:string,
+  enabled:boolean
+){
+  await env.DB.prepare(
+    "INSERT INTO vending_stock_notifications(vending_machine_id,guild_id,channel_id,role_id,enabled,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(vending_machine_id) DO UPDATE SET guild_id=excluded.guild_id,channel_id=excluded.channel_id,role_id=excluded.role_id,enabled=excluded.enabled,updated_at=excluded.updated_at"
+  ).bind(vmId,guildId,channelId,roleId,enabled?1:0,Date.now()).run();
+}
+export async function getStockNotify(env:Env,vmId:string){
+  return await env.DB.prepare(
+    "SELECT guild_id,channel_id,role_id,enabled FROM vending_stock_notifications WHERE vending_machine_id=?"
+  ).bind(vmId).first<{guild_id:string;channel_id:string;role_id:string;enabled:number}>()??null;
+}
 export async function deleteStockNotify(env:Env,vmId:string){ await env.DB.prepare("DELETE FROM vending_stock_notifications WHERE vending_machine_id=?").bind(vmId).run(); }
 
 function parseAchievementMachineIds(raw:string):string[]{
