@@ -1483,6 +1483,40 @@ async function handleDashboardLogin(request:Request,env:Env):Promise<Response>{
   return json(env,{token:rawSession,expiresAt});
 }
 
+type DashboardGuild = { id:string; name:string; icon:string|null };
+
+async function recoverKnownBotGuilds(
+  env:Env,
+  candidateIds:string[]
+):Promise<{guilds:DashboardGuild[];transientFailure:boolean}>{
+  const ids=[...new Set(candidateIds.filter(id=>/^\d+$/.test(id)))].slice(0,50);
+  const guilds:DashboardGuild[]=[];
+  let transientFailure=false;
+
+  for(let offset=0;offset<ids.length;offset+=5){
+    const batch=ids.slice(offset,offset+5);
+    const results=await Promise.all(batch.map(async id=>{
+      try{
+        return await botJson<DashboardGuild>(env,`/guilds/${id}`);
+      }catch(error){
+        if(
+          error instanceof DiscordApiError&&
+          [401,403,404].includes(error.status)
+        ){
+          return null;
+        }
+        transientFailure=true;
+        return null;
+      }
+    }));
+    for(const guild of results){
+      if(guild) guilds.push(guild);
+    }
+  }
+
+  return {guilds,transientFailure};
+}
+
 async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(url.pathname==="/api/status"&&request.method==="GET"){
     let discordReady=false;
@@ -1608,26 +1642,76 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
 
   if(url.pathname==="/api/guilds"&&request.method==="GET"){
     await sessionFromRequest(request,env);
+
+    const [cached,configured]=await Promise.all([
+      listBotGuildCache(env,24*60*60_000).catch(()=>[]),
+      listAllGuildSettings(env,200).catch(()=>[])
+    ]);
+    const knownIds=[
+      ...cached.map(guild=>guild.id),
+      ...configured.map(row=>row.guild_id)
+    ];
+
     try{
-      const guilds=await botJson<Array<{id:string;name:string;icon:string|null}>>(
+      const live=await botJson<DashboardGuild[]>(
         env,"/users/@me/guilds?limit=200"
       );
-      await replaceBotGuildCache(env,guilds).catch(error=>
-        console.error("bot guild cache update failed",error)
+
+      if(live.length>0){
+        await replaceBotGuildCache(env,live).catch(error=>
+          console.error("bot guild cache update failed",error)
+        );
+        return json(env,live.map(guild=>({
+          ...guild,
+          botInstalled:true
+        })));
+      }
+
+      // A successful [] from Discord is not enough evidence to erase a server
+      // list we already know about. This can happen transiently around gateway
+      // reconnects/API propagation. Confirm known guilds individually first.
+      if(knownIds.length){
+        const recovered=await recoverKnownBotGuilds(env,knownIds);
+        if(recovered.guilds.length){
+          console.warn(
+            "bot guild list: live list was empty; recovered known guilds",
+            recovered.guilds.length
+          );
+          await replaceBotGuildCache(env,recovered.guilds).catch(error=>
+            console.error("bot guild cache update failed",error)
+          );
+          return json(env,recovered.guilds.map(guild=>({
+            ...guild,
+            botInstalled:true
+          })));
+        }
+
+        if(recovered.transientFailure&&cached.length){
+          console.warn(
+            "bot guild list: live list empty and probe transient; serving cache",
+            cached.length
+          );
+          return json(env,cached.map(guild=>({
+            id:guild.id,
+            name:guild.name,
+            icon:guild.icon,
+            botInstalled:true
+          })));
+        }
+      }
+
+      // Only clear the cache when Discord returned an empty list and the known
+      // guild probes also confirmed that none remain accessible to this bot.
+      await replaceBotGuildCache(env,[]).catch(error=>
+        console.error("bot guild cache clear failed",error)
       );
-      return json(env,guilds.map(guild=>({
-        id:guild.id,
-        name:guild.name,
-        icon:guild.icon,
-        botInstalled:true
-      })));
+      return json(env,[]);
     }catch(error){
       console.error("bot guild list failed",error);
       const recoverable=
         !(error instanceof DiscordApiError)||
         [429,500,502,503,504].includes(error.status);
       if(recoverable){
-        const cached=await listBotGuildCache(env,6*60*60_000).catch(()=>[]);
         if(cached.length){
           console.warn("bot guild list: serving recent cache",cached.length);
           return json(env,cached.map(guild=>({
@@ -1636,6 +1720,17 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
             icon:guild.icon,
             botInstalled:true
           })));
+        }
+
+        if(knownIds.length){
+          const recovered=await recoverKnownBotGuilds(env,knownIds);
+          if(recovered.guilds.length){
+            await replaceBotGuildCache(env,recovered.guilds).catch(()=>undefined);
+            return json(env,recovered.guilds.map(guild=>({
+              ...guild,
+              botInstalled:true
+            })));
+          }
         }
       }
       const detail=error instanceof Error?error.message:"unknown";
@@ -2824,7 +2919,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"guild-list-cache-v58",
+          version:"guild-list-reconcile-v59",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
