@@ -451,6 +451,80 @@ for (const legacy of [false, true]) {
     );
     assert.equal(finiteProduct.status,201,JSON.stringify(finiteProduct.body));
     assert.equal(finiteProduct.body.infinite_stock,0);
+
+    const defaultStockNotification=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/stock-notification`,
+      token
+    );
+    assert.equal(defaultStockNotification.status,200);
+    assert.equal(defaultStockNotification.body,null,'stock notifications default to off');
+
+    const disabledStockNotification=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/stock-notification`,
+      token,
+      'POST',
+      {enabled:false,channelId:chatChannelId,roleId:targetRoleId}
+    );
+    assert.equal(disabledStockNotification.status,200,JSON.stringify(disabledStockNotification.body));
+    assert.equal(disabledStockNotification.body.enabled,false);
+    const disabledState=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/stock-notification`,
+      token
+    );
+    assert.equal(disabledState.body.enabled,0);
+
+    const messagesBeforeDisabledStock=calls.filter(call=>
+      call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
+    ).length;
+    const disabledStockAdd=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/products/${finiteProduct.body.id}/stock`,
+      token,
+      'POST',
+      {lines:['stock-disabled-notify']}
+    );
+    assert.equal(disabledStockAdd.status,200,JSON.stringify(disabledStockAdd.body));
+    assert.equal(
+      calls.filter(call=>call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`).length,
+      messagesBeforeDisabledStock,
+      'disabled stock notifications must not post to Discord'
+    );
+
+    const enabledStockNotification=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/stock-notification`,
+      token,
+      'POST',
+      {enabled:true,channelId:chatChannelId,roleId:targetRoleId}
+    );
+    assert.equal(enabledStockNotification.status,200,JSON.stringify(enabledStockNotification.body));
+    assert.equal(enabledStockNotification.body.enabled,true);
+    const enabledState=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/stock-notification`,
+      token
+    );
+    assert.equal(enabledState.body.enabled,1);
+
+    const messagesBeforeEnabledStock=calls.filter(call=>
+      call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
+    ).length;
+    const enabledStockAdd=await request(
+      mf,
+      `/api/guilds/${guildId}/vending/${vm.body.id}/products/${finiteProduct.body.id}/stock`,
+      token,
+      'POST',
+      {lines:['stock-enabled-notify']}
+    );
+    assert.equal(enabledStockAdd.status,200,JSON.stringify(enabledStockAdd.body));
+    const stockAlertCalls=calls.filter(call=>
+      call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
+    );
+    assert.equal(stockAlertCalls.length,messagesBeforeEnabledStock+1);
+    assert.equal(stockAlertCalls.at(-1)?.body?.embeds?.[0]?.title,'在庫追加のお知らせ');
     const finiteStock=await request(
       mf,
       `/api/guilds/${guildId}/vending/${vm.body.id}/products/${finiteProduct.body.id}/stock`,
