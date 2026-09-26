@@ -442,27 +442,18 @@ export default function SecurityManager({
 
       {overview.installed && overview.capabilities && (
         !overview.capabilities.requiredReady ||
-        overview.capabilities.roleAboveDangerousRoles === false ||
         !overview.capabilities.maximumProtection
       ) && (
         <article className="card serverless-note">
           <strong>
             {overview.capabilities.missingPermissions.length > 0
               ? "Security Botの権限が不足しています"
-              : overview.capabilities.roleAboveDangerousRoles === false
-                ? "Security Botより上に人間用の危険権限ロールがあります"
-                : "現在はHardenedモードです"}
+              : "現在はHardenedモードです"}
           </strong>
           <span>
             {overview.capabilities.missingPermissions.length > 0
               ? "不足: " + overview.capabilities.missingPermissions.join(" / ")
-              : overview.capabilities.roleAboveDangerousRoles === false
-                ? "Security Botが剥奪できない人間用の危険ロール: " +
-                  overview.capabilities.dangerousRolesNotBelow
-                    .map(role => role.name)
-                    .join(" / ") +
-                  "。Security Botは、Administrator・ロール管理・チャンネル管理・BAN/Kick等を持つ人間用ロールより上へ配置してください。Bot/Integrationのmanagedロールはこの判定から除外されます。"
-                : "最大保護ではSecurity BotへAdministratorを付与します。Main Botより上である必要はありません。推奨は Main Bot > Security Bot > その他の人間用管理ロールです。"}
+              : "最大保護ではSecurity BotへAdministratorを付与します。ただし人間管理者より上へ置く必要はありません。推奨は 人間の管理者 > Main Bot > Security Bot > 他社製Bot です。"}
           </span>
           {overview.maximumInviteUrl && !overview.capabilities.maximumProtection && (
             <a
@@ -476,6 +467,21 @@ export default function SecurityManager({
           )}
         </article>
       )}
+
+      {overview.installed &&
+        overview.capabilities?.roleAboveDangerousRoles === false && (
+          <article className="card serverless-note">
+            <strong>人間管理者優先のロール階層を検出しました</strong>
+            <span>
+              Security Botより上にある管理系ロール: {" "}
+              {overview.capabilities.dangerousRolesNotBelow
+                .map(role => role.name)
+                .join(" / ")}
+              。これは異常ではありません。上位の人間管理者は自動Kick/BAN/Timeout/ロール剥奪や設定巻き戻しの対象外です。
+              明確な大量削除などを検知した場合だけ、本人を処罰せずサーバーLockdownで被害拡大を止めます。
+            </span>
+          </article>
+        )}
 
       <article className="card">
         <div className="section-head">
@@ -534,9 +540,10 @@ export default function SecurityManager({
 
         <p className="serverless-note">
           <strong>Bot共存モード</strong><br />
-          推奨ロール順は <strong>Main Bot &gt; Security Bot &gt; 他社製Bot &gt; 人間用の危険権限ロール</strong> です。
-          他社製Botの通常設定操作は誤検知でLockdown/Kickしません。
-          Securityより上に置いたBotはDiscordのロール階層上Kickできないため、必要な場合を除きSecurityより下に置いてください。
+          推奨ロール順は <strong>人間の管理者 &gt; Main Bot &gt; Security Bot &gt; 他社製Bot &gt; 一般ロール</strong> です。
+          人間管理者はすべてのBotより上に置き、Securityからの自動Kick/BAN/Timeout/ロール剥奪の対象外にします。
+          他社製Botの通常設定操作も誤検知でLockdown/Kickしません。
+          Securityより上に置いたBotはDiscordのロール階層上Kickできないため、Securityに停止させたいBotはSecurityより下に置いてください。
         </p>
 
         {overview.bridgeProtection?.coreLocked && (
