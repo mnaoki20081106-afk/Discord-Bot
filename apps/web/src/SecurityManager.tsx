@@ -48,6 +48,8 @@ type Thresholds = {
   mentionLimit: number;
   linkBurst: number;
   linkWindowSeconds: number;
+  severeContentUsers: number;
+  severeContentWindowSeconds: number;
   minAccountAgeHours: number;
 };
 
@@ -170,7 +172,9 @@ const PRESETS: Record<SecuritySettings["profile"], Partial<Thresholds>> = {
     banAdd: 6,
     kick: 7,
     raidJoins: 12,
-    raidWindowSeconds: 15
+    raidWindowSeconds: 15,
+    severeContentUsers: 5,
+    severeContentWindowSeconds: 45
   },
   strict: {
     crossActionScore: 12,
@@ -180,7 +184,9 @@ const PRESETS: Record<SecuritySettings["profile"], Partial<Thresholds>> = {
     banAdd: 4,
     kick: 5,
     raidJoins: 8,
-    raidWindowSeconds: 12
+    raidWindowSeconds: 12,
+    severeContentUsers: 3,
+    severeContentWindowSeconds: 30
   },
   paranoid: {
     crossActionScore: 8,
@@ -190,7 +196,9 @@ const PRESETS: Record<SecuritySettings["profile"], Partial<Thresholds>> = {
     banAdd: 3,
     kick: 3,
     raidJoins: 6,
-    raidWindowSeconds: 12
+    raidWindowSeconds: 12,
+    severeContentUsers: 2,
+    severeContentWindowSeconds: 20
   }
 };
 
@@ -820,6 +828,40 @@ export default function SecurityManager({
                   }
                 })}
               />
+            </label>
+            <label className="field">
+              <span>重大投稿の複数ユーザー閾値</span>
+              <input
+                type="number"
+                min={2}
+                max={50}
+                value={draft.thresholds.severeContentUsers}
+                onChange={event => setDraft({
+                  ...draft,
+                  thresholds: {
+                    ...draft.thresholds,
+                    severeContentUsers: Number(event.target.value)
+                  }
+                })}
+              />
+              <small>Phishing / 危険添付を短時間に投稿した異なるユーザー数です。</small>
+            </label>
+            <label className="field">
+              <span>重大投稿の監視秒数</span>
+              <input
+                type="number"
+                min={5}
+                max={300}
+                value={draft.thresholds.severeContentWindowSeconds}
+                onChange={event => setDraft({
+                  ...draft,
+                  thresholds: {
+                    ...draft.thresholds,
+                    severeContentWindowSeconds: Number(event.target.value)
+                  }
+                })}
+              />
+              <small>閾値到達時は自動Lockdown設定に従って封じ込めます。</small>
             </label>
           </div>
         </details>
