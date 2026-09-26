@@ -43,6 +43,7 @@ type Thresholds = {
   raidWindowSeconds: number;
   spamMessages: number;
   spamWindowSeconds: number;
+  mentionLimit: number;
   linkBurst: number;
   linkWindowSeconds: number;
   minAccountAgeHours: number;
@@ -623,6 +624,22 @@ export default function SecurityManager({
                   thresholds: {
                     ...draft.thresholds,
                     raidWindowSeconds: Number(event.target.value)
+                  }
+                })}
+              />
+            </label>
+            <label className="field">
+              <span>1投稿のメンション上限</span>
+              <input
+                type="number"
+                min={2}
+                max={100}
+                value={draft.thresholds.mentionLimit}
+                onChange={event => setDraft({
+                  ...draft,
+                  thresholds: {
+                    ...draft.thresholds,
+                    mentionLimit: Number(event.target.value)
                   }
                 })}
               />
