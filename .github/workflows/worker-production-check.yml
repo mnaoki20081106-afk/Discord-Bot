@@ -20,7 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected="$(grep -o 'version:"[^"]*"' apps/worker/src/index.ts | head -n1 | cut -d'"' -f2)"
+          expected="$(grep -o 'version:"[^"]*"' apps/worker/src/index.ts | tail -n1 | cut -d'"' -f2)"
           echo "Expected Worker version: $expected"
           for attempt in $(seq 1 24); do
             body="$(curl -fsS --max-time 10 https://discord-bot.c53gftun651-tiktok.workers.dev/health || true)"
