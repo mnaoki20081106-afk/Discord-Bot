@@ -31,7 +31,9 @@ Webダッシュボードからまとめて管理するモノレポです。
   - Emergency Lockdown + Lockdown状態の独立D1保存
 - Main Botは恒久的にSecurity BotのWhitelistへ入れません。
   正常な管理操作とバックアップ復元時だけ、短時間の署名付きMaintenance Leaseを発行します。
-- Security Bot未接続環境では、従来のCron + Audit Log Anti-Nukeがフォールバックとして残ります。
+- 推奨ロール順は **人間の管理者 > Main Bot > Security Bot > 他社製Bot > 一般ロール** です。
+  上位の人間管理者はBotによる自動Kick/BAN/Timeout/危険ロール剥奪の対象外とし、異常操作は記録・通知します。高信頼度な大量削除などでは本人を処罰せずLockdownで被害拡大を止めます。
+- Security Bot未接続環境では、従来のCron + Audit Log Anti-Nukeがフォールバックとして残ります。このフォールバックもMain Botより上位の人間管理者へ自動ロール剥奪を行いません。
 
 ### Verification
 
