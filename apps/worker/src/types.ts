@@ -11,6 +11,7 @@ export interface Env {
   SESSION_ENCRYPTION_KEY: string;
   DASHBOARD_PASSWORD: string;
   SECURITY_API_BASE_URL?: string;
+  SECURITY_SERVICE?: Fetcher;
   SECURITY_BRIDGE_SECRET?: string;
   PAYPAY_API_KEY?: string;
   PAYPAY_API_SECRET?: string;

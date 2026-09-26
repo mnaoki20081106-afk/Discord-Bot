@@ -96,7 +96,7 @@ export async function securityBridgeFetch(
     canonical
   );
 
-  const response = await fetch(url, {
+  const request = new Request(url.toString(), {
     ...init,
     method,
     body: body || undefined,
@@ -109,7 +109,13 @@ export async function securityBridgeFetch(
     }
   });
 
-  return response;
+  // Calls between Workers on the same Cloudflare account should use a Service
+  // Binding. Sending the request through global fetch can be rejected at the
+  // Cloudflare edge before the Security Worker is reached.
+  if (env.SECURITY_SERVICE) {
+    return env.SECURITY_SERVICE.fetch(request);
+  }
+  return fetch(request);
 }
 
 export async function securityBridgeJson<T>(
