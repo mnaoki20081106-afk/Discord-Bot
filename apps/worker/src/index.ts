@@ -70,6 +70,11 @@ import {
 import { ensureDiscordGateway } from "./discord-gateway";
 export { DiscordGateway } from "./discord-gateway";
 import {
+  openSecurityMaintenanceLease,
+  securityBridgeConfigured,
+  securityBridgeJson
+} from "./security-bridge";
+import {
   accountCreatedAt,
   corsHeaders,
   encrypt,
@@ -114,6 +119,14 @@ async function requireGuild(
 ):Promise<{session:DashboardActor;guild:{id:string;name:string;icon:string|null}}>{
   const session=await sessionFromRequest(request,env);
   const guild=await botJson<{id:string;name:string;icon:string|null}>(env,`/guilds/${guildId}`);
+  if(request.method!=="GET"&&securityBridgeConfigured(env)){
+    try{
+      await openSecurityMaintenanceLease(env,guildId,"dashboard_edit",30);
+    }catch(error){
+      console.error("security maintenance lease failed",guildId,error);
+      throw new HttpError(503,"Security Botとの安全な操作許可を確立できませんでした。誤検知防止のため操作を中止しました");
+    }
+  }
   return {session,guild};
 }
 
@@ -1474,6 +1487,73 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     return json(env,{id:s.user_id,username:s.username,avatar:s.avatar});
   }
 
+  const securityCenter=url.pathname.match(/^\/api\/guilds\/(\d+)\/security-center$/);
+  if(securityCenter){
+    const guildId=securityCenter[1]!;
+    await requireGuild(request,env,guildId);
+    if(request.method==="GET"){
+      if(!securityBridgeConfigured(env)){
+        return json(env,{
+          configured:false,
+          settings:null,
+          status:{connected:false,lastHeartbeatAck:null,lastEventAt:null,reconnectAttempts:0,botUserId:null},
+          incidents:[],
+          lockdown:{active:false,expiresAt:null,reason:null}
+        });
+      }
+      try{
+        return json(env,await securityBridgeJson(
+          env,
+          `/internal/guilds/${guildId}/overview?limit=30`
+        ));
+      }catch(error){
+        console.error("security center overview failed",error);
+        return json(env,{
+          configured:true,
+          unreachable:true,
+          message:error instanceof Error?error.message:String(error),
+          settings:null,
+          status:{connected:false,lastHeartbeatAck:null,lastEventAt:null,reconnectAttempts:0,botUserId:null},
+          incidents:[],
+          lockdown:{active:false,expiresAt:null,reason:null}
+        },502);
+      }
+    }
+    if(request.method==="PUT"){
+      if(!securityBridgeConfigured(env)) throw new HttpError(503,"Security Botがまだ接続されていません");
+      const body=await request.text();
+      const saved=await securityBridgeJson(
+        env,
+        `/internal/guilds/${guildId}/settings`,
+        {method:"PUT",body}
+      );
+      return json(env,saved);
+    }
+  }
+
+  const securityLockdown=url.pathname.match(/^\/api\/guilds\/(\d+)\/security-lockdown$/);
+  if(securityLockdown){
+    const guildId=securityLockdown[1]!;
+    await requireGuild(request,env,guildId);
+    if(!securityBridgeConfigured(env)) throw new HttpError(503,"Security Botがまだ接続されていません");
+    if(request.method==="POST"){
+      const body=await request.text();
+      return json(env,await securityBridgeJson(
+        env,
+        `/internal/guilds/${guildId}/lockdown`,
+        {method:"POST",body:body||JSON.stringify({reason:"manual dashboard lockdown"})}
+      ));
+    }
+    if(request.method==="DELETE"){
+      return json(env,await securityBridgeJson(
+        env,
+        `/internal/guilds/${guildId}/lockdown`,
+        {method:"DELETE"}
+      ));
+    }
+  }
+
+
   if(url.pathname==="/api/logout"&&request.method==="POST"){
     const auth=request.headers.get("Authorization");
     if(auth?.startsWith("Bearer ")) await deleteDashboardSession(env,await sha256Hex(auth.slice(7).trim()));
@@ -2576,6 +2656,10 @@ async function neutralize(env:Env,guildId:string,userId:string,settings:GuildSet
 }
 
 async function auditWatch(env:Env):Promise<void>{
+  // Once the independent Security Bot bridge is configured, real-time Gateway
+  // protection becomes authoritative. Keep this cron guard only as a legacy
+  // fallback for installations that have not completed Security Bot setup.
+  if(securityBridgeConfigured(env)) return;
   const guilds=await listAllGuildSettings(env,10);
   for(const row of guilds){
     let settings:GuildSettings;

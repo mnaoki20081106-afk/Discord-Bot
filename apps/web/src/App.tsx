@@ -5,6 +5,7 @@ import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
+import SecurityManager from "./SecurityManager";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -154,7 +155,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "members" | "verification" | "tickets" | "vending" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -680,6 +681,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-security"
+                role="tab"
+                aria-controls="admin-panel-security"
+                aria-selected={activeView === "security"}
+                className={activeView === "security" ? "active" : ""}
+                onClick={() => setActiveView("security")}
+              >
+                セキュリティ
+              </button>
+              <button
+                type="button"
                 id="admin-tab-members"
                 role="tab"
                 aria-controls="admin-panel-members"
@@ -785,9 +797,9 @@ export default function App() {
 
                   <section className="metric-grid">
                   <article className="metric card">
-                  <span>SECURITY</span>
+                  <span>NATIVE GUARD</span>
                   <strong>{settings.securityEnabled ? "ACTIVE" : "OFF"}</strong>
-                  <small>Discord AutoMod + Audit protection</small>
+                  <small>Discord AutoMod fallback</small>
                   </article>
                   <article className="metric card">
                   <span>VERIFICATION</span>
@@ -810,8 +822,8 @@ export default function App() {
                     <article className="card">
                     <div className="section-head">
                     <div>
-                    <span className="eyebrow">SECURITY</span>
-                    <h2>セキュリティ</h2>
+                    <span className="eyebrow">DISCORD NATIVE GUARD</span>
+                    <h2>補助保護</h2>
                     </div>
                     <button className="primary" onClick={() => void saveSettings()} disabled={busy}>
                     設定を保存
@@ -822,8 +834,8 @@ export default function App() {
                     <Toggle
                     checked={settings.securityEnabled}
                     onChange={(value) => setSettings({ ...settings, securityEnabled: value })}
-                    title="Security Engine"
-                    description="全セキュリティ機能のマスタースイッチ"
+                    title="Discord AutoMod Guard"
+                    description="独立Security Botとは別に、Discord標準AutoModを予備防御として維持します"
                     />
                     <Toggle
                     checked={settings.antiSpam}
@@ -837,33 +849,32 @@ export default function App() {
                     title="Invite Guard"
                     description="外部Discord招待リンクをブロック"
                     />
-                    <Toggle
-                    checked={settings.antiNuke}
-                    onChange={(value) => setSettings({ ...settings, antiNuke: value })}
-                    title="Anti-Nuke"
-                    description="Cloudflare Cronで監査ログを監視し大量破壊を検知"
-                    />
                     </div>
                     
                     <div className="serverless-note">
-                    <strong>Anti-Raidについて</strong>
+                    <strong>主要な防御は「セキュリティ」タブへ移動しました</strong>
                     <span>
-                    常駐Gatewayを使わない0円構成のため、参加イベント監視はDiscord標準の
-                    Raid Protectionを使用します。Spam・大量メンション・招待リンクはAutoMod、
-                    大量破壊は下のAnti-Nukeで保護します。
+                    Anti-Nuke / Anti-Raid / Scam・Phishing / Permission Guard / Lockdownは
+                    独立Security BotがリアルタイムGatewayで担当します。ここはDiscord AutoModの
+                    予備防御だけを管理します。
                     </span>
                     </div>
                     
-                    <div className="form-grid three">
-                    <Field label="メンション上限">
-                    <input
-                    type="number"
-                    value={settings.mentionLimit}
-                    onChange={(e) =>
-                    setSettings({ ...settings, mentionLimit: Number(e.target.value) })
-                    }
+                    <details className="serverless-note" open>
+                    <summary><strong>補助保護の詳細設定</strong></summary>
+                    <span>
+                    Security Bot未接続時のCron Anti-Nuke用設定です。Security Bot接続後は
+                    「セキュリティ」タブ側のリアルタイム防御が優先されます。
+                    </span>
+                    <div className="toggle-stack">
+                    <Toggle
+                    checked={settings.antiNuke}
+                    onChange={(value) => setSettings({ ...settings, antiNuke: value })}
+                    title="Fallback Anti-Nuke"
+                    description="Security Bot未接続時だけCron監視で使用"
                     />
-                    </Field>
+                    </div>
+                    <div className="form-grid two">
                     <Field label="Nuke操作回数">
                     <input
                     type="number"
@@ -872,22 +883,6 @@ export default function App() {
                     setSettings({ ...settings, nukeActions: Number(e.target.value) })
                     }
                     />
-                    </Field>
-                    </div>
-                    
-                    <div className="form-grid two">
-                    <Field label="セキュリティログ">
-                    <select
-                    value={settings.logChannelId ?? ""}
-                    onChange={(e) =>
-                    setSettings({ ...settings, logChannelId: e.target.value || null })
-                    }
-                    >
-                    <option value="">システムチャンネル / 未設定</option>
-                    {meta.channels.map((channel) => (
-                    <option key={channel.id} value={channel.id}>#{channel.name}</option>
-                    ))}
-                    </select>
                     </Field>
                     <Field label="Nuke監視秒">
                     <input
@@ -909,6 +904,35 @@ export default function App() {
                     value={trustedRolesText}
                     onChange={(e) => setTrustedRolesText(e.target.value)}
                     />
+                    </Field>
+                    </div>
+                    </details>
+
+                    <div className="form-grid three">
+                    <Field label="メンション上限">
+                    <input
+                    type="number"
+                    value={settings.mentionLimit}
+                    onChange={(e) =>
+                    setSettings({ ...settings, mentionLimit: Number(e.target.value) })
+                    }
+                    />
+                    </Field>
+                    </div>
+                    
+                    <div className="form-grid two">
+                    <Field label="セキュリティログ">
+                    <select
+                    value={settings.logChannelId ?? ""}
+                    onChange={(e) =>
+                    setSettings({ ...settings, logChannelId: e.target.value || null })
+                    }
+                    >
+                    <option value="">システムチャンネル / 未設定</option>
+                    {meta.channels.map((channel) => (
+                    <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                    ))}
+                    </select>
                     </Field>
                     </div>
                     </article>
@@ -1211,6 +1235,24 @@ export default function App() {
                 </section>
               </>
             )}
+
+            <section
+              id="admin-panel-security"
+              className="admin-tab-panel"
+              role="tabpanel"
+              aria-labelledby="admin-tab-security"
+              hidden={activeView !== "security"}
+            >
+              {activeView === "security" && (
+                <SecurityManager
+                  key={"SecurityManager:"+selectedId}
+                  guildId={selectedId!}
+                  channels={meta.channels}
+                  onNotice={flash}
+                  onError={fail}
+                />
+              )}
+            </section>
 
             <section
               id="admin-panel-backup"
