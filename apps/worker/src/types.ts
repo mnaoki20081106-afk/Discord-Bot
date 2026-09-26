@@ -10,6 +10,8 @@ export interface Env {
   DISCORD_CLIENT_SECRET: string;
   SESSION_ENCRYPTION_KEY: string;
   DASHBOARD_PASSWORD: string;
+  SECURITY_API_BASE_URL?: string;
+  SECURITY_BRIDGE_SECRET?: string;
   PAYPAY_API_KEY?: string;
   PAYPAY_API_SECRET?: string;
   PAYPAY_MERCHANT_ID?: string;
