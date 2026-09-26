@@ -30,10 +30,12 @@ type Thresholds = {
   channelDelete: number;
   channelCreate: number;
   channelUpdate: number;
+  channelOverwrite: number;
   roleDelete: number;
   roleCreate: number;
   roleUpdate: number;
   banAdd: number;
+  memberPrune: number;
   kick: number;
   webhook: number;
   botAdd: number;
@@ -64,6 +66,10 @@ type SecuritySettings = {
     deleteUnsafeMessages: boolean;
     quarantineRaidJoins: boolean;
   };
+  safety: {
+    enforceExplicitContentFilter: boolean;
+    minimumVerificationLevel: number;
+  };
   logChannelId: string | null;
   trustedUserIds: string[];
   trustedRoleIds: string[];
@@ -86,6 +92,14 @@ type Overview = {
     highestRolePosition: number | null;
     missingPermissions: string[];
   };
+  safetyStatus?: {
+    explicitContentFilter: number;
+    verificationLevel: number;
+    mfaLevel: number;
+    raidAlertsEnabled: boolean;
+    safetyAlertsChannelConfigured: boolean;
+    baselineReady: boolean;
+  } | null;
   unreachable?: boolean;
   message?: string;
   settings: SecuritySettings | null;
@@ -559,6 +573,89 @@ export default function SecurityManager({
           <Toggle value={draft.modules.automodGuard} onChange={v => setModule("automodGuard", v)}
             title="AutoMod Guard" description="AutoModの無断変更・削除を監視" />
         </div>
+      </article>
+
+      <article className="card">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">SERVER SAFETY</span>
+            <h2>Discord Safety Baseline</h2>
+            <p>Security Botとは別に、Discord標準の安全フィルターも強制維持します。</p>
+          </div>
+          <strong>
+            {overview.safetyStatus?.baselineReady ? "READY" : "CHECK"}
+          </strong>
+        </div>
+
+        <div className="toggle-stack">
+          <Toggle
+            value={draft.safety.enforceExplicitContentFilter}
+            onChange={value => setDraft({
+              ...draft,
+              safety: { ...draft.safety, enforceExplicitContentFilter: value }
+            })}
+            title="Explicit Content Filter: ALL MEMBERS"
+            description="Discord標準のメディアスキャンを全メンバー対象に維持します"
+          />
+        </div>
+
+        <div className="form-grid">
+          <label className="field">
+            <span>最低Verification Level</span>
+            <select
+              value={draft.safety.minimumVerificationLevel}
+              onChange={event => setDraft({
+                ...draft,
+                safety: {
+                  ...draft.safety,
+                  minimumVerificationLevel: Number(event.target.value)
+                }
+              })}
+            >
+              <option value={0}>None</option>
+              <option value={1}>Low（メール認証）</option>
+              <option value={2}>Medium（推奨最低値）</option>
+              <option value={3}>High</option>
+              <option value={4}>Very High（電話番号認証）</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>現在のExplicit Filter</span>
+            <input
+              value={
+                overview.safetyStatus
+                  ? overview.safetyStatus.explicitContentFilter === 2
+                    ? "ALL MEMBERS"
+                    : overview.safetyStatus.explicitContentFilter === 1
+                      ? "MEMBERS WITHOUT ROLES"
+                      : "DISABLED"
+                  : "取得待ち"
+              }
+              readOnly
+            />
+          </label>
+          <label className="field">
+            <span>Server 2FA</span>
+            <input
+              value={overview.safetyStatus?.mfaLevel === 1 ? "ENABLED" : "DISABLED"}
+              readOnly
+            />
+          </label>
+          <label className="field">
+            <span>Raid Alerts</span>
+            <input
+              value={overview.safetyStatus?.raidAlertsEnabled ? "ENABLED" : "DISABLED / UNKNOWN"}
+              readOnly
+            />
+          </label>
+        </div>
+
+        {overview.safetyStatus?.mfaLevel === 0 && (
+          <p className="serverless-note">
+            管理操作の2FA必須化はDiscord側のSafety Setupから有効にしてください。
+            Security Botから勝手に変更せず、状態だけ監視します。
+          </p>
+        )}
       </article>
 
       <article className="card">
