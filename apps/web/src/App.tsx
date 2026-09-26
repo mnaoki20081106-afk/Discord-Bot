@@ -860,6 +860,54 @@ export default function App() {
                     </span>
                     </div>
                     
+                    <details className="serverless-note" open>
+                    <summary><strong>補助保護の詳細設定</strong></summary>
+                    <span>
+                    Security Bot未接続時のCron Anti-Nuke用設定です。Security Bot接続後は
+                    「セキュリティ」タブ側のリアルタイム防御が優先されます。
+                    </span>
+                    <div className="toggle-stack">
+                    <Toggle
+                    checked={settings.antiNuke}
+                    onChange={(value) => setSettings({ ...settings, antiNuke: value })}
+                    title="Fallback Anti-Nuke"
+                    description="Security Bot未接続時だけCron監視で使用"
+                    />
+                    </div>
+                    <div className="form-grid two">
+                    <Field label="Nuke操作回数">
+                    <input
+                    type="number"
+                    value={settings.nukeActions}
+                    onChange={(e) =>
+                    setSettings({ ...settings, nukeActions: Number(e.target.value) })
+                    }
+                    />
+                    </Field>
+                    <Field label="Nuke監視秒">
+                    <input
+                    type="number"
+                    value={settings.nukeWindowSeconds}
+                    onChange={(e) =>
+                    setSettings({ ...settings, nukeWindowSeconds: Number(e.target.value) })
+                    }
+                    />
+                    </Field>
+                    <Field label="信頼ユーザーID" hint="カンマ区切り">
+                    <input
+                    value={trustedUsersText}
+                    onChange={(e) => setTrustedUsersText(e.target.value)}
+                    />
+                    </Field>
+                    <Field label="信頼ロールID" hint="カンマ区切り">
+                    <input
+                    value={trustedRolesText}
+                    onChange={(e) => setTrustedRolesText(e.target.value)}
+                    />
+                    </Field>
+                    </div>
+                    </details>
+
                     <div className="form-grid three">
                     <Field label="メンション上限">
                     <input
