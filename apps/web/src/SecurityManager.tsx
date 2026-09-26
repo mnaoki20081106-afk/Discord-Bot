@@ -385,7 +385,7 @@ export default function SecurityManager({
           <div className="button-row">
             {!overview.installed && overview.inviteUrl && (
               <a
-                className="button-link"
+                className="primary"
                 href={overview.inviteUrl}
                 target="_blank"
                 rel="noreferrer"
