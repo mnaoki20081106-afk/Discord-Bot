@@ -2880,6 +2880,66 @@ export default {
       if(request.method==="OPTIONS"){
         return new Response(null,{status:204,headers:corsHeaders(env)});
       }
+      if(url.pathname==="/_diag/guilds-v1"&&request.method==="GET"){
+        await ensureSchema(env);
+        const [cached,knownIds,membershipRow]=await Promise.all([
+          listBotGuildCache(env,24*60*60_000).catch(()=>[]),
+          listKnownGuildIds(env).catch(()=>[]),
+          env.DB.prepare("SELECT COUNT(*) AS count FROM bot_guild_membership")
+            .first<{count:number}>()
+            .catch(()=>null)
+        ]);
+
+        let liveStatus=200;
+        let liveCount:number|null=null;
+        let liveError:string|null=null;
+        try{
+          const live=await botJson<DashboardGuild[]>(
+            env,"/users/@me/guilds?limit=200"
+          );
+          liveCount=live.length;
+        }catch(error){
+          liveStatus=error instanceof DiscordApiError?error.status:500;
+          liveError=error instanceof Error?error.message:String(error);
+        }
+
+        const probe={
+          checked:0,
+          accessible:0,
+          forbidden:0,
+          missing:0,
+          rateLimited:0,
+          other:0
+        };
+        for(const id of knownIds.slice(0,20)){
+          probe.checked++;
+          try{
+            await botJson<DashboardGuild>(env,`/guilds/${id}`);
+            probe.accessible++;
+          }catch(error){
+            if(error instanceof DiscordApiError){
+              if(error.status===403) probe.forbidden++;
+              else if(error.status===404) probe.missing++;
+              else if(error.status===429) probe.rateLimited++;
+              else probe.other++;
+            }else{
+              probe.other++;
+            }
+          }
+        }
+
+        return json(env,{
+          version:"gateway-guild-membership-v61",
+          live:{status:liveStatus,count:liveCount,error:liveError},
+          persisted:{
+            cacheCount:cached.length,
+            knownIdCount:knownIds.length,
+            membershipCount:Number(membershipRow?.count??0)
+          },
+          directProbe:probe
+        });
+      }
+
       if(url.pathname==="/"||url.pathname==="/health"){
         let d1Reachable=false;
         let d1Error:string|null=null;
