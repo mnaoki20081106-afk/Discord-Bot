@@ -5,10 +5,10 @@ import { json, randomId, sha256Hex } from "./utils";
 import { recordPanelDeployment } from "./backup-db";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
-  deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementChannelsForMachine, getCoupon,
-  getMachine, getOrder, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, listAchievementRooms, listCoupons, listMachines, listVmProducts,
+  deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementRoomsForMachine, getCoupon,
+  getMachine, getOrder, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, incrementAchievementRoomCount, listAchievementCountRooms, listAchievementRooms, listCoupons, listMachines, listVmProducts,
   markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, saveVmPanelImage, stockContents,
-  takePayChallenge, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmOrder, type VmProduct
+  takePayChallenge, updateAchievementCountNameState, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmAchievementRoom, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
   acceptPayPayLink, checkPayPayLink, getKyashAccount, kyashLoginOtp, kyashLoginStart,
@@ -96,6 +96,85 @@ export async function handleVendingMedia(
   });
 }
 
+const ACHIEVEMENT_NAME_SYNC_INTERVAL_MS=5*60_000;
+
+function parseAchievementCountChannelName(name:string):{base:string;count:number|null}{
+  const match=name.match(/^(.*?)(\d+)件$/);
+  if(!match) return {base:name,count:null};
+  const parsed=Number(match[2]);
+  return {
+    base:match[1]||name,
+    count:Number.isSafeInteger(parsed)&&parsed>=0?parsed:null
+  };
+}
+
+function achievementCountChannelName(base:string,count:number):string{
+  const suffix=String(Math.max(0,Math.trunc(count)))+"件";
+  const maxBaseLength=Math.max(1,100-suffix.length);
+  return base.slice(0,maxBaseLength)+suffix;
+}
+
+async function patchAchievementChannelName(
+  env:Env,
+  channelId:string,
+  name:string
+):Promise<{ok:boolean;status:number}>{
+  const response=await botFetch(env,"/channels/"+channelId,{
+    method:"PATCH",
+    body:JSON.stringify({name})
+  });
+  return {ok:response.ok,status:response.status};
+}
+
+async function syncAchievementChannelCount(
+  env:Env,
+  room:VmAchievementRoom,
+  force=false
+):Promise<boolean>{
+  if(!room.count_display_enabled) return false;
+  const now=Date.now();
+  if(!force&&now-room.count_name_synced_at<ACHIEVEMENT_NAME_SYNC_INTERVAL_MS) return false;
+
+  let base=room.base_channel_name;
+  let count=room.achievement_count;
+  if(!base){
+    const channel=await botJson<{name?:string}>(env,"/channels/"+room.channel_id);
+    const parsed=parseAchievementCountChannelName(String(channel.name??"実績"));
+    base=parsed.base;
+    if(count===0&&parsed.count!==null) count=parsed.count;
+    await updateAchievementCountNameState(env,room.id,{
+      baseChannelName:base,
+      achievementCount:count
+    });
+  }
+
+  const result=await patchAchievementChannelName(
+    env,
+    room.channel_id,
+    achievementCountChannelName(base,count)
+  );
+  if(result.ok){
+    await updateAchievementCountNameState(env,room.id,{countNameSyncedAt:now});
+    return true;
+  }
+  if(result.status!==429){
+    console.error("achievement channel count rename failed",room.id,room.channel_id,result.status);
+  }
+  return false;
+}
+
+async function restoreAchievementChannelName(
+  env:Env,
+  room:VmAchievementRoom
+):Promise<boolean>{
+  if(!room.base_channel_name) return false;
+  const result=await patchAchievementChannelName(env,room.channel_id,room.base_channel_name);
+  if(!result.ok&&result.status!==429){
+    console.error("achievement channel name restore failed",room.id,room.channel_id,result.status);
+  }
+  return result.ok;
+}
+
 function panelEmbed(vm:Vm,products:Array<VmProduct&{stock_count:number}>){
   const lines=products.map(p=>{
     const stock=p.infinite_stock?"∞":String(p.stock_count);
@@ -133,7 +212,12 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     }
     if(request.method==="PUT"){
       const b=await input<{
-        rooms?:Array<{id?:string;channelId?:string|null;machineIds?:string[]}>;
+        rooms?:Array<{
+          id?:string;
+          channelId?:string|null;
+          machineIds?:string[];
+          countDisplayEnabled?:boolean;
+        }>;
       }>(request);
       const rawRooms=Array.isArray(b.rooms)?b.rooms:[];
       if(rawRooms.length>20) throw new VendingHttpError(400,"実績部屋は20個まで設定できます");
@@ -142,7 +226,8 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
         channelId:String(room.channelId??"").trim(),
         machineIds:[...new Set(
           (Array.isArray(room.machineIds)?room.machineIds:[]).map(String).filter(Boolean)
-        )]
+        )],
+        countDisplayEnabled:Boolean(room.countDisplayEnabled)
       }));
       if(rooms.some(room=>!room.channelId)){
         throw new VendingHttpError(400,"すべての実績部屋でチャンネルを選択してください");
@@ -174,12 +259,51 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
         }
       }
 
-      const saved=await replaceAchievementRooms(env,{
+      const previous=await listAchievementRooms(env,guildId,session.user_id);
+      const requestedById=new Map(
+        rooms.filter(room=>room.id).map(room=>[room.id!,room])
+      );
+      const warnings:string[]=[];
+
+      for(const oldRoom of previous){
+        const next=requestedById.get(oldRoom.id);
+        const shouldRestore=Boolean(
+          oldRoom.count_display_enabled&&
+          (!next||!next.countDisplayEnabled||next.channelId!==oldRoom.channel_id)
+        );
+        if(shouldRestore){
+          try{
+            const restored=await restoreAchievementChannelName(env,oldRoom);
+            if(!restored&&oldRoom.base_channel_name){
+              warnings.push("旧実績チャンネル名をすぐに戻せませんでした。Discordのレート制限解除後に手動で戻してください。");
+            }
+          }catch(error){
+            console.error("achievement channel restore during save failed",oldRoom.id,error);
+            warnings.push("旧実績チャンネル名の復元に失敗しました。");
+          }
+        }
+      }
+
+      let saved=await replaceAchievementRooms(env,{
         guildId,
         ownerId:session.user_id,
         rooms
       });
-      return json(env,{rooms:saved});
+
+      for(const room of saved.filter(room=>room.count_display_enabled)){
+        try{
+          const synced=await syncAchievementChannelCount(env,room,true);
+          if(!synced){
+            warnings.push("件数表示は保存しましたが、チャンネル名の更新はDiscordのレート制限などにより保留されています。");
+          }
+        }catch(error){
+          console.error("achievement channel count initial sync failed",room.id,error);
+          warnings.push("件数表示は保存しましたが、チャンネル名を更新できませんでした。BOTの「チャンネルの管理」権限を確認してください。");
+        }
+      }
+
+      saved=await listAchievementRooms(env,guildId,session.user_id);
+      return json(env,{rooms:saved,warnings:[...new Set(warnings)]});
     }
   }
 
@@ -458,13 +582,13 @@ async function sendAchievementPurchase(
   vm:Vm,
   product:VmProduct
 ){
-  const channelIds=await getAchievementChannelsForMachine(
+  const rooms=await getAchievementRoomsForMachine(
     env,
     order.guild_id,
     vm.owner_id,
     vm.id
   );
-  if(channelIds.length===0) return;
+  if(rooms.length===0) return;
   const productName=(product.emoji?product.emoji+" ":"")+product.name;
   const embed:any={
     title:"🎉 商品購入ログ",
@@ -480,13 +604,20 @@ async function sendAchievementPurchase(
   if(vm.panel_image_url&&/^https?:\/\//i.test(vm.panel_image_url)){
     embed.thumbnail={url:vm.panel_image_url};
   }
-  await Promise.all(
-    channelIds.map(channelId=>
-      send(env,channelId,{embeds:[embed]}).catch(error=>{
-        console.error("vending achievement channel send failed",order.id,channelId,error);
-      })
-    )
-  );
+
+  await Promise.all(rooms.map(async room=>{
+    try{
+      await send(env,room.channel_id,{embeds:[embed]});
+      const counted=await incrementAchievementRoomCount(env,room.id);
+      if(counted?.count_display_enabled){
+        await syncAchievementChannelCount(env,counted,false).catch(error=>{
+          console.error("achievement channel count sync failed",room.id,error);
+        });
+      }
+    }catch(error){
+      console.error("vending achievement channel send failed",order.id,room.channel_id,error);
+    }
+  }));
 }
 
 async function deliver(env:Env,order:VmOrder){
@@ -654,6 +785,15 @@ export async function vendingSweep(env:Env){
         await markPaid(env,order.id,"paypay",order.payment_link_hash); const paid=await getOrder(env,order.id); if(paid) await deliver(env,paid);
       }
     }catch(e){console.error("vending sweep",row.id,e);}
+  }
+
+  const countRooms=await listAchievementCountRooms(env);
+  for(const room of countRooms){
+    try{
+      await syncAchievementChannelCount(env,room,false);
+    }catch(error){
+      console.error("achievement channel count scheduled sync failed",room.id,error);
+    }
   }
 }
 
