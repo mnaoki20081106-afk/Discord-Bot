@@ -5,6 +5,9 @@ import {
 } from "./member-activity";
 import {
   deleteBotGuildCache,
+  forgetBotGuildMembership,
+  rememberBotGuildMembership,
+  replaceBotGuildMembership,
   upsertBotGuildCache
 } from "./db";
 
@@ -26,6 +29,7 @@ type GatewayPayload = {
 };
 
 const STATE_KEY = "discord_gateway_state";
+const GUILD_MEMBERSHIP_SEED_KEY = "discord_gateway_guild_membership_seed_v1";
 const GATEWAY_VERSION = 10;
 const GATEWAY_INTENTS = (1 << 0) | (1 << 1); // GUILDS + GUILD_MEMBERS
 const RECONNECT_CLOSE_CODE = 3001;
@@ -143,6 +147,22 @@ export class DiscordGateway {
   }
 
   private async start(): Promise<void> {
+    const seeded = await this.state.storage.get<number>(GUILD_MEMBERSHIP_SEED_KEY);
+    if (seeded !== 1) {
+      // One fresh Identify is required after enabling guild-membership tracking
+      // so READY supplies the full set of guild IDs. Resuming an older session
+      // would not replay those initial guilds.
+      await this.state.storage.delete(STATE_KEY);
+      if (this.socket) {
+        this.plannedClose = true;
+        try {
+          this.socket.close(RECONNECT_CLOSE_CODE, "seed guild membership");
+        } catch {
+          // Already closed.
+        }
+        this.socket = null;
+      }
+    }
     if (this.socket) return;
     await this.connect();
   }
@@ -411,11 +431,18 @@ export class DiscordGateway {
       const ready = payload.d as {
         session_id?: string;
         resume_gateway_url?: string;
+        guilds?: Array<{ id?: string }>;
       };
       stored.sessionId = ready.session_id ?? null;
       stored.resumeUrl = ready.resume_gateway_url ?? stored.resumeUrl;
       stored.reconnectAttempts = 0;
       await this.saveState(stored);
+
+      const guildIds=(ready.guilds ?? [])
+        .map(guild=>String(guild.id ?? ""))
+        .filter(id=>/^\d+$/.test(id));
+      await replaceBotGuildMembership(this.env,guildIds);
+      await this.state.storage.put(GUILD_MEMBERSHIP_SEED_KEY,1);
 
       // A fresh Identify cannot replay events from before the connection.
       // Reconcile once here, then all subsequent notifications are Gateway-driven.
@@ -435,6 +462,9 @@ export class DiscordGateway {
         name?: string;
         icon?: string | null;
       };
+      if (guild.id) {
+        await rememberBotGuildMembership(this.env,guild.id);
+      }
       if (guild.id && guild.name) {
         await upsertBotGuildCache(this.env, {
           id: guild.id,
@@ -452,7 +482,10 @@ export class DiscordGateway {
       };
       // unavailable=true is a temporary outage, not a real bot removal.
       if (guild.id && !guild.unavailable) {
-        await deleteBotGuildCache(this.env, guild.id);
+        await Promise.all([
+          deleteBotGuildCache(this.env, guild.id),
+          forgetBotGuildMembership(this.env, guild.id)
+        ]);
       }
       return;
     }
