@@ -114,18 +114,31 @@ async function sessionFromRequest(request:Request,env:Env):Promise<DashboardActo
   return {user_id:"shared-dashboard",username:"共同管理者",avatar:null};
 }
 
+async function requireMainSecurityLease(
+  env:Env,
+  guildId:string,
+  scope:"dashboard_edit"|"restore"|"all"="dashboard_edit",
+  seconds=30
+):Promise<void>{
+  if(!securityBridgeConfigured(env)) return;
+  try{
+    await openSecurityMaintenanceLease(env,guildId,scope,seconds);
+  }catch(error){
+    console.error("security maintenance lease failed",guildId,scope,error);
+    throw new HttpError(
+      503,
+      "Security Botとの安全な操作許可を確立できませんでした。誤検知防止のため操作を中止しました"
+    );
+  }
+}
+
 async function requireGuild(
   request:Request,env:Env,guildId:string,_requireBot=true
 ):Promise<{session:DashboardActor;guild:{id:string;name:string;icon:string|null}}>{
   const session=await sessionFromRequest(request,env);
   const guild=await botJson<{id:string;name:string;icon:string|null}>(env,`/guilds/${guildId}`);
-  if(request.method!=="GET"&&securityBridgeConfigured(env)){
-    try{
-      await openSecurityMaintenanceLease(env,guildId,"dashboard_edit",30);
-    }catch(error){
-      console.error("security maintenance lease failed",guildId,error);
-      throw new HttpError(503,"Security Botとの安全な操作許可を確立できませんでした。誤検知防止のため操作を中止しました");
-    }
+  if(request.method!=="GET"){
+    await requireMainSecurityLease(env,guildId,"dashboard_edit",30);
   }
   return {session,guild};
 }
@@ -375,6 +388,7 @@ async function repairBotChannelAccess(
     allow|=BOT_CHANNEL_GUARD_MASK;
     deny&=~BOT_CHANNEL_GUARD_MASK;
     try{
+      await requireMainSecurityLease(env,guildId,"dashboard_edit",45);
       await writeBotChannelGuard(env,channel,allow,deny);
       repairedIds.add(channel.id);
       failedById.delete(channel.id);
@@ -1269,6 +1283,7 @@ async function createTicketFromInteraction(env:Env,interaction:any):Promise<Resp
   }
   const channel=await botJson<DiscordChannel>(env,`/guilds/${guildId}/channels`,{
     method:"POST",
+    headers:{"X-Audit-Log-Reason":"Discord Main Bot: ticket created"},
     body:JSON.stringify({
       name:`ticket-${safe}`,
       type:0,
@@ -1344,11 +1359,18 @@ async function processInteraction(
     }
     if(id==="ticket:create"){
       await ensureSchema(env);
+      const guildId=String(interaction.guild_id??"");
+      if(guildId) await requireMainSecurityLease(env,guildId,"dashboard_edit",30);
       return createTicketFromInteraction(env,interaction);
     }
     if(id==="ticket:close"){
+      const guildId=String(interaction.guild_id??"");
+      if(guildId) await requireMainSecurityLease(env,guildId,"dashboard_edit",30);
       const channelId=interaction.channel_id as string;
-      ctx.waitUntil(botFetch(env,`/channels/${channelId}`,{method:"DELETE"}).then(()=>undefined));
+      ctx.waitUntil(botFetch(env,`/channels/${channelId}`,{
+        method:"DELETE",
+        headers:{"X-Audit-Log-Reason":"Discord Main Bot: ticket closed"}
+      }).then(()=>undefined));
       return interactionResponse(ephemeral("チケットを閉じます。"));
     }
     if(id?.startsWith("buy:")){
@@ -1502,6 +1524,14 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         });
       }
       try{
+        await securityBridgeJson(
+          env,
+          `/internal/guilds/${guildId}/service-bots`,
+          {
+            method:"POST",
+            body:JSON.stringify({botId:env.DISCORD_APPLICATION_ID,kind:"main"})
+          }
+        );
         return json(env,await securityBridgeJson(
           env,
           `/internal/guilds/${guildId}/overview?limit=30`
@@ -1749,6 +1779,12 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         }
         if(targetRole.managed){
           throw new HttpError(400,"Discord管理ロールは認証後ロールに指定できません");
+        }
+        if((BigInt(targetRole.permissions||"0")&DANGEROUS_PERMISSION_MASK)!==0n){
+          throw new HttpError(
+            400,
+            "認証後ロールに管理者・ロール管理・チャンネル管理・BAN/Kickなどの危険権限は設定できません"
+          );
         }
         // Do not reject the setting based only on Discord's role position values.
         // Discord is authoritative when the role is actually assigned, and equal
