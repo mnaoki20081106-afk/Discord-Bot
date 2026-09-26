@@ -102,6 +102,11 @@ type Overview = {
     safetyAlertsChannelConfigured: boolean;
     baselineReady: boolean;
   } | null;
+  bridgeProtection?: {
+    coreLocked: boolean;
+    exceptionAdditionsLocked: boolean;
+    automaticLockdownUnlockLocked: boolean;
+  };
   unreachable?: boolean;
   message?: string;
   settings: SecuritySettings | null;
@@ -124,6 +129,7 @@ type Overview = {
     active: boolean;
     expiresAt: number | null;
     reason: string | null;
+    manualUnlockAllowed?: boolean;
   };
 };
 
@@ -131,15 +137,17 @@ function Toggle({
   value,
   onChange,
   title,
-  description
+  description,
+  disabled = false
 }: {
   value: boolean;
   onChange: (value: boolean) => void;
   title: string;
   description: string;
+  disabled?: boolean;
 }) {
   return (
-    <label className="toggle-row">
+    <label className={`toggle-row ${disabled ? "disabled" : ""}`}>
       <span className="toggle-copy">
         <strong>{title}</strong>
         <small>{description}</small>
@@ -148,6 +156,7 @@ function Toggle({
         <input
           type="checkbox"
           checked={value}
+          disabled={disabled}
           onChange={event => onChange(event.target.checked)}
         />
         <span />
@@ -494,10 +503,18 @@ export default function SecurityManager({
             <button
               type="button"
               className={overview.lockdown.active ? "secondary" : "danger"}
-              disabled={busy}
+              disabled={
+                busy ||
+                (overview.lockdown.active &&
+                  overview.lockdown.manualUnlockAllowed === false)
+              }
               onClick={() => void setLockdown(!overview.lockdown.active)}
             >
-              {overview.lockdown.active ? "Lockdown解除" : "緊急Lockdown"}
+              {overview.lockdown.active
+                ? overview.lockdown.manualUnlockAllowed === false
+                  ? "自動Lockdown中"
+                  : "Lockdown解除"
+                : "緊急Lockdown"}
             </button>
             <button type="button" disabled={busy} onClick={() => void save()}>
               設定を保存
@@ -505,11 +522,32 @@ export default function SecurityManager({
           </div>
         </div>
 
+        {overview.bridgeProtection?.coreLocked && (
+          <p className="serverless-note">
+            <strong>Core Protection Locked</strong><br />
+            Main Workerが侵害されてもSecurity Botを無効化できないよう、
+            Enforce・破壊対策Guard・Auto Lockdown・Safety BaselineはSecurity側で最低防御を強制します。
+            Trusted/Allow例外はMain管理画面から新規追加できず、既存例外の削除だけ可能です。
+          </p>
+        )}
+
+        {overview.lockdown.active &&
+          overview.lockdown.manualUnlockAllowed === false && (
+          <p className="serverless-note">
+            このLockdownは自動防御で発動したためMain Botからは解除できません。
+            {overview.lockdown.expiresAt
+              ? " 自動復旧予定: " +
+                new Date(overview.lockdown.expiresAt).toLocaleString("ja-JP")
+              : ""}
+          </p>
+        )}
+
         <div className="form-grid">
           <label className="field">
             <span>動作モード</span>
             <select
               value={draft.mode}
+              disabled={overview.bridgeProtection?.coreLocked}
               onChange={event => setDraft({
                 ...draft,
                 mode: event.target.value as SecuritySettings["mode"]
@@ -554,32 +592,33 @@ export default function SecurityManager({
             value={draft.enabled}
             onChange={enabled => setDraft({ ...draft, enabled })}
             title="Security Engine"
-            description="Security Botのマスタースイッチ"
+            description="独立防御のため常時ONです"
+            disabled={overview.bridgeProtection?.coreLocked}
           />
           <Toggle value={draft.modules.antiNuke} onChange={v => setModule("antiNuke", v)}
-            title="Anti-Nuke" description="Channel破壊と複合攻撃をGatewayでリアルタイム検知" />
+            title="Anti-Nuke" description="Channel破壊と複合攻撃をGatewayでリアルタイム検知" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.antiRaid} onChange={v => setModule("antiRaid", v)}
-            title="Anti-Raid" description="短時間の大量参加を検知してLockdown・隔離" />
+            title="Anti-Raid" description="短時間の大量参加を検知してLockdown・隔離" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.antiSpam} onChange={v => setModule("antiSpam", v)}
             title="Anti-Spam / Mention Flood" description="連投と大量メンションをリアルタイム遮断" />
           <Toggle value={draft.modules.antiPhishing} onChange={v => setModule("antiPhishing", v)}
-            title="Scam / Phishing Guard" description="危険URL・偽ログイン誘導を遮断" />
+            title="Scam / Phishing Guard" description="危険URL・偽ログイン誘導を遮断" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.dangerousAttachments} onChange={v => setModule("dangerousAttachments", v)}
-            title="Dangerous Attachment Guard" description="実行ファイル・スクリプト系添付を遮断" />
+            title="Dangerous Attachment Guard" description="実行ファイル・スクリプト系添付を遮断" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.botGuard} onChange={v => setModule("botGuard", v)}
-            title="Bot Guard" description="未許可Bot追加を即時検知・除去" />
+            title="Bot Guard" description="未許可Bot追加を即時検知・除去" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.webhookGuard} onChange={v => setModule("webhookGuard", v)}
-            title="Webhook Guard" description="Webhookを悪用した攻撃を検知" />
+            title="Webhook Guard" description="Webhookを悪用した攻撃を検知" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.roleGuard} onChange={v => setModule("roleGuard", v)}
-            title="Role Guard" description="Role作成・変更・削除の異常操作を監視" />
+            title="Role Guard" description="Role作成・変更・削除の異常操作を監視" disabled={overview.bridgeProtection?.coreLocked} />
                     <Toggle value={draft.modules.permissionGuard} onChange={v => setModule("permissionGuard", v)}
-            title="Permission Guard" description="Administrator等の危険権限付与を即時ロールバック" />
+            title="Permission Guard" description="Administrator等の危険権限付与を即時ロールバック" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.memberGuard} onChange={v => setModule("memberGuard", v)}
-            title="Member Guard" description="短時間の大量Kick・Banを検知" />
+            title="Member Guard" description="短時間の大量Kick・Banを検知" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.guildGuard} onChange={v => setModule("guildGuard", v)}
-            title="Server / Integration Guard" description="サーバー設定・Integrationの異常変更を監視" />
+            title="Server / Integration Guard" description="サーバー設定・Integrationの異常変更を監視" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.automodGuard} onChange={v => setModule("automodGuard", v)}
-            title="AutoMod Guard" description="AutoModの無断変更・削除を監視" />
+            title="AutoMod Guard" description="AutoModの無断変更・削除を監視" disabled={overview.bridgeProtection?.coreLocked} />
         </div>
       </article>
 
@@ -603,7 +642,8 @@ export default function SecurityManager({
               safety: { ...draft.safety, enforceExplicitContentFilter: value }
             })}
             title="Explicit Content Filter: ALL MEMBERS"
-            description="Discord標準のメディアスキャンを全メンバー対象に維持します"
+            description="独立防御の最低ラインとして常時有効です"
+            disabled={overview.bridgeProtection?.coreLocked}
           />
         </div>
 
@@ -620,8 +660,8 @@ export default function SecurityManager({
                 }
               })}
             >
-              <option value={0}>None</option>
-              <option value={1}>Low（メール認証）</option>
+              <option value={0} disabled>None</option>
+              <option value={1} disabled>Low（メール認証）</option>
               <option value={2}>Medium（推奨最低値）</option>
               <option value={3}>High</option>
               <option value={4}>Very High（電話番号認証）</option>
@@ -682,6 +722,7 @@ export default function SecurityManager({
             })}
             title="危険権限ロールを剥奪"
             description="攻撃者から管理系権限を持つロールを除去"
+            disabled={overview.bridgeProtection?.coreLocked}
           />
           <Toggle
             value={draft.response.kickMaliciousBots}
@@ -691,6 +732,7 @@ export default function SecurityManager({
             })}
             title="攻撃BotをKick"
             description="Main Botも永久ホワイトリストにはしません。正規操作時だけ短期Leaseを使います"
+            disabled={overview.bridgeProtection?.coreLocked}
           />
           <Toggle
             value={draft.response.autoLockdown}
@@ -700,6 +742,7 @@ export default function SecurityManager({
             })}
             title="Auto Lockdown"
             description="重大攻撃時に@everyoneの送信・通話・Thread作成を一時停止"
+            disabled={overview.bridgeProtection?.coreLocked}
           />
         </div>
         <div className="form-grid">
@@ -745,21 +788,22 @@ export default function SecurityManager({
             <label className="field">
               <span>Trusted User IDs</span>
               <textarea value={trustedUsers} onChange={event => setTrustedUsers(event.target.value)} />
-              <small>完全な例外です。必要最小限にしてください。</small>
+              <small>既存例外の削除のみ可能です。Main管理画面から新規追加はできません。</small>
             </label>
             <label className="field">
               <span>Trusted Role IDs</span>
               <textarea value={trustedRoles} onChange={event => setTrustedRoles(event.target.value)} />
-              <small>このRoleを持つ全員が防御対象外になります。</small>
+              <small>既存例外の削除のみ可能です。新規Trusted Role追加はSecurity側で拒否します。</small>
             </label>
             <label className="field">
               <span>追加を許可するBot IDs</span>
               <textarea value={allowedBots} onChange={event => setAllowedBots(event.target.value)} />
-              <small>Bot追加イベント用。Bot自身の危険操作を恒久的に免除する設定ではありません。</small>
+              <small>既存許可の削除のみ可能です。新規Bot例外はMain経由では追加できません。</small>
             </label>
             <label className="field">
               <span>許可ドメイン</span>
               <textarea value={allowedDomains} onChange={event => setAllowedDomains(event.target.value)} />
+              <small>既存許可の削除のみ可能です。新規Allowlist追加はMain経由では拒否します。</small>
             </label>
             <label className="field">
               <span>強制ブロックドメイン</span>
@@ -770,7 +814,7 @@ export default function SecurityManager({
               <input
                 type="number"
                 min={4}
-                max={100}
+                max={20}
                 value={draft.thresholds.crossActionScore}
                 onChange={event => setDraft({
                   ...draft,
@@ -786,7 +830,7 @@ export default function SecurityManager({
               <input
                 type="number"
                 min={2}
-                max={1000}
+                max={20}
                 value={draft.thresholds.raidJoins}
                 onChange={event => setDraft({
                   ...draft,
@@ -834,7 +878,7 @@ export default function SecurityManager({
               <input
                 type="number"
                 min={2}
-                max={50}
+                max={6}
                 value={draft.thresholds.severeContentUsers}
                 onChange={event => setDraft({
                   ...draft,
