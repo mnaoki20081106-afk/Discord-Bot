@@ -48,8 +48,10 @@ export async function securityBridgeFetch(
         : String(init.body);
   const method = String(init.method ?? "GET").toUpperCase();
   const timestamp = String(Date.now());
+  const nonce = crypto.randomUUID().replace(/-/g, "");
   const canonical =
     timestamp + "\n" +
+    nonce + "\n" +
     method + "\n" +
     url.pathname + url.search + "\n" +
     body;
@@ -65,6 +67,7 @@ export async function securityBridgeFetch(
     headers: {
       "Content-Type": "application/json",
       "X-Security-Timestamp": timestamp,
+      "X-Security-Nonce": nonce,
       "X-Security-Signature": signature,
       ...(init.headers ?? {})
     }
