@@ -1468,7 +1468,7 @@ export default function VendingManager({
                     <button
                       className="danger"
                       onClick={()=>void clearStockNotification()}
-                      disabled={busy&&!notifyChannel&&!notifyRole}
+                      disabled={busy||(!notifyChannel&&!notifyRole)}
                     >
                       設定を削除
                     </button>
