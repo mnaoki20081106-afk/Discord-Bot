@@ -738,7 +738,7 @@ test('achievement channel count display defaults off and restores channel name',
   assert.equal(restore?.body?.name,'chat');
 });
 
-test('dashboard load upgrades tracked legacy verification panel to one click', async t => {
+test('dashboard metadata load is read-only and does not patch tracked panels', async t => {
   const {mf,calls,db} = await runtime(t);
   const login = await request(mf, '/api/login', null, 'POST', {
     password:'local-test-password'
@@ -763,16 +763,13 @@ test('dashboard load upgrades tracked legacy verification panel to one click', a
 
   const meta=await request(mf,`/api/guilds/${guildId}/meta`,token);
   assert.equal(meta.status,200,JSON.stringify(meta.body));
-  assert.equal(meta.body.verificationPanelUpgrade,'updated');
+  assert.equal(meta.body.verificationPanelUpgrade,undefined);
 
   const patch=calls.find(call=>
     call.method==='PATCH'&&
     call.path===`/api/v10/channels/${chatChannelId}/messages/723456789012345678`
   );
-  assert.ok(patch?.body,'legacy verification panel must be patched');
-  const button=patch.body.components?.[0]?.components?.[0];
-  assert.equal(button?.style,5);
-  assert.equal(button?.custom_id,undefined);
+  assert.equal(patch,undefined,'loading dashboard metadata must not mutate Discord');
   const panelUrl=new URL(button?.url);
   assert.equal(panelUrl.origin,'https://worker.example');
   assert.equal(panelUrl.pathname,'/auth/verification/start');
@@ -1427,8 +1424,17 @@ test('non-admin bot role allow overrides @everyone channel deny', async t => {
   assert.ok(chat);
   assert.equal(chat.botCanView,true);
   assert.equal(meta.body.botAdministrator,false);
-  assert.ok(meta.body.botAccessRepair.repaired>=1);
-  assert.equal(meta.body.botAccessRepair.failed.length,0);
+  assert.equal(meta.body.botAccessRepair,undefined);
+
+  const repaired=await request(
+    mf,
+    `/api/guilds/${guildId}/bot-access/repair`,
+    login.body.token,
+    'POST'
+  );
+  assert.equal(repaired.status,200,JSON.stringify(repaired.body));
+  assert.ok(repaired.body.repaired>=1);
+  assert.equal(repaired.body.failed.length,0);
 });
 
 test('editing @everyone protects the bot member before applying the deny', async t => {
@@ -1491,13 +1497,30 @@ test('locked channel repair falls back to full channel overwrite patch', async t
 
   const meta = await request(mf, `/api/guilds/${guildId}/meta`, login.body.token);
   assert.equal(meta.status,200,JSON.stringify(meta.body));
-  assert.equal(meta.body.botAccessRepair.failed.length,0);
+  assert.equal(meta.body.botAccessRepair,undefined);
+  assert.equal(
+    calls.some(call=>
+      call.method==='PATCH' &&
+      call.path===`/api/v10/channels/${chatChannelId}`
+    ),
+    false,
+    'metadata loading must not repair channel permissions'
+  );
+
+  const repaired = await request(
+    mf,
+    `/api/guilds/${guildId}/bot-access/repair`,
+    login.body.token,
+    'POST'
+  );
+  assert.equal(repaired.status,200,JSON.stringify(repaired.body));
+  assert.equal(repaired.body.failed.length,0);
   assert.ok(
     calls.some(call=>
       call.method==='PATCH' &&
       call.path===`/api/v10/channels/${chatChannelId}`
     ),
-    'locked channel should use the full-overwrite PATCH recovery path'
+    'explicit repair should use the full-overwrite PATCH recovery path'
   );
 });
 
