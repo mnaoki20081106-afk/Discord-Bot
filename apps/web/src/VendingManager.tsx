@@ -147,6 +147,7 @@ export default function VendingManager({
   });
   const [panelChannel,setPanelChannel]=useState("");
   const [panelMessageUrl,setPanelMessageUrl]=useState("");
+  const [notifyEnabled,setNotifyEnabled]=useState(false);
   const [notifyChannel,setNotifyChannel]=useState("");
   const [notifyRole,setNotifyRole]=useState("");
   const [achievementRooms,setAchievementRooms]=useState<AchievementRoomDraft[]>([]);
@@ -272,12 +273,13 @@ export default function VendingManager({
     try{
       const [data,notification]=await Promise.all([
         api<MachineDetail>(`/api/guilds/${guildId}/vending/${id}`),
-        api<{channel_id:string;role_id:string}|null>(
+        api<{channel_id:string;role_id:string;enabled:number}|null>(
           `/api/guilds/${guildId}/vending/${id}/stock-notification`
         )
       ]);
       if(request!==detailRequest.current) return;
       setDetail(data);
+      setNotifyEnabled(Boolean(notification?.enabled));
       setNotifyChannel(notification?.channel_id??"");
       setNotifyRole(notification?.role_id??"");
       setMachineForm({
@@ -459,14 +461,22 @@ export default function VendingManager({
   }
 
   async function saveStockNotification(){
-    if(!selectedId||!notifyChannel||!notifyRole) return;
+    if(!selectedId) return;
+    if(notifyEnabled&&(!notifyChannel||!notifyRole)){
+      onError(new Error("通知をオンにするには通知チャンネルとメンションロールを選択してください"));
+      return;
+    }
     setBusy(true);
     try{
       await api(`/api/guilds/${guildId}/vending/${selectedId}/stock-notification`,{
         method:"POST",
-        body:JSON.stringify({channelId:notifyChannel,roleId:notifyRole})
+        body:JSON.stringify({
+          enabled:notifyEnabled,
+          channelId:notifyChannel||null,
+          roleId:notifyRole||null
+        })
       });
-      onNotice("在庫追加通知を設定しました");
+      onNotice(notifyEnabled?"在庫追加通知をオンにしました":"在庫追加通知をオフにしました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
@@ -476,9 +486,10 @@ export default function VendingManager({
     setBusy(true);
     try{
       await api(`/api/guilds/${guildId}/vending/${selectedId}/stock-notification`,{method:"DELETE"});
+      setNotifyEnabled(false);
       setNotifyChannel("");
       setNotifyRole("");
-      onNotice("在庫追加通知を解除しました");
+      onNotice("在庫追加通知の設定を削除しました");
     }catch(reason){onError(reason);}
     finally{setBusy(false);}
   }
@@ -1405,8 +1416,32 @@ export default function VendingManager({
                 </div>
 
                 <div className="vending-tabs-section">
-                  <span className="eyebrow">STOCK ALERT</span>
-                  <h3>在庫追加通知</h3>
+                  <div className="section-head compact">
+                    <div>
+                      <span className="eyebrow">STOCK ALERT</span>
+                      <h3>在庫追加通知</h3>
+                    </div>
+                    <span className={`status-pill ${notifyEnabled?"good":"warn"}`}>
+                      <i /> {notifyEnabled?"ON":"OFF"}
+                    </span>
+                  </div>
+
+                  <label className="toggle-row compact-toggle vending-notify-toggle">
+                    <span className="toggle-copy">
+                      <strong>在庫を追加した時に通知する</strong>
+                      <small>
+                        {notifyEnabled
+                          ?"ON: 有限在庫を追加した時に指定チャンネルへ通知します"
+                          :"OFF: 在庫を追加してもDiscordへ通知しません"}
+                      </small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={notifyEnabled}
+                      onChange={e=>setNotifyEnabled(e.target.checked)}
+                    />
+                  </label>
+
                   <label className="field"><span>通知チャンネル</span>
                     <select value={notifyChannel} onChange={e=>setNotifyChannel(e.target.value)}>
                       <option value="">選択</option>
@@ -1419,9 +1454,24 @@ export default function VendingManager({
                       {roles.map(role=><option key={role.id} value={role.id}>@{role.name}</option>)}
                     </select>
                   </label>
+                  <small className="vending-field-help">
+                    デフォルトはOFFです。OFFのまま通知先だけ先に保存しておくこともできます。
+                  </small>
                   <div className="button-row">
-                    <button className="secondary" onClick={()=>void saveStockNotification()} disabled={!notifyChannel||!notifyRole}>通知設定を保存</button>
-                    <button className="danger" onClick={()=>void clearStockNotification()} disabled={!notifyChannel&&!notifyRole}>解除</button>
+                    <button
+                      className="secondary"
+                      onClick={()=>void saveStockNotification()}
+                      disabled={busy||(notifyEnabled&&(!notifyChannel||!notifyRole))}
+                    >
+                      通知設定を保存
+                    </button>
+                    <button
+                      className="danger"
+                      onClick={()=>void clearStockNotification()}
+                      disabled={busy&&!notifyChannel&&!notifyRole}
+                    >
+                      設定を削除
+                    </button>
                   </div>
                 </div>
 
