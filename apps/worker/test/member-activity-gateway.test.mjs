@@ -22,12 +22,22 @@ test("member activity uses Discord Gateway member events", () => {
   assert.match(memberSource, /handleMemberActivityGatewayEvent/);
 });
 
-test("minute cron is only a gateway watchdog, not member polling", () => {
+test("minute cron keeps the shared Discord Gateway alive without member polling", () => {
   const scheduled = indexSource.slice(indexSource.indexOf("async scheduled"));
   assert.doesNotMatch(scheduled, /memberActivitySweep\(env\)/);
   assert.match(scheduled, /ensureDiscordGateway\(env\)/);
+  assert.match(gatewaySource, /discord-gateway\.internal\/start/);
+  assert.doesNotMatch(gatewaySource, /enabled \? "start" : "stop"/);
 });
 
 test("fresh gateway sessions reconcile once before event-driven operation", () => {
   assert.match(gatewaySource, /await memberActivitySweep\(this\.env\)/);
+});
+
+test("gateway guild events maintain the dashboard guild cache", () => {
+  assert.match(gatewaySource, /payload\.t === "GUILD_CREATE"/);
+  assert.match(gatewaySource, /upsertBotGuildCache/);
+  assert.match(gatewaySource, /payload\.t === "GUILD_DELETE"/);
+  assert.match(gatewaySource, /deleteBotGuildCache/);
+  assert.match(gatewaySource, /!guild\.unavailable/);
 });
