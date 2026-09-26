@@ -26,6 +26,7 @@ import {
   markDelivered,
   putOAuthState,
   replaceBotGuildCache,
+  replaceBotGuildMembership,
   saveGuildSettings,
   setAuditCursor,
   setPaymentStatus
@@ -1649,86 +1650,94 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       listKnownGuildIds(env).catch(()=>[])
     ]);
 
+    // Prefer the IDs learned from Gateway READY/GUILD_CREATE and persisted
+    // subsystems. A direct GET /guilds/:id is the strongest membership check and
+    // avoids depending on the aggregate current-user guild-list endpoint.
+    if(knownIds.length){
+      const recovered=await recoverKnownBotGuilds(env,knownIds);
+      if(recovered.guilds.length){
+        await Promise.all([
+          replaceBotGuildCache(env,recovered.guilds).catch(error=>
+            console.error("bot guild cache update failed",error)
+          ),
+          replaceBotGuildMembership(
+            env,
+            recovered.guilds.map(guild=>guild.id)
+          ).catch(error=>
+            console.error("bot guild membership update failed",error)
+          )
+        ]);
+        return json(env,recovered.guilds.map(guild=>({
+          ...guild,
+          botInstalled:true
+        })));
+      }
+
+      if(recovered.transientFailure&&cached.length){
+        console.warn(
+          "bot guild list: direct probes transient; serving recent cache",
+          cached.length
+        );
+        return json(env,cached.map(guild=>({
+          id:guild.id,
+          name:guild.name,
+          icon:guild.icon,
+          botInstalled:true
+        })));
+      }
+    }
+
+    // Bootstrap/fallback for installs that have not yet received a fresh READY.
     try{
       const live=await botJson<DashboardGuild[]>(
         env,"/users/@me/guilds?limit=200"
       );
 
       if(live.length>0){
-        await replaceBotGuildCache(env,live).catch(error=>
-          console.error("bot guild cache update failed",error)
-        );
+        await Promise.all([
+          replaceBotGuildCache(env,live).catch(error=>
+            console.error("bot guild cache update failed",error)
+          ),
+          replaceBotGuildMembership(
+            env,
+            live.map(guild=>guild.id)
+          ).catch(error=>
+            console.error("bot guild membership update failed",error)
+          )
+        ]);
         return json(env,live.map(guild=>({
           ...guild,
           botInstalled:true
         })));
       }
 
-      // A successful [] from Discord is not enough evidence to erase a server
-      // list we already know about. This can happen transiently around gateway
-      // reconnects/API propagation. Confirm known guilds individually first.
-      if(knownIds.length){
-        const recovered=await recoverKnownBotGuilds(env,knownIds);
-        if(recovered.guilds.length){
-          console.warn(
-            "bot guild list: live list was empty; recovered known guilds",
-            recovered.guilds.length
-          );
-          await replaceBotGuildCache(env,recovered.guilds).catch(error=>
-            console.error("bot guild cache update failed",error)
-          );
-          return json(env,recovered.guilds.map(guild=>({
-            ...guild,
-            botInstalled:true
-          })));
-        }
-
-        if(recovered.transientFailure&&cached.length){
-          console.warn(
-            "bot guild list: live list empty and probe transient; serving cache",
-            cached.length
-          );
-          return json(env,cached.map(guild=>({
-            id:guild.id,
-            name:guild.name,
-            icon:guild.icon,
-            botInstalled:true
-          })));
-        }
+      if(cached.length){
+        console.warn(
+          "bot guild list: aggregate endpoint empty; serving recent cache",
+          cached.length
+        );
+        return json(env,cached.map(guild=>({
+          id:guild.id,
+          name:guild.name,
+          icon:guild.icon,
+          botInstalled:true
+        })));
       }
 
-      // Only clear the cache when Discord returned an empty list and the known
-      // guild probes also confirmed that none remain accessible to this bot.
-      await replaceBotGuildCache(env,[]).catch(error=>
-        console.error("bot guild cache clear failed",error)
-      );
       return json(env,[]);
     }catch(error){
       console.error("bot guild list failed",error);
       const recoverable=
         !(error instanceof DiscordApiError)||
         [429,500,502,503,504].includes(error.status);
-      if(recoverable){
-        if(cached.length){
-          console.warn("bot guild list: serving recent cache",cached.length);
-          return json(env,cached.map(guild=>({
-            id:guild.id,
-            name:guild.name,
-            icon:guild.icon,
-            botInstalled:true
-          })));
-        }
-
-        if(knownIds.length){
-          const recovered=await recoverKnownBotGuilds(env,knownIds);
-          if(recovered.guilds.length){
-            await replaceBotGuildCache(env,recovered.guilds).catch(()=>undefined);
-            return json(env,recovered.guilds.map(guild=>({
-              ...guild,
-              botInstalled:true
-            })));
-          }
-        }
+      if(recoverable&&cached.length){
+        console.warn("bot guild list: serving recent cache",cached.length);
+        return json(env,cached.map(guild=>({
+          id:guild.id,
+          name:guild.name,
+          icon:guild.icon,
+          botInstalled:true
+        })));
       }
       const detail=error instanceof Error?error.message:"unknown";
       throw new HttpError(502,"BOT参加サーバー一覧の取得に失敗しました: "+detail.slice(0,160));
@@ -2916,7 +2925,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"guild-list-reconcile-v60",
+          version:"gateway-guild-membership-v61",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
