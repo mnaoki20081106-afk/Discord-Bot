@@ -75,6 +75,7 @@ async function runtime(t, options = {}) {
         if (options.guildListFailureAfterFirst && guildListCalls > 1) {
           return Response.json({ retry_after: 0.001 }, {status: 429});
         }
+        if (options.guildListAlwaysEmpty) return Response.json([]);
         return Response.json([guild]);
       }
       if (url.pathname === `/api/v10/guilds/${guildId}`) {
@@ -354,6 +355,28 @@ async function eventually(fn, timeoutMs=1500) {
   }
   return fn();
 }
+
+test('guild list recovers configured servers when Discord returns a suspicious empty list', async t => {
+  const {mf} = await runtime(t, {guildListAlwaysEmpty:true});
+  const login = await request(mf, '/api/login', null, 'POST', {password:'local-test-password'});
+  assert.equal(login.status,200);
+  const token=login.body.token;
+
+  const saved=await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    token,
+    'PUT',
+    {spamMax:7}
+  );
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+
+  const list=await request(mf,'/api/guilds',token);
+  assert.equal(list.status,200,JSON.stringify(list.body));
+  assert.equal(list.body.length,1);
+  assert.equal(list.body[0].id,guildId);
+  assert.equal(list.body[0].name,guild.name);
+});
 
 test('guild list falls back to cache and cron does not consume the guild-list bucket', async t => {
   const {mf, calls} = await runtime(t, {guildListFailureAfterFirst:true});
