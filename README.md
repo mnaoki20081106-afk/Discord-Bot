@@ -144,7 +144,16 @@ DISCORD_PUBLIC_KEY
 DISCORD_BOT_TOKEN
 DISCORD_CLIENT_SECRET
 SESSION_ENCRYPTION_KEY
+SECURITY_BRIDGE_SECRET
 ```
+
+Security Bot連携時は、Main Workerの通常Environment Variableとして次も設定します。
+
+```text
+SECURITY_API_BASE_URL=https://discord-security.<account>.workers.dev
+```
+
+`SECURITY_BRIDGE_SECRET` はMain WorkerとDiscord-Security Workerへ**同じ32文字以上のランダム値**をSecretとして保存します。ブラウザやGitHub Pagesには渡しません。
 
 PayPay / Kyashのアカウント接続は、デプロイ後にWeb管理画面からOTP認証します。
 決済アカウント情報をGitHub Secretsへ直接書く必要はありません。
@@ -167,7 +176,10 @@ DISCORD_PUBLIC_KEY
 DISCORD_BOT_TOKEN
 DISCORD_CLIENT_SECRET
 SESSION_ENCRYPTION_KEY
+SECURITY_BRIDGE_SECRET
 ```
+
+Security Botを接続する場合は `SECURITY_API_BASE_URL` もMain WorkerのEnvironment Variableへ設定してください。
 
 `SESSION_ENCRYPTION_KEY` は **32文字以上の推測されにくいランダム文字列** をそのまま設定できます。内部でSHA-256からAES-256-GCM用の鍵を生成します。旧32-byte Base64形式も互換対応しています。
 
