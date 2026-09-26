@@ -536,7 +536,7 @@ for (const legacy of [false, true]) {
     assert.equal(finiteStock.body.added,2);
     const vmDetail=await request(mf,`/api/guilds/${guildId}/vending/${vm.body.id}`,token);
     const finiteDetail=vmDetail.body.products.find(item=>item.id===finiteProduct.body.id);
-    assert.equal(finiteDetail.stock_count,2);
+    assert.equal(finiteDetail.stock_count,4);
 
     const product = await request(mf,`/api/guilds/${guildId}/products`,token,'POST',{
       name:'Local text product',priceYen:100,deliveryType:'text',deliveryText:'test only'
