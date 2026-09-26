@@ -317,6 +317,29 @@ export async function listBotGuildCache(
   return result.results;
 }
 
+export async function upsertBotGuildCache(
+  env: Env,
+  guild: { id:string; name:string; icon:string|null }
+): Promise<void> {
+  await ensureBotGuildCacheTable(env);
+  await env.DB.prepare(`
+    INSERT INTO bot_guild_cache(guild_id,name,icon,seen_at) VALUES (?,?,?,?)
+    ON CONFLICT(guild_id) DO UPDATE SET
+      name=excluded.name,
+      icon=excluded.icon,
+      seen_at=excluded.seen_at
+  `).bind(guild.id,guild.name,guild.icon,Date.now()).run();
+}
+
+export async function deleteBotGuildCache(
+  env: Env,
+  guildId: string
+): Promise<void> {
+  await ensureBotGuildCacheTable(env);
+  await env.DB.prepare("DELETE FROM bot_guild_cache WHERE guild_id=?")
+    .bind(guildId).run();
+}
+
 export async function listProducts(env: Env, guildId: string): Promise<ProductRow[]> {
   const result = await env.DB.prepare(
     "SELECT * FROM products WHERE guild_id=? AND active=1 ORDER BY created_at DESC"
