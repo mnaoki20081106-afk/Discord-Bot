@@ -4252,3 +4252,103 @@ body.dsm-touch-reordering .discord-category {
     min-width: 0;
   }
 }
+
+
+/* Independent Security Bot */
+.security-manager {
+  display: grid;
+  gap: 16px;
+}
+
+.security-manager .button-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.security-manager button.danger {
+  border-color: rgba(237, 66, 69, .58);
+  background: rgba(237, 66, 69, .13);
+  color: #ffb1b3;
+}
+
+.security-manager button.danger:hover {
+  border-color: #ed4245;
+  background: rgba(237, 66, 69, .22);
+}
+
+.security-manager textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.security-advanced {
+  margin-top: 16px;
+}
+
+.security-incidents {
+  display: grid;
+  gap: 9px;
+}
+
+.security-incident {
+  padding: 12px 14px;
+  border: 1px solid #273650;
+  border-radius: 12px;
+  background: #0a111d;
+}
+
+.security-incident > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.security-incident p {
+  margin: 6px 0;
+  color: #cbd5e5;
+  font-size: 12px;
+}
+
+.security-incident small {
+  color: #73839d;
+  font-size: 9px;
+}
+
+.security-severity {
+  padding: 3px 7px;
+  border: 1px solid #33415a;
+  border-radius: 999px;
+  color: #aab8cc;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.security-severity.medium {
+  border-color: rgba(254, 231, 92, .35);
+  color: #f6dc7b;
+}
+
+.security-severity.high,
+.security-severity.critical {
+  border-color: rgba(237, 66, 69, .45);
+  color: #ff9c9f;
+  background: rgba(237, 66, 69, .07);
+}
+
+@media (max-width: 700px) {
+  .security-manager .section-head {
+    align-items: flex-start;
+  }
+
+  .security-manager .button-row {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .security-manager .button-row button {
+    flex: 1 1 130px;
+  }
+}
