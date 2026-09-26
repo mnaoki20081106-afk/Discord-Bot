@@ -482,7 +482,7 @@ export default function SecurityManager({
           <div>
             <span className="eyebrow">SECURITY CENTER</span>
             <h2>リアルタイム防御</h2>
-            <p>Main Botとは別Token・別Worker・別Gatewayで稼働します。Main Botを誤検知で自動Kickせず、破壊的挙動だけをLockdownで封じ込めます。</p>
+            <p>Main Botとは別Token・別Worker・別Gatewayで稼働します。Main Botを誤検知で自動Kickせず、破壊的挙動は検知・記録し、サーバー全体のLockdownを発動します。</p>
           </div>
           <div className="button-row">
             {!overview.installed && (overview.maximumInviteUrl || overview.inviteUrl) && (
@@ -534,9 +534,9 @@ export default function SecurityManager({
 
         <p className="serverless-note">
           <strong>Bot共存モード</strong><br />
-          推奨ロール順は <strong>Main Bot &gt; Security Bot &gt; 人間用の危険権限ロール</strong> です。
-          他社製BotはSecurityより上でも通常の設定操作だけではLockdown/Kickしません。
-          大量削除・大量Kick/BANなど破壊的な挙動は引き続き検知します。
+          推奨ロール順は <strong>Main Bot &gt; Security Bot &gt; 他社製Bot &gt; 人間用の危険権限ロール</strong> です。
+          他社製Botの通常設定操作は誤検知でLockdown/Kickしません。
+          Securityより上に置いたBotはDiscordのロール階層上Kickできないため、必要な場合を除きSecurityより下に置いてください。
         </p>
 
         {overview.bridgeProtection?.coreLocked && (
