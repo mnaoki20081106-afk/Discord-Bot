@@ -442,7 +442,6 @@ export default function SecurityManager({
 
       {overview.installed && overview.capabilities && (
         !overview.capabilities.requiredReady ||
-        overview.capabilities.roleAboveManagedBots === false ||
         overview.capabilities.roleAboveDangerousRoles === false ||
         !overview.capabilities.maximumProtection
       ) && (
@@ -451,23 +450,19 @@ export default function SecurityManager({
             {overview.capabilities.missingPermissions.length > 0
               ? "Security Botの権限が不足しています"
               : overview.capabilities.roleAboveDangerousRoles === false
-                ? "Security Botより上に危険権限ロールがあります"
-                : overview.capabilities.roleAboveManagedBots === false
-                  ? "Security BotのロールをMain Botより上へ移動してください"
-                  : "現在はHardenedモードです"}
+                ? "Security Botより上に人間用の危険権限ロールがあります"
+                : "現在はHardenedモードです"}
           </strong>
           <span>
             {overview.capabilities.missingPermissions.length > 0
               ? "不足: " + overview.capabilities.missingPermissions.join(" / ")
               : overview.capabilities.roleAboveDangerousRoles === false
-                ? "Security Botが止められない危険ロール: " +
+                ? "Security Botが剥奪できない人間用の危険ロール: " +
                   overview.capabilities.dangerousRolesNotBelow
                     .map(role => role.name)
                     .join(" / ") +
-                  "。Security Botの最高ロールを、Administrator・ロール管理・チャンネル管理・BAN/Kick等の危険権限を持つ全ロールより上へ配置してください。"
-                : overview.capabilities.roleAboveManagedBots === false
-                  ? "攻撃時にMain Botを止めるため、Security Botの最高ロールをMain Botより上に配置してください。"
-                  : "最大保護ではSecurity BotへAdministratorを付与します。Administratorはチャンネル個別拒否をバイパスできる一方、Security Botトークンの管理はより重要になります。"}
+                  "。Security Botは、Administrator・ロール管理・チャンネル管理・BAN/Kick等を持つ人間用ロールより上へ配置してください。Bot/Integrationのmanagedロールはこの判定から除外されます。"
+                : "最大保護ではSecurity BotへAdministratorを付与します。Main Botより上である必要はありません。推奨は Main Bot > Security Bot > その他の人間用管理ロールです。"}
           </span>
           {overview.maximumInviteUrl && !overview.capabilities.maximumProtection && (
             <a
@@ -487,7 +482,7 @@ export default function SecurityManager({
           <div>
             <span className="eyebrow">SECURITY CENTER</span>
             <h2>リアルタイム防御</h2>
-            <p>Main Botとは別Token・別Worker・別Gatewayで稼働します。</p>
+            <p>Main Botとは別Token・別Worker・別Gatewayで稼働します。Main Botを誤検知で自動Kickせず、破壊的挙動だけをLockdownで封じ込めます。</p>
           </div>
           <div className="button-row">
             {!overview.installed && (overview.maximumInviteUrl || overview.inviteUrl) && (
@@ -536,6 +531,13 @@ export default function SecurityManager({
             </button>
           </div>
         </div>
+
+        <p className="serverless-note">
+          <strong>Bot共存モード</strong><br />
+          推奨ロール順は <strong>Main Bot &gt; Security Bot &gt; 人間用の危険権限ロール</strong> です。
+          他社製BotはSecurityより上でも通常の設定操作だけではLockdown/Kickしません。
+          大量削除・大量Kick/BANなど破壊的な挙動は引き続き検知します。
+        </p>
 
         {overview.bridgeProtection?.coreLocked && (
           <p className="serverless-note">
@@ -621,7 +623,7 @@ export default function SecurityManager({
           <Toggle value={draft.modules.dangerousAttachments} onChange={v => setModule("dangerousAttachments", v)}
             title="Dangerous Attachment Guard" description="実行ファイル・スクリプト系添付を遮断" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.botGuard} onChange={v => setModule("botGuard", v)}
-            title="Bot Guard" description="未許可Bot追加を即時検知・除去" disabled={overview.bridgeProtection?.coreLocked} />
+            title="Bot Guard" description="Bot追加を監査。権限が強いだけでは即Kickせず、追加後の破壊挙動を監視" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.webhookGuard} onChange={v => setModule("webhookGuard", v)}
             title="Webhook Guard" description="Webhookを悪用した攻撃を検知" disabled={overview.bridgeProtection?.coreLocked} />
           <Toggle value={draft.modules.roleGuard} onChange={v => setModule("roleGuard", v)}
@@ -746,7 +748,7 @@ export default function SecurityManager({
               response: { ...draft.response, kickMaliciousBots: value }
             })}
             title="攻撃BotをKick"
-            description="Main Botも永久ホワイトリストにはしません。正規操作時だけ短期Leaseを使います"
+            description="Main/管理対象Botは自動Kickしません。その他Botも極端な破壊操作が確認された場合だけ対象にします"
             disabled={overview.bridgeProtection?.coreLocked}
           />
           <Toggle
@@ -813,7 +815,7 @@ export default function SecurityManager({
             <label className="field">
               <span>追加を許可するBot IDs</span>
               <textarea value={allowedBots} onChange={event => setAllowedBots(event.target.value)} />
-              <small>既存許可の削除のみ可能です。新規Bot例外はMain経由では追加できません。</small>
+              <small>通常の連携Botは登録不要です。既存の明示保護IDは削除のみ可能で、新規例外はMain経由では追加できません。</small>
             </label>
             <label className="field">
               <span>許可ドメイン</span>
