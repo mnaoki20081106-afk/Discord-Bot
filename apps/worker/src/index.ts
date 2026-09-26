@@ -177,6 +177,7 @@ function bodyObject<T=Record<string,unknown>>(request:Request):Promise<T>{
 
 type DiscordGuildMember={
   roles:string[];
+  user?:{id?:string;bot?:boolean};
 };
 
 const PANEL_PERMISSION_MASK=1024n|2048n|16384n;
@@ -2943,10 +2944,35 @@ async function neutralize(env:Env,guildId:string,userId:string,settings:GuildSet
   const guild=await botJson<{owner_id:string}>(env,`/guilds/${guildId}`);
   if(guild.owner_id===userId) return;
   const [member,roles]=await Promise.all([
-    botJson<{roles:string[]}>(env,`/guilds/${guildId}/members/${userId}`),
+    botJson<DiscordGuildMember>(env,`/guilds/${guildId}/members/${userId}`),
     botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`)
   ]);
   if(member.roles.some(id=>settings.trustedRoleIds.includes(id))) return;
+
+  // Human administrators intentionally outrank every bot. The legacy fallback
+  // must not fight those operators when the independent Security Bot is absent.
+  // A malicious lower-ranked human is still inside Main Bot's moderation
+  // boundary, so only humans above Main (or an unverifiable Main hierarchy)
+  // receive this protection.
+  if(member.user?.bot!==true){
+    const botMember=await getBotGuildMember(env,guildId,roles);
+    const humanHighest=highestMemberRole(roles,member);
+    const botHighest=highestMemberRole(roles,botMember);
+    const protectedHumanOperator=
+      !botHighest ||
+      Boolean(humanHighest&&compareRoleHierarchy(humanHighest,botHighest)>0);
+    if(protectedHumanOperator){
+      if(settings.logChannelId){
+        await sendMessage(env,settings.logChannelId,{
+          content:botHighest
+            ? `⚠️ Anti-Nuke: <@${userId}> はMain Botより上位の人間管理者のため、自動ロール剥奪を行わず記録のみしました。`
+            : `⚠️ Anti-Nuke: <@${userId}> の操作を検知しましたが、Main Botのロール階層を確認できないため自動ロール剥奪を保留しました。`
+        }).catch(()=>undefined);
+      }
+      return;
+    }
+  }
+
   for(const role of roles){
     if(!member.roles.includes(role.id)||role.managed) continue;
     if((BigInt(role.permissions)&DANGEROUS_PERMISSION_MASK)!==0n){
