@@ -24,6 +24,7 @@ async function runtime(t, options = {}) {
   const discordPublicKey = Buffer.from(publicKeyDer).subarray(-32).toString('hex');
   let verificationMemberRoles = [...(options.verificationMemberRoles ?? [])];
   let rateLimitGuild = true;
+  let guildListCalls = 0;
   let chatChannelName = options.chatChannelName ?? 'chat';
   const botPermissions = options.botPermissions ?? nonAdminBotPermissions;
   const botRolePosition = options.botRolePosition ?? 2;
@@ -69,7 +70,13 @@ async function runtime(t, options = {}) {
         }
         return Response.json({id:botId,username:'Test bot'});
       }
-      if (url.pathname.endsWith('/users/@me/guilds')) return Response.json([guild]);
+      if (url.pathname.endsWith('/users/@me/guilds')) {
+        guildListCalls++;
+        if (options.guildListFailureAfterFirst && guildListCalls > 1) {
+          return Response.json({ retry_after: 0.001 }, {status: 429});
+        }
+        return Response.json([guild]);
+      }
       if (url.pathname === `/api/v10/guilds/${guildId}`) {
         if (rateLimitGuild) { rateLimitGuild = false; return Response.json({ retry_after: 0.001 }, {status: 429}); }
         return Response.json(guild);
@@ -348,6 +355,28 @@ async function eventually(fn, timeoutMs=1500) {
   return fn();
 }
 
+test('guild list falls back to cache and cron does not consume the guild-list bucket', async t => {
+  const {mf, calls} = await runtime(t, {guildListFailureAfterFirst:true});
+  const login = await request(mf, '/api/login', null, 'POST', {password:'local-test-password'});
+  assert.equal(login.status,200);
+  const token=login.body.token;
+
+  const first=await request(mf,'/api/guilds',token);
+  assert.equal(first.status,200,JSON.stringify(first.body));
+  assert.equal(first.body.length,1);
+
+  const second=await request(mf,'/api/guilds',token);
+  assert.equal(second.status,200,JSON.stringify(second.body));
+  assert.equal(second.body[0].id,guildId);
+
+  const beforeCron=calls.filter(call=>call.path==='/api/v10/users/@me/guilds').length;
+  const worker=await mf.getWorker();
+  const scheduled=await worker.scheduled({cron:'* * * * *'});
+  assert.equal(scheduled.outcome,'ok');
+  const afterCron=calls.filter(call=>call.path==='/api/v10/users/@me/guilds').length;
+  assert.equal(afterCron,beforeCron,'cron must not call the Discord guild-list endpoint');
+});
+
 for (const legacy of [false, true]) {
   test(`dashboard bootstrap and persisted data on ${legacy ? 'legacy' : 'empty'} D1`, async t => {
     const {mf, db, calls} = await runtime(t);
@@ -377,7 +406,7 @@ for (const legacy of [false, true]) {
     assert.deepEqual(results[1].body,[]);
     assert.deepEqual(results[2].body,[]);
     const version = await db.prepare("SELECT value FROM meta WHERE key='schema_version'").first();
-    assert.equal(version.value,'3');
+    assert.equal(version.value,'4');
     const vm = await request(mf,`/api/guilds/${guildId}/vending`,token,'POST',{name:'Local test machine'});
     assert.equal(vm.status,201,JSON.stringify(vm.body));
     const vmList = await request(mf,`/api/guilds/${guildId}/vending`,token);
