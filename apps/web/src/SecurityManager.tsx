@@ -76,6 +76,16 @@ type Overview = {
   configured: boolean;
   installed?: boolean;
   inviteUrl?: string;
+  maximumInviteUrl?: string;
+  capabilities?: {
+    administrator: boolean;
+    requiredReady: boolean;
+    maximumProtection: boolean;
+    roleAboveManagedBots: boolean | null;
+    highestRoleName: string | null;
+    highestRolePosition: number | null;
+    missingPermissions: string[];
+  };
   unreachable?: boolean;
   message?: string;
   settings: SecuritySettings | null;
@@ -374,7 +384,57 @@ export default function SecurityManager({
           <strong>{overview.incidents.length}</strong>
           <small>直近30件</small>
         </article>
+        <article className="metric card">
+          <span>DEFENSE LEVEL</span>
+          <strong>
+            {overview.capabilities?.maximumProtection
+              ? "MAXIMUM"
+              : overview.capabilities?.requiredReady
+                ? "HARDENED"
+                : "DEGRADED"}
+          </strong>
+          <small>
+            {overview.capabilities?.maximumProtection
+              ? "Administrator overwrite bypass"
+              : overview.capabilities?.requiredReady
+                ? "必要権限は揃っています"
+                : "権限不足を確認してください"}
+          </small>
+        </article>
       </section>
+
+      {overview.installed && overview.capabilities && (
+        !overview.capabilities.requiredReady ||
+        overview.capabilities.roleAboveManagedBots === false ||
+        !overview.capabilities.maximumProtection
+      ) && (
+        <article className="card serverless-note">
+          <strong>
+            {!overview.capabilities.requiredReady
+              ? "Security Botの権限が不足しています"
+              : overview.capabilities.roleAboveManagedBots === false
+                ? "Security BotのロールをMain Botより上へ移動してください"
+                : "現在はHardenedモードです"}
+          </strong>
+          <span>
+            {!overview.capabilities.requiredReady
+              ? "不足: " + overview.capabilities.missingPermissions.join(" / ")
+              : overview.capabilities.roleAboveManagedBots === false
+                ? "攻撃時にMain Botや管理ロールを止めるため、Security Botの最高ロールをMain Botより上に配置してください。"
+                : "最大保護ではSecurity BotへAdministratorを付与します。Administratorはチャンネル個別拒否をバイパスできる一方、Security Botトークンの管理はより重要になります。"}
+          </span>
+          {overview.maximumInviteUrl && !overview.capabilities.maximumProtection && (
+            <a
+              className="secondary"
+              href={overview.maximumInviteUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              最大保護の権限を付与
+            </a>
+          )}
+        </article>
+      )}
 
       <article className="card">
         <div className="section-head">
@@ -384,15 +444,27 @@ export default function SecurityManager({
             <p>Main Botとは別Token・別Worker・別Gatewayで稼働します。</p>
           </div>
           <div className="button-row">
-            {!overview.installed && overview.inviteUrl && (
-              <a
-                className="primary"
-                href={overview.inviteUrl}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Security Botを追加
-              </a>
+            {!overview.installed && (overview.maximumInviteUrl || overview.inviteUrl) && (
+              <>
+                <a
+                  className="primary"
+                  href={overview.maximumInviteUrl || overview.inviteUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  最大保護でSecurity Botを追加
+                </a>
+                {overview.maximumInviteUrl && overview.inviteUrl && (
+                  <a
+                    className="secondary"
+                    href={overview.inviteUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    最小権限で追加
+                  </a>
+                )}
+              </>
             )}
             <button type="button" className="secondary" disabled={busy} onClick={() => void load()}>
               更新
