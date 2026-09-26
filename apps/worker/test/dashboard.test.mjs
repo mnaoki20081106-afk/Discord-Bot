@@ -548,6 +548,26 @@ for (const legacy of [false, true]) {
   });
 }
 
+test('legacy stock notification settings migrate as enabled', async t => {
+  const {mf,db}=await runtime(t);
+  await db.prepare(
+    'CREATE TABLE vending_stock_notifications (vending_machine_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,channel_id TEXT NOT NULL,role_id TEXT NOT NULL,updated_at INTEGER NOT NULL)'
+  ).run();
+  await db.prepare(
+    'INSERT INTO vending_stock_notifications(vending_machine_id,guild_id,channel_id,role_id,updated_at) VALUES (?,?,?,?,?)'
+  ).bind('legacy-machine',guildId,chatChannelId,targetRoleId,1).run();
+
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  assert.equal(login.status,200);
+  const list=await request(mf,`/api/guilds/${guildId}/vending`,login.body.token);
+  assert.equal(list.status,200,JSON.stringify(list.body));
+
+  const migrated=await db.prepare(
+    'SELECT enabled FROM vending_stock_notifications WHERE vending_machine_id=?'
+  ).bind('legacy-machine').first();
+  assert.equal(migrated?.enabled,1,'previously configured stock alerts should remain enabled after migration');
+});
+
 test('dashboard load upgrades tracked legacy verification panel to one click', async t => {
   const {mf,calls,db} = await runtime(t);
   const login = await request(mf, '/api/login', null, 'POST', {
