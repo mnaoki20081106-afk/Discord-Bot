@@ -4194,3 +4194,61 @@ body.dsm-touch-reordering .discord-category {
   border-radius: 11px;
   background: #0a111d;
 }
+
+
+.vending-achievement-count-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+  margin-top: 12px;
+}
+
+.vending-achievement-count-setting .toggle-row {
+  margin: 0;
+  border: 1px solid #2a3953;
+  border-radius: 11px;
+  background: #0a111d;
+}
+
+.vending-achievement-count-preview {
+  min-width: 150px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #2a3953;
+  border-radius: 11px;
+  background: #0a111d;
+}
+
+.vending-achievement-count-preview > span {
+  color: #7586a3;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.vending-achievement-count-preview > strong {
+  color: #f3f6fb;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vending-achievement-count-preview > small {
+  max-width: 260px;
+  overflow: hidden;
+  color: #92a1ba;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .vending-achievement-count-setting {
+    grid-template-columns: 1fr;
+  }
+
+  .vending-achievement-count-preview {
+    min-width: 0;
+  }
+}
