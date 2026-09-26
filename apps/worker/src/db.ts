@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '4');
+INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '5');
 
 CREATE TABLE IF NOT EXISTS guild_settings (
   guild_id TEXT PRIMARY KEY,
@@ -108,6 +108,12 @@ CREATE TABLE IF NOT EXISTS bot_guild_cache (
   seen_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bot_guild_cache_seen_idx ON bot_guild_cache(seen_at);
+
+CREATE TABLE IF NOT EXISTS bot_guild_membership (
+  guild_id TEXT PRIMARY KEY,
+  seen_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_guild_membership_seen_idx ON bot_guild_membership(seen_at);
 `;
 
 const schemaInitializations = new WeakMap<D1Database, Promise<void>>();
@@ -121,8 +127,8 @@ export async function ensureSchema(env: Env): Promise<void> {
       await env.DB.batch([
         ...statements.map(sql => env.DB.prepare(sql)),
         env.DB.prepare(`
-          INSERT INTO meta(key, value) VALUES ('schema_version', '4')
-          ON CONFLICT(key) DO UPDATE SET value='4'
+          INSERT INTO meta(key, value) VALUES ('schema_version', '5')
+          ON CONFLICT(key) DO UPDATE SET value='5'
         `)
       ]);
     })();
@@ -340,8 +346,56 @@ export async function deleteBotGuildCache(
     .bind(guildId).run();
 }
 
+async function ensureBotGuildMembershipTable(env: Env): Promise<void> {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS bot_guild_membership (
+      guild_id TEXT PRIMARY KEY,
+      seen_at INTEGER NOT NULL
+    )
+  `).run();
+}
+
+export async function rememberBotGuildMembership(
+  env: Env,
+  guildId: string
+): Promise<void> {
+  if (!/^\d+$/.test(guildId)) return;
+  await ensureBotGuildMembershipTable(env);
+  await env.DB.prepare(`
+    INSERT INTO bot_guild_membership(guild_id,seen_at) VALUES (?,?)
+    ON CONFLICT(guild_id) DO UPDATE SET seen_at=excluded.seen_at
+  `).bind(guildId,Date.now()).run();
+}
+
+export async function forgetBotGuildMembership(
+  env: Env,
+  guildId: string
+): Promise<void> {
+  await ensureBotGuildMembershipTable(env);
+  await env.DB.prepare("DELETE FROM bot_guild_membership WHERE guild_id=?")
+    .bind(guildId).run();
+}
+
+export async function replaceBotGuildMembership(
+  env: Env,
+  guildIds: string[]
+): Promise<void> {
+  await ensureBotGuildMembershipTable(env);
+  const seenAt=Date.now();
+  const unique=[...new Set(guildIds.filter(id=>/^\d+$/.test(id)))];
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM bot_guild_membership"),
+    ...unique.map(id=>
+      env.DB.prepare(
+        "INSERT INTO bot_guild_membership(guild_id,seen_at) VALUES (?,?)"
+      ).bind(id,seenAt)
+    )
+  ]);
+}
+
 export async function listKnownGuildIds(env: Env): Promise<string[]> {
   const queries = [
+    "SELECT guild_id AS id FROM bot_guild_membership",
     "SELECT guild_id AS id FROM bot_guild_cache",
     "SELECT guild_id AS id FROM guild_settings",
     "SELECT guild_id AS id FROM products",
