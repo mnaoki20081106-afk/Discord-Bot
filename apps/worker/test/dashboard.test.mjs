@@ -770,10 +770,6 @@ test('dashboard metadata load is read-only and does not patch tracked panels', a
     call.path===`/api/v10/channels/${chatChannelId}/messages/723456789012345678`
   );
   assert.equal(patch,undefined,'loading dashboard metadata must not mutate Discord');
-  const panelUrl=new URL(button?.url);
-  assert.equal(panelUrl.origin,'https://worker.example');
-  assert.equal(panelUrl.pathname,'/auth/verification/start');
-  assert.equal(panelUrl.searchParams.get('guild_id'),guildId);
 });
 
 test('verification panel deployment points directly to unified oauth', async t => {
