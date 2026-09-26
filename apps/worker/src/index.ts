@@ -117,7 +117,7 @@ async function sessionFromRequest(request:Request,env:Env):Promise<DashboardActo
 async function requireMainSecurityLease(
   env:Env,
   guildId:string,
-  scope:"dashboard_edit"|"restore"|"all"="dashboard_edit",
+  scope:"dashboard_edit"|"restore"="dashboard_edit",
   seconds=30
 ):Promise<void>{
   if(!securityBridgeConfigured(env)) return;

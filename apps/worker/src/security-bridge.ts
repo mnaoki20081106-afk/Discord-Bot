@@ -101,7 +101,7 @@ export async function securityBridgeJson<T>(
 export async function openSecurityMaintenanceLease(
   env: Env,
   guildId: string,
-  scope: "dashboard_edit" | "restore" | "all",
+  scope: "dashboard_edit" | "restore",
   seconds: number
 ): Promise<{ id: string; expiresAt: number } | null> {
   if (!securityBridgeConfigured(env)) return null;
