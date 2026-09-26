@@ -429,7 +429,7 @@ for (const legacy of [false, true]) {
     assert.deepEqual(results[1].body,[]);
     assert.deepEqual(results[2].body,[]);
     const version = await db.prepare("SELECT value FROM meta WHERE key='schema_version'").first();
-    assert.equal(version.value,'4');
+    assert.equal(version.value,'5');
     const vm = await request(mf,`/api/guilds/${guildId}/vending`,token,'POST',{name:'Local test machine'});
     assert.equal(vm.status,201,JSON.stringify(vm.body));
     const vmList = await request(mf,`/api/guilds/${guildId}/vending`,token);
