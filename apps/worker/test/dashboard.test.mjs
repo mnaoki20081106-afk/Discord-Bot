@@ -572,6 +572,33 @@ test('legacy stock notification settings migrate as enabled', async t => {
   assert.equal(migrated?.enabled,1,'previously configured stock alerts should remain enabled after migration');
 });
 
+test('achievement count display adopts an existing channel suffix count', async t => {
+  const {mf,calls}=await runtime(t,{chatChannelName:'自販機実績4552件'});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  assert.equal(login.status,200);
+  const token=login.body.token;
+  const machine=await request(
+    mf,`/api/guilds/${guildId}/vending`,token,'POST',{name:'Existing count machine'}
+  );
+  assert.equal(machine.status,201,JSON.stringify(machine.body));
+
+  const saved=await request(
+    mf,`/api/guilds/${guildId}/vending/achievement-room`,token,'PUT',
+    {rooms:[{
+      channelId:chatChannelId,
+      machineIds:[machine.body.id],
+      countDisplayEnabled:true
+    }]}
+  );
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.equal(saved.body.rooms[0].achievement_count,4552);
+  assert.equal(saved.body.rooms[0].base_channel_name,'自販機実績');
+  const rename=calls.filter(call=>
+    call.method==='PATCH'&&call.path===`/api/v10/channels/${chatChannelId}`
+  ).at(-1);
+  assert.equal(rename?.body?.name,'自販機実績4552件');
+});
+
 test('achievement channel count display defaults off and restores channel name', async t => {
   const {mf,calls,db}=await runtime(t);
   const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
