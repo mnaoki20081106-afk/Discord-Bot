@@ -340,6 +340,41 @@ export async function deleteBotGuildCache(
     .bind(guildId).run();
 }
 
+export async function listKnownGuildIds(env: Env): Promise<string[]> {
+  const queries = [
+    "SELECT guild_id AS id FROM bot_guild_cache",
+    "SELECT guild_id AS id FROM guild_settings",
+    "SELECT guild_id AS id FROM products",
+    "SELECT guild_id AS id FROM payments",
+    "SELECT source_guild_id AS id FROM guild_backups",
+    "SELECT target_guild_id AS id FROM guild_restore_jobs",
+    "SELECT guild_id AS id FROM member_recovery_tokens",
+    "SELECT guild_id AS id FROM panel_deployments",
+    "SELECT guild_id AS id FROM vending_machines",
+    "SELECT guild_id AS id FROM vending_stock_notifications",
+    "SELECT guild_id AS id FROM vending_orders",
+    "SELECT guild_id AS id FROM vending_achievement_rooms",
+    "SELECT guild_id AS id FROM vending_achievement_routes",
+    "SELECT guild_id AS id FROM member_activity_settings",
+    "SELECT guild_id AS id FROM member_activity_members"
+  ];
+
+  const ids = new Set<string>();
+  for (const sql of queries) {
+    try {
+      const result = await env.DB.prepare(sql + " LIMIT 250").all<{ id:string }>();
+      for (const row of result.results ?? []) {
+        const id = String(row.id ?? "");
+        if (/^\d+$/.test(id)) ids.add(id);
+      }
+    } catch {
+      // Optional feature tables are created lazily. Missing tables simply mean
+      // there is no guild evidence from that subsystem yet.
+    }
+  }
+  return [...ids];
+}
+
 export async function listProducts(env: Env, guildId: string): Promise<ProductRow[]> {
   const result = await env.DB.prepare(
     "SELECT * FROM products WHERE guild_id=? AND active=1 ORDER BY created_at DESC"
