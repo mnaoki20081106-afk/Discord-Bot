@@ -4186,3 +4186,11 @@ body.dsm-touch-reordering .discord-category {
     width: 100%;
   }
 }
+
+
+.vending-notify-toggle {
+  margin: 10px 0 14px;
+  border: 1px solid #273650;
+  border-radius: 11px;
+  background: #0a111d;
+}
