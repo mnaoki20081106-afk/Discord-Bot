@@ -57,7 +57,7 @@ Example value (do not commit this):
 
 Pass the secret name, not its value, as `secret_bundle_name` when running Bot Factory.
 
-For Cloudflare, the bundle is uploaded with `wrangler secret bulk`. For Oracle, it becomes the Docker container's protected env file on the host.
+For Cloudflare, the bundle is uploaded atomically with the deployment via `wrangler deploy --secrets-file`. For Oracle, it becomes the Docker container's protected env file on the host.
 
 ## Typical runs
 
@@ -81,7 +81,7 @@ This resolves to Cloudflare.
 
 ### New persistent Discord Gateway bot
 
-A repository with a `Dockerfile` or Node `package.json` and no Wrangler config resolves to Oracle. If no Dockerfile exists, the Factory creates an ephemeral Node 22 Dockerfile during deployment; it is not committed to the source repository.
+A repository with a `Dockerfile` or Node `package.json` and no Wrangler config resolves to Oracle. If no Dockerfile exists, the Factory creates an ephemeral Node 22 Dockerfile during deployment; it is not committed to the source repository. Cloudflare Worker projects that depend on Durable Objects, D1, or other Worker-only bindings are not treated as portable Node apps.
 
 ## Safety / limits
 
