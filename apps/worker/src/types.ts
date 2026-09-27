@@ -13,6 +13,7 @@ export interface Env {
   SECURITY_API_BASE_URL?: string;
   SECURITY_SERVICE?: Fetcher;
   SECURITY_BRIDGE_SECRET?: string;
+  SHIIRE_BRIDGE_SECRET?: string;
   PAYPAY_API_KEY?: string;
   PAYPAY_API_SECRET?: string;
   PAYPAY_MERCHANT_ID?: string;
