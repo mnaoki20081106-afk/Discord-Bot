@@ -190,6 +190,37 @@ export async function handleSupplyBridge(
   try{
     if(request.method==="GET"){
       await verifySignedRequest(request,env,url,"");
+
+      if(url.pathname==="/api/vending/supply/catalog"){
+        const rows=(await env.DB.prepare(`
+          SELECT
+            p.id AS product_id,
+            p.name AS product_name,
+            p.vending_machine_id,
+            m.name AS vending_machine_name,
+            m.guild_id,
+            COALESCE((
+              SELECT COUNT(*)
+              FROM vending_stock s
+              WHERE s.product_id=p.id AND s.state='available'
+            ),0) AS available
+          FROM vending_products p
+          JOIN vending_machines m ON m.id=p.vending_machine_id
+          WHERE p.active=1
+            AND p.infinite_stock=0
+            AND m.active=1
+          ORDER BY m.created_at ASC,p.created_at ASC
+        `).all<{
+          product_id:string;
+          product_name:string;
+          vending_machine_id:string;
+          vending_machine_name:string;
+          guild_id:string;
+          available:number;
+        }>()).results;
+        return json(env,{products:rows});
+      }
+
       const stockMatch=url.pathname.match(/^\/api\/vending\/supply\/products\/([^/]+)\/stock$/);
       if(!stockMatch) return json(env,{error:"not_found"},404);
       const productId=decodeURIComponent(stockMatch[1]!);
