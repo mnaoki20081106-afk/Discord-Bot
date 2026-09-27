@@ -2939,7 +2939,13 @@ async function handlePayPayWebhook(request:Request,env:Env,ctx:ExecutionContext)
   return new Response("OK",{status:200});
 }
 
-async function neutralize(env:Env,guildId:string,userId:string,settings:GuildSettings):Promise<void>{
+async function neutralize(
+  env:Env,
+  guildId:string,
+  userId:string,
+  settings:GuildSettings,
+  context:{structuralDestruction:boolean}
+):Promise<void>{
   if(settings.trustedUserIds.includes(userId)) return;
   const guild=await botJson<{owner_id:string}>(env,`/guilds/${guildId}`);
   if(guild.owner_id===userId) return;
@@ -2948,6 +2954,18 @@ async function neutralize(env:Env,guildId:string,userId:string,settings:GuildSet
     botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`)
   ]);
   if(member.roles.some(id=>settings.trustedRoleIds.includes(id))) return;
+
+  if(member.user?.bot===true&&!context.structuralDestruction){
+    // A moderation/security bot can legitimately issue many bans during a
+    // raid. Do not strip its manually assigned privileged roles unless the
+    // same burst also contains structural destruction (channel/role deletes).
+    if(settings.logChannelId){
+      await sendMessage(env,settings.logChannelId,{
+        content:`ℹ️ Anti-Nuke: <@${userId}> はBotによる大量BANを実行しましたが、構造破壊を伴わないため自動ロール剥奪を行いませんでした。`
+      }).catch(()=>undefined);
+    }
+    return;
+  }
 
   // Human administrators intentionally outrank every bot. The legacy fallback
   // must not fight those operators when the independent Security Bot is absent.
@@ -3013,21 +3031,39 @@ async function auditWatch(env:Env):Promise<void>{
       if(entry.user_id&&[12,22,32].includes(entry.action_type)) fresh.push(entry);
     }
     await setAuditCursor(env,row.guild_id,newest);
-    const byUser=new Map<string,number[]>();
+    const byUser=new Map<string,Array<{at:number;actionType:number}>>();
     for(const entry of fresh){
-      const times=byUser.get(entry.user_id!)??[];
-      times.push(snowflakeTime(entry.id));
-      byUser.set(entry.user_id!,times);
+      const events=byUser.get(entry.user_id!)??[];
+      events.push({
+        at:snowflakeTime(entry.id),
+        actionType:entry.action_type
+      });
+      byUser.set(entry.user_id!,events);
     }
     const windowMs=settings.nukeWindowSeconds*1000;
-    for(const [userId,times] of byUser){
-      times.sort((a,b)=>a-b);
-      let left=0,hit=false;
-      for(let right=0;right<times.length;right++){
-        while(times[right]!-times[left]!>windowMs) left++;
-        if(right-left+1>=settings.nukeActions){hit=true;break;}
+    for(const [userId,events] of byUser){
+      events.sort((a,b)=>a.at-b.at);
+      let left=0;
+      let hitWindow:Array<{at:number;actionType:number}>|null=null;
+      for(let right=0;right<events.length;right++){
+        while(events[right]!.at-events[left]!.at>windowMs) left++;
+        if(right-left+1>=settings.nukeActions){
+          hitWindow=events.slice(left,right+1);
+          break;
+        }
       }
-      if(hit) await neutralize(env,row.guild_id,userId,settings).catch(console.error);
+      if(hitWindow){
+        const structuralDestruction=hitWindow.some(
+          event=>event.actionType===12||event.actionType===32
+        );
+        await neutralize(
+          env,
+          row.guild_id,
+          userId,
+          settings,
+          {structuralDestruction}
+        ).catch(console.error);
+      }
     }
   }
 }
