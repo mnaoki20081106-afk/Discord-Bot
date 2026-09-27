@@ -3,6 +3,7 @@ import { botFetch, botJson } from "./discord";
 import { getDashboardSession } from "./db";
 import { json, randomId, sha256Hex } from "./utils";
 import { recordPanelDeployment } from "./backup-db";
+import { handleSupplyBridge } from "./supply-bridge";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
   deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementRoomsForMachine, getCoupon,
@@ -191,6 +192,8 @@ function panelEmbed(vm:Vm,products:Array<VmProduct&{stock_count:number}>){
 
 export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<Response|null>{
   await ensureVendingSchema(env);
+  const supplyResponse=await handleSupplyBridge(request,env,url);
+  if(supplyResponse) return supplyResponse;
 
   const list=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending$/);
   if(list){
