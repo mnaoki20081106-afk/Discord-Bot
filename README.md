@@ -147,7 +147,10 @@ DISCORD_BOT_TOKEN
 DISCORD_CLIENT_SECRET
 SESSION_ENCRYPTION_KEY
 SECURITY_BRIDGE_SECRET
+SHIIRE_BRIDGE_SECRET
 ```
+
+`SHIIRE_BRIDGE_SECRET` は Discord-Shiire と Main Worker の両方へ同じ32文字以上のランダム値を Worker Secret として設定します。仕入れBotはこのSecretで署名した内部APIから有限在庫だけを納品します。
 
 Security Bot連携時は、Main Workerの通常Environment Variableとして次も設定します。
 
