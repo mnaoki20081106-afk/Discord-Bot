@@ -38,12 +38,11 @@ if [[ "$WRANGLER_CONFIG" == "auto" || ! -f "$WRANGLER_CONFIG" ]]; then
   exit 1
 fi
 
-echo "Deploying $BOT_NAME to Cloudflare with $WRANGLER_CONFIG"
-npx wrangler deploy --config "$WRANGLER_CONFIG"
-
+tmp_json=""
+SECRET_ARGS=()
 if [[ -n "${BOT_SECRET_BUNDLE:-}" ]]; then
   tmp_json="$(mktemp)"
-  trap 'rm -f "$tmp_json"' EXIT
+  trap '[[ -n "$tmp_json" ]] && rm -f "$tmp_json"' EXIT
   BOT_SECRET_BUNDLE="$BOT_SECRET_BUNDLE" node - "$tmp_json" <<'NODE'
 const fs = require('node:fs');
 const out = process.argv[2];
@@ -71,10 +70,14 @@ for (const [key, value] of Object.entries(obj)) {
 }
 fs.writeFileSync(out, JSON.stringify(obj), {mode: 0o600});
 NODE
-  if [[ "$(node -e 'const o=JSON.parse(process.argv[1]); console.log(Object.keys(o).length)' "$BOT_SECRET_BUNDLE")" -gt 0 ]]; then
-    npx wrangler secret bulk "$tmp_json" --config "$WRANGLER_CONFIG"
+  secret_count="$(node -e 'const o=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); console.log(Object.keys(o).length)' "$tmp_json")"
+  if [[ "$secret_count" -gt 0 ]]; then
+    SECRET_ARGS=(--secrets-file "$tmp_json")
   fi
 fi
+
+echo "Deploying $BOT_NAME to Cloudflare with $WRANGLER_CONFIG"
+npx wrangler deploy --config "$WRANGLER_CONFIG" --name "$BOT_NAME" "${SECRET_ARGS[@]}"
 
 if [[ -n "$HEALTH_URL" ]]; then
   echo "Checking $HEALTH_URL"
