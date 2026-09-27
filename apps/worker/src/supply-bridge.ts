@@ -70,7 +70,7 @@ async function verifySignedRequest(
   const valid=await crypto.subtle.verify(
     "HMAC",
     key,
-    signatureBytes,
+    signatureBytes.buffer as ArrayBuffer,
     new TextEncoder().encode(canonical)
   );
   if(!valid) throw new Error("INVALID_SIGNATURE");
