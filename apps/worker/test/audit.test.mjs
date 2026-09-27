@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import {Miniflare} from 'miniflare';
 
 const source='100000000000000001', target='100000000000000002', bot='100000000000000003';
-const roleA='200000000000000001',roleB='200000000000000002';
+const roleA='200000000000000001',roleB='200000000000000002',dangerRole='200000000000000099';
 const category='300000000000000001',channelA='300000000000000002',channelB='300000000000000003';
 const member='400000000000000001';
 async function fixture(t,options={}){
@@ -14,6 +14,15 @@ async function fixture(t,options={}){
       {id:roleB,name:'Same name',permissions:'2048',position:2}],
     [target]:[{id:target,name:'@everyone',permissions:'0',position:0}]
   };
+  if(options.actorDangerousRole){
+    roles[source].push({
+      id:dangerRole,
+      name:'Actor admin',
+      permissions:(1n<<3n).toString(),
+      position:3,
+      managed:false
+    });
+  }
   const channels={
     [source]:[{id:category,name:'Category',type:4,position:0,permission_overwrites:[]},
       {id:channelA,name:'same',type:0,parent_id:category,position:1,permission_overwrites:[{id:roleA,type:0,allow:'1024',deny:'0'}]},
@@ -75,7 +84,10 @@ async function fixture(t,options={}){
         const row={id:String(600000000000000000n+BigInt(++state.next)),...body};channels[id].push(row);return Response.json(row);
       }
       if(path==='/members') return Response.json([{user:{id:member,username:'Existing'},roles:[roleA,roleB],nick:'Saved nick'}]);
-      if(path===`/members/${member}`) return Response.json({roles:[]});
+      if(path===`/members/${member}`) return Response.json({
+        roles:options.actorDangerousRole?[dangerRole]:[],
+        user:{id:member,bot:Boolean(options.actorBot)}
+      });
       if(path.startsWith(`/members/${member}/roles/`)) return new Response(null,{status:204});
       if(path===`/members/${bot}`) return Response.json({roles:[]});
       if(['/emojis','/stickers','/bans'].includes(path)) return Response.json([]);
@@ -96,7 +108,9 @@ async function fixture(t,options={}){
       if(method==='GET') return Response.json({...row,guild_id:guildEntry[0]});
       if(method==='PATCH'){Object.assign(row,body);return Response.json(row);}
     }
-    if(p.endsWith('/audit-logs')) return Response.json({audit_log_entries:[]});
+    if(p.endsWith('/audit-logs')) return Response.json({
+      audit_log_entries:options.auditEntries??[]
+    });
     return Response.json({message:'Unexpected fixture request: '+method+' '+p},{status:404});
   }});
   t.after(()=>mf.dispose()); db=await mf.getD1Database('DB');
@@ -308,6 +322,70 @@ test('large product collections are captured completely and split into decryptab
  assert.equal(backup.schemaVersion,2);
 });
 
+
+function auditSnowflake(ms,increment=0){
+  return ((BigInt(ms-1420070400000)<<22n)+BigInt(increment)).toString();
+}
+
+test('fallback anti-nuke does not strip a moderation bot for a mass-ban burst alone',async t=>{
+  const base=Date.now()-5000;
+  const auditEntries=Array.from({length:4},(_,index)=>({
+    id:auditSnowflake(base+index*1000,index+1),
+    action_type:22,
+    user_id:member
+  })).reverse();
+  const f=await fixture(t,{
+    auditEntries,
+    actorBot:true,
+    actorDangerousRole:true
+  });
+  await f.request(`/api/guilds/${source}/settings`,'PUT',{
+    securityEnabled:true,
+    antiNuke:true,
+    nukeActions:4,
+    nukeWindowSeconds:15
+  });
+  await f.db.prepare(
+    'INSERT INTO audit_cursors(guild_id,last_entry_id,updated_at) VALUES (?,?,?)'
+  ).bind(source,auditSnowflake(base-1000),Date.now()).run();
+
+  await f.tick();
+
+  const stripped=f.state.calls.filter(
+    x=>x.method==='DELETE'&&x.p===`/guilds/${source}/members/${member}/roles/${dangerRole}`
+  );
+  assert.equal(stripped.length,0);
+});
+
+test('fallback anti-nuke still strips a destructive bot after channel deletion burst',async t=>{
+  const base=Date.now()-5000;
+  const auditEntries=Array.from({length:4},(_,index)=>({
+    id:auditSnowflake(base+index*1000,index+1),
+    action_type:12,
+    user_id:member
+  })).reverse();
+  const f=await fixture(t,{
+    auditEntries,
+    actorBot:true,
+    actorDangerousRole:true
+  });
+  await f.request(`/api/guilds/${source}/settings`,'PUT',{
+    securityEnabled:true,
+    antiNuke:true,
+    nukeActions:4,
+    nukeWindowSeconds:15
+  });
+  await f.db.prepare(
+    'INSERT INTO audit_cursors(guild_id,last_entry_id,updated_at) VALUES (?,?,?)'
+  ).bind(source,auditSnowflake(base-1000),Date.now()).run();
+
+  await f.tick();
+
+  const stripped=f.state.calls.filter(
+    x=>x.method==='DELETE'&&x.p===`/guilds/${source}/members/${member}/roles/${dangerRole}`
+  );
+  assert.equal(stripped.length,1);
+});
 
 test('Security bridge authorizes Main mutations and restore batches with short leases',async t=>{
   const f=await fixture(t,{securityBridge:true});

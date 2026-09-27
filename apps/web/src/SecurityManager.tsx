@@ -755,7 +755,7 @@ export default function SecurityManager({
               response: { ...draft.response, kickMaliciousBots: value }
             })}
             title="攻撃BotをKick"
-            description="Main/管理対象Botは自動Kickしません。その他Botも極端な破壊操作が確認された場合だけ対象にします"
+            description="他のSecurity/Moderation Botによる大量BAN・Kickだけでは自動Kickしません。チャンネル/ロールの極端な破壊が確認されたBotは対象にします"
             disabled={overview.bridgeProtection?.coreLocked}
           />
           <Toggle
