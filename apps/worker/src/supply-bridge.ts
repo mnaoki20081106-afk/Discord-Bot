@@ -112,10 +112,25 @@ async function reserveNewFingerprints(
     content,
     hash:await sha256Hex(content)
   })));
+
+  // Also reject content that already exists in vending_stock, including
+  // manually-added or previously sold rows, before reserving fingerprints.
+  const existingContents=new Set<string>();
+  for(let i=0;i<rows.length;i+=40){
+    const chunk=rows.slice(i,i+40);
+    if(chunk.length===0) continue;
+    const placeholders=chunk.map(()=>"?").join(",");
+    const found=(await env.DB.prepare(
+      "SELECT content FROM vending_stock WHERE product_id=? AND content IN ("+placeholders+")"
+    ).bind(productId,...chunk.map(row=>row.content)).all<{content:string}>()).results;
+    for(const row of found) existingContents.add(row.content);
+  }
+
+  const freshRows=rows.filter(row=>!existingContents.has(row.content));
   const accepted:Array<{content:string;hash:string}>=[];
   const now=Date.now();
-  for(let i=0;i<rows.length;i+=50){
-    const chunk=rows.slice(i,i+50);
+  for(let i=0;i<freshRows.length;i+=50){
+    const chunk=freshRows.slice(i,i+50);
     const results=await env.DB.batch(chunk.map(row=>
       env.DB.prepare(
         "INSERT OR IGNORE INTO vending_supply_fingerprints(product_id,content_hash,created_at) VALUES (?,?,?)"
