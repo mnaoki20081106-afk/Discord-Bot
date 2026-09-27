@@ -32,7 +32,10 @@ if (!['cloudflare', 'oracle'].includes(provider)) {
   throw new Error(`Unsupported provider: ${provider}`);
 }
 if (provider === 'cloudflare' && runtime !== 'worker') {
-  throw new Error('Cloudflare provider currently requires runtime=worker. Use Oracle for a persistent Node/Gateway process.');
+  throw new Error('Cloudflare provider requires runtime=worker. Use Oracle for a persistent Node/Gateway process.');
+}
+if (provider === 'oracle' && runtime !== 'node') {
+  throw new Error('Oracle provider requires runtime=node. Cloudflare Worker APIs such as Durable Objects and D1 are not portable to a generic VM without an adapter.');
 }
 
 process.stdout.write(`provider=${provider}\nruntime=${runtime}\n`);
