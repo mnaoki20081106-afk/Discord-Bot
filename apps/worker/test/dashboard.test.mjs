@@ -833,6 +833,36 @@ test('verification panel deployment points directly to unified oauth', async t =
   assert.ok(deployment?.message_id);
 });
 
+test('verification panel deployment accepts and persists current role selection', async t => {
+  const {mf,calls} = await runtime(t);
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+
+  const deployed=await request(
+    mf,
+    `/api/guilds/${guildId}/verification/panel`,
+    login.body.token,
+    'POST',
+    {channelId:chatChannelId,verifiedRoleId:targetRoleId}
+  );
+  assert.equal(deployed.status,200,JSON.stringify(deployed.body));
+
+  const settings=await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    login.body.token
+  );
+  assert.equal(settings.status,200,JSON.stringify(settings.body));
+  assert.equal(settings.body.verifiedRoleId,targetRoleId);
+
+  const post=calls.find(call=>
+    call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`
+  );
+  assert.ok(post?.body,'current dashboard role selection must allow panel deployment');
+});
+
 test('verification panel oauth stores recovery access before assigning the role', async t => {
   const {mf,calls,db,interactionPrivateKey,verificationMemberRoles} = await runtime(t);
   const login = await request(mf, '/api/login', null, 'POST', {
