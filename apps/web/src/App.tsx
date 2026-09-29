@@ -427,9 +427,15 @@ export default function App() {
     setFeedback({ kind: "info", message: label + "をDiscordへ送信中..." });
     setError(null);
     try {
+      const panelRequest: { channelId: string; verifiedRoleId?: string | null } = {
+        channelId
+      };
+      if (kind === "verification" && settings) {
+        panelRequest.verifiedRoleId = settings.verifiedRoleId;
+      }
       await api(`/api/guilds/${selectedId}/${kind}/panel`, {
         method: "POST",
-        body: JSON.stringify({ channelId })
+        body: JSON.stringify(panelRequest)
       });
       const channelName =
         meta?.channels.find((channel) => channel.id === channelId)?.name ?? channelId;
