@@ -49,3 +49,28 @@ test("Security access repair is constrained to the current guild and channel", (
   );
   assert.match(helper, /method:"POST"/);
 });
+
+
+test("ticket creation remains available when the Security bridge is offline", () => {
+  const route = sliceBetween(
+    'if(id==="ticket:create"){',
+    'if(id==="ticket:close"){'
+  );
+
+  assert.doesNotMatch(
+    route,
+    /requireMainSecurityLease/,
+    "non-destructive ticket creation must not depend on Security availability"
+  );
+  assert.match(route, /createTicketFromInteraction/);
+});
+
+test("deferred Discord permission failures surface an actionable message", () => {
+  const helper = sliceBetween(
+    "function deferredInteractionErrorMessage(",
+    "async function failDeferredInteraction("
+  );
+
+  assert.match(helper, /error\.status===403/);
+  assert.match(helper, /チャンネルの管理/);
+});

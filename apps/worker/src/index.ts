@@ -1251,6 +1251,19 @@ async function finishDeferredInteraction(
   });
 }
 
+function deferredInteractionErrorMessage(error:unknown):string{
+  if(error instanceof HttpError) return error.message;
+  if(error instanceof DiscordApiError){
+    if(error.status===403){
+      return "Discord側で操作を拒否されました。BOTロールの「チャンネルの管理」「チャンネルを見る」「メッセージを送信」を確認して、もう一度お試しください。";
+    }
+    if(error.status===429){
+      return "Discordのレート制限中です。少し待ってからもう一度お試しください。";
+    }
+  }
+  return "処理中にエラーが発生しました。もう一度お試しください。";
+}
+
 async function failDeferredInteraction(
   interaction:any,
   error:unknown
@@ -1263,7 +1276,7 @@ async function failDeferredInteraction(
   });
   try{
     await patchOriginalInteraction(interaction,{
-      content:"処理中にエラーが発生しました。もう一度お試しください。",
+      content:deferredInteractionErrorMessage(error),
       components:[]
     });
   }catch(updateError){
@@ -1303,9 +1316,12 @@ async function confirmAndDeliver(env:Env,payment:PaymentRow):Promise<void>{
 }
 
 async function createTicketFromInteraction(env:Env,interaction:any):Promise<Response>{
-  const guildId=interaction.guild_id as string;
-  const userId=interaction.member?.user?.id as string;
-  const username=(interaction.member?.user?.username as string)||userId.slice(-6);
+  const guildId=String(interaction.guild_id??"");
+  const userId=String(interaction.member?.user?.id??"");
+  if(!/^\d+$/.test(guildId)||!/^\d+$/.test(userId)){
+    throw new HttpError(400,"チケット作成に必要なDiscordサーバー/ユーザー情報を取得できませんでした。");
+  }
+  const username=String(interaction.member?.user?.username??"")||userId.slice(-6);
   const channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
   const topic=`dsm-ticket:${userId}`;
   const existing=channels.find(c=>c.type===0&&c.topic===topic);
@@ -1409,8 +1425,9 @@ async function processInteraction(
     }
     if(id==="ticket:create"){
       await ensureSchema(env);
-      const guildId=String(interaction.guild_id??"");
-      if(guildId) await requireMainSecurityLease(env,guildId,"dashboard_edit",30);
+      // Ticket creation is a non-destructive Main Bot channel_create action.
+      // Discord-Security already exempts protected service bots from that class,
+      // so ticket availability must not depend on the Security bridge being online.
       return createTicketFromInteraction(env,interaction);
     }
     if(id==="ticket:close"){
