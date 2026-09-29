@@ -1350,9 +1350,9 @@ async function oauthTokenRequest(
 }
 
 async function accessTokenForRecoveryMember(
-  env:Env,sourceGuildId:string,row:RecoveryMemberRow
+  env:Env,sourceGuildId:string,row:RecoveryMemberRow,forceRefresh=false
 ):Promise<string>{
-  if(row.token_expires_at>Date.now()+60*60_000){
+  if(!forceRefresh&&row.token_expires_at>Date.now()+60*60_000){
     return decrypt(env.SESSION_ENCRYPTION_KEY,row.access_token_enc);
   }
   let refreshed;
@@ -1376,6 +1376,57 @@ async function accessTokenForRecoveryMember(
   return refreshed.access_token;
 }
 
+type MemberJoinFailure =
+  |"token_invalid"
+  |"member_unavailable"
+  |"guild_unavailable"
+  |"retryable";
+
+class MemberJoinError extends Error{
+  constructor(
+    public kind:MemberJoinFailure,
+    public status:number,
+    public code:number|null,
+    message:string
+  ){
+    super(message);
+  }
+}
+
+function discordErrorPayload(text:string):{code:number|null;message:string}{
+  try{
+    const parsed=JSON.parse(text) as {code?:unknown;message?:unknown};
+    const numeric=Number(parsed.code);
+    return {
+      code:Number.isFinite(numeric)?numeric:null,
+      message:String(parsed.message??text).slice(0,180)
+    };
+  }catch{
+    return {code:null,message:text.slice(0,180)};
+  }
+}
+
+function classifyMemberJoinFailure(status:number,code:number|null):MemberJoinFailure{
+  // Discord-Backup-Bot v9 treats 50025 as a stale OAuth access token and
+  // refreshes before retrying the same member. Preserve that behavior here.
+  if(code===50025) return "token_invalid";
+  if(status===429||status>=500) return "retryable";
+
+  // These failures are specific to this user and must not abort the whole
+  // restore batch.
+  if([40007,10013,30001,340015].includes(code??-1)){
+    return "member_unavailable";
+  }
+
+  // These point at the destination guild / bot setup rather than one member.
+  if([10004,400002,50001,50013].includes(code??-1)){
+    return "guild_unavailable";
+  }
+  if(status===401||status===403) return "guild_unavailable";
+  if(status===400||status===404) return "member_unavailable";
+  return "retryable";
+}
+
 async function addGuildMember(
   env:Env,targetGuildId:string,userId:string,accessToken:string
 ):Promise<"added"|"already">{
@@ -1384,14 +1435,46 @@ async function addGuildMember(
   });
   if(response.status===201) return "added";
   if(response.status===204) return "already";
+
   const text=await response.text().catch(()=>"");
-  if(response.status===403){
-    throw new BackupHttpError(403,"メンバー復元をDiscordが拒否しました。BOTの権限と対象サーバーを確認してください: "+text.slice(0,120));
+  const payload=discordErrorPayload(text);
+  throw new MemberJoinError(
+    classifyMemberJoinFailure(response.status,payload.code),
+    response.status,
+    payload.code,
+    "Discord member add "+response.status+
+      (payload.code===null?"":" / code "+payload.code)+
+      (payload.message?": "+payload.message:"")
+  );
+}
+
+async function joinRecoveryMember(
+  env:Env,
+  sourceGuildId:string,
+  targetGuildId:string,
+  row:RecoveryMemberRow
+):Promise<"added"|"already">{
+  const firstToken=await accessTokenForRecoveryMember(env,sourceGuildId,row);
+  try{
+    return await addGuildMember(env,targetGuildId,row.user_id,firstToken);
+  }catch(error){
+    if(!(error instanceof MemberJoinError)||error.kind!=="token_invalid") throw error;
   }
-  if(response.status===429||response.status>=500){
-    throw new BackupHttpError(503,"Discord APIが一時的にメンバー追加を受け付けませんでした");
+
+  // A token can be rejected before its stored expiry. Force one refresh and
+  // retry exactly once, matching the reliable v9 restore behavior.
+  const refreshedToken=await accessTokenForRecoveryMember(
+    env,sourceGuildId,row,true
+  );
+  try{
+    return await addGuildMember(env,targetGuildId,row.user_id,refreshedToken);
+  }catch(error){
+    if(error instanceof MemberJoinError&&error.kind==="token_invalid"){
+      await markRecoveryMemberRevoked(env,sourceGuildId,row.user_id);
+      throw new BackupHttpError(410,"invalid_grant");
+    }
+    throw error;
   }
-  throw new BackupHttpError(502,"メンバー追加失敗 "+response.status+": "+text.slice(0,120));
 }
 
 async function restoreOneMember(
@@ -1419,8 +1502,9 @@ async function restoreOneMember(
     if(present){
       stats.membersAlreadyPresent++;
     }else{
-      const token=await accessTokenForRecoveryMember(env,snapshot.sourceGuild.id,recovery!);
-      const result=await addGuildMember(env,job.target_guild_id,member.user_id,token);
+      const result=await joinRecoveryMember(
+        env,snapshot.sourceGuild.id,job.target_guild_id,recovery!
+      );
       if(result==="added") stats.membersAdded++;
       else stats.membersAlreadyPresent++;
     }
@@ -1455,11 +1539,33 @@ async function restoreOneMember(
   }catch(error){
     if(error instanceof BackupHttpError&&error.status===410){
       stats.membersRevoked++;
-    }else if(error instanceof BackupHttpError&&error.status===403){
+    }else if(error instanceof MemberJoinError&&error.kind==="member_unavailable"){
+      if(error.code===10013){
+        await markRecoveryMemberRevoked(env,snapshot.sourceGuild.id,member.user_id);
+        stats.membersRevoked++;
+      }else{
+        stats.membersFailed++;
+      }
+      stats.warnings.push(
+        "メンバー "+member.user_id+" はDiscord側の参加制限により復元をスキップしました"+
+        (error.code===null?"":" (code "+error.code+")")+"。"
+      );
+    }else if(error instanceof MemberJoinError&&error.kind==="guild_unavailable"){
+      throw new BackupHttpError(
+        error.status===401?401:403,
+        "メンバー復元をDiscordが拒否しました。復元先サーバーとBOT権限を確認してください: "+
+        error.message.slice(0,180)
+      );
+    }else if(error instanceof MemberJoinError&&error.kind==="retryable"){
+      throw new BackupHttpError(
+        503,
+        "Discord APIが一時的にメンバー追加を受け付けませんでした"
+      );
+    }else if(error instanceof BackupHttpError&&[403,503].includes(error.status)){
       throw error;
     }else{
       stats.membersFailed++;
-      stats.warnings.push("メンバー "+member.user_id+" の復元を後で再試行できます。");
+      stats.warnings.push("メンバー "+member.user_id+" の復元に失敗しました。");
     }
   }
   await updateRestoreJob(env,job.id,{result_json:JSON.stringify(stats)});

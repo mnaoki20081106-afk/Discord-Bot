@@ -23,6 +23,8 @@ async function runtime(t, options = {}) {
   const publicKeyDer = interactionPublicKey.export({format:'der',type:'spki'});
   const discordPublicKey = Buffer.from(publicKeyDer).subarray(-32).toString('hex');
   let verificationMemberRoles = [...(options.verificationMemberRoles ?? [])];
+  let verificationMemberLookups = 0;
+  let memberAddAttempts = 0;
   let rateLimitGuild = true;
   let guildListCalls = 0;
   let chatChannelName = options.chatChannelName ?? 'chat';
@@ -53,10 +55,13 @@ async function runtime(t, options = {}) {
         request.method === 'POST' &&
         url.pathname === '/api/v10/oauth2/token'
       ) {
+        const form = new URLSearchParams(await request.clone().text());
+        calls[calls.length-1].body=Object.fromEntries(form.entries());
+        const refresh=form.get('grant_type')==='refresh_token';
         return Response.json({
-          access_token:'verification-access-token',
-          refresh_token:'verification-refresh-token',
-          expires_in:3600
+          access_token:refresh?'refreshed-access-token':'verification-access-token',
+          refresh_token:refresh?'rotated-refresh-token':'verification-refresh-token',
+          expires_in:options.oauthExpiresIn ?? 3600
         });
       }
       if (url.pathname.endsWith('/users/@me')) {
@@ -217,7 +222,37 @@ async function runtime(t, options = {}) {
         request.method === 'GET' &&
         url.pathname === `/api/v10/guilds/${guildId}/members/${verificationUserId}`
       ) {
+        verificationMemberLookups++;
+        if (
+          Number.isInteger(options.verificationMemberMissingAfter) &&
+          verificationMemberLookups > options.verificationMemberMissingAfter
+        ) {
+          return Response.json({message:'Unknown Member',code:10007},{status:404});
+        }
         return Response.json({roles:[...verificationMemberRoles]});
+      }
+      if (
+        request.method === 'PUT' &&
+        url.pathname === `/api/v10/guilds/${guildId}/members/${verificationUserId}`
+      ) {
+        memberAddAttempts++;
+        calls[calls.length-1].body=await request.clone().json().catch(()=>null);
+        if (options.memberAddInvalidTokenOnce && memberAddAttempts===1) {
+          return Response.json({
+            message:'Invalid OAuth2 access token provided',
+            code:50025
+          },{status:403});
+        }
+        if (options.memberAddFailureCode) {
+          return Response.json({
+            message:'Member cannot join',
+            code:options.memberAddFailureCode
+          },{status:options.memberAddFailureStatus ?? 403});
+        }
+        return Response.json({
+          user:{id:verificationUserId,username:'Verifier'},
+          roles:[]
+        },{status:201});
       }
       if (
         request.method === 'PUT' &&
@@ -1274,6 +1309,87 @@ test('restore job replays guild extras and bans without deleting existing struct
     false,
     'safe restore must never delete existing channels'
   );
+});
+
+test('member restore refreshes a rejected OAuth token and retries the same user', async t => {
+  const {mf,calls,db} = await runtime(t, {
+    oauthExpiresIn:7200,
+    verificationMemberMissingAfter:2,
+    memberAddInvalidTokenOnce:true
+  });
+  const login = await request(mf, '/api/login', null, 'POST', {
+    password:'local-test-password'
+  });
+  assert.equal(login.status,200);
+  const token=login.body.token;
+
+  const settings=await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    token,
+    'PUT',
+    {verifiedRoleId:targetRoleId,minAccountAgeDays:0}
+  );
+  assert.equal(settings.status,200,JSON.stringify(settings.body));
+
+  const startedOauth=await mf.dispatchFetch(
+    'https://worker.example/auth/verification/start?guild_id='+encodeURIComponent(guildId),
+    {redirect:'manual'}
+  );
+  assert.equal(startedOauth.status,302);
+  const state=new URL(startedOauth.headers.get('location')).searchParams.get('state');
+  assert.ok(state);
+  const callback=await mf.dispatchFetch(
+    'https://worker.example/auth/discord/callback?code=ok&state='+encodeURIComponent(state)
+  );
+  assert.equal(callback.status,200);
+
+  const created=await request(
+    mf,
+    `/api/guilds/${guildId}/backups`,
+    token,
+    'POST',
+    {label:'OAuth retry regression'}
+  );
+  assert.equal(created.status,201,JSON.stringify(created.body));
+
+  const restore=await request(
+    mf,
+    `/api/backups/${created.body.id}/restore`,
+    token,
+    'POST',
+    {targetGuildId:guildId}
+  );
+  assert.equal(restore.status,202,JSON.stringify(restore.body));
+
+  const worker=await mf.getWorker();
+  let job=restore.body;
+  for(let tick=0;tick<30 && !['completed','failed','cancelled'].includes(job.status);tick++){
+    const scheduled=await worker.scheduled({cron:'* * * * *'});
+    assert.equal(scheduled.outcome,'ok');
+    const current=await request(mf,`/api/restore-jobs/${job.id}`,token);
+    assert.equal(current.status,200,JSON.stringify(current.body));
+    job=current.body;
+  }
+
+  assert.equal(job.status,'completed',JSON.stringify(job));
+  assert.equal(job.result.membersAdded,1);
+
+  const addPath=`/api/v10/guilds/${guildId}/members/${verificationUserId}`;
+  const memberAdds=calls.filter(call=>call.method==='PUT'&&call.path===addPath);
+  assert.equal(memberAdds.length,2,'50025 must cause exactly one refresh + retry');
+  assert.equal(memberAdds[0].body?.access_token,'verification-access-token');
+  assert.equal(memberAdds[1].body?.access_token,'refreshed-access-token');
+
+  const tokenCalls=calls.filter(call=>
+    call.method==='POST'&&call.path==='/api/v10/oauth2/token'
+  );
+  assert.ok(tokenCalls.some(call=>call.body?.grant_type==='refresh_token'));
+
+  const recovery=await db.prepare(
+    'SELECT revoked_at FROM member_recovery_tokens WHERE guild_id=? AND user_id=?'
+  ).bind(guildId,verificationUserId).first();
+  assert.equal(recovery?.revoked_at,null);
 });
 
 test('verification settings persist account age and role values', async t => {
