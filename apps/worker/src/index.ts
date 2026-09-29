@@ -2786,11 +2786,38 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const guildId=verifyPanel[1]!;
     await requireGuild(request,env,guildId);
     await ensureSchema(env);
+    const input=await bodyObject<{channelId?:string;verifiedRoleId?:string|null}>(request);
     const verificationSettings=await getGuildSettings(env,guildId);
-    if(!verificationSettings.verifiedRoleId){
-      throw new HttpError(409,"先に「認証後ロール」を設定して保存してください");
+    const requestedRoleId=
+      input.verifiedRoleId===undefined
+        ?verificationSettings.verifiedRoleId
+        :input.verifiedRoleId;
+    const verifiedRoleId=
+      typeof requestedRoleId==="string"?requestedRoleId.trim():requestedRoleId;
+    if(!verifiedRoleId){
+      throw new HttpError(409,"認証後ロールを選択してください");
     }
-    const {channelId}=await bodyObject<{channelId?:string}>(request);
+    if(!/^\d+$/.test(verifiedRoleId)){
+      throw new HttpError(400,"認証後ロールが不正です");
+    }
+    const roles=await botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
+    const targetRole=roles.find(role=>role.id===verifiedRoleId);
+    if(!targetRole||targetRole.id===guildId){
+      throw new HttpError(400,"認証後ロールには@everyone以外の有効なロールを選択してください");
+    }
+    if(targetRole.managed){
+      throw new HttpError(400,"Discord管理ロールは認証後ロールに指定できません");
+    }
+    if((BigInt(targetRole.permissions||"0")&DANGEROUS_PERMISSION_MASK)!==0n){
+      throw new HttpError(
+        400,
+        "認証後ロールに管理者・ロール管理・チャンネル管理・BAN/Kickなどの危険権限は設定できません"
+      );
+    }
+    if(verificationSettings.verifiedRoleId!==verifiedRoleId){
+      await saveGuildSettings(env,guildId,{verifiedRoleId});
+    }
+    const {channelId}=input;
     if(!channelId) throw new HttpError(400,"設置先チャンネルを選択してください");
     await requireMessageChannel(env,guildId,channelId);
     try{
