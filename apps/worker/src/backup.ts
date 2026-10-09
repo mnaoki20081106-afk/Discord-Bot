@@ -87,7 +87,7 @@ export async function upgradeTrackedVerificationPanel(
     throw error;
   }
 
-  const desired=verificationPanelPayload(workerOrigin,guildId) as any;
+  const desired=verificationPanelPayload(verificationPublicOrigin(env,workerOrigin),guildId) as any;
   const desiredButton=desired.components?.[0]?.components?.[0];
   const currentButton=message?.components?.[0]?.components?.[0];
   if(
@@ -1899,13 +1899,29 @@ function verificationHtmlResponse(
   );
 }
 
+export function verificationPublicOrigin(env:Env,requestOrigin:string):string{
+  const configured=env.DISCORD_OAUTH_REDIRECT_URI?.trim();
+  if(!configured) return requestOrigin;
+  let parsed:URL;
+  try{parsed=new URL(configured);}catch{
+    throw new BackupHttpError(503,"DISCORD_OAUTH_REDIRECT_URIが正しいHTTPS URLではありません");
+  }
+  if(
+    parsed.protocol!=="https:"||parsed.username||parsed.password||
+    parsed.pathname!=="/auth/discord/callback"||parsed.search||parsed.hash
+  ){
+    throw new BackupHttpError(503,"DISCORD_OAUTH_REDIRECT_URIはHTTPSの/auth/discord/callbackを指定してください");
+  }
+  return parsed.origin;
+}
+
 function recoveryAuthorizeUrl(
   env:Env,origin:string,state:string,forceConsent=true
 ):string{
   const params=new URLSearchParams({
     client_id:env.DISCORD_APPLICATION_ID,
     response_type:"code",
-    redirect_uri:origin+"/auth/discord/callback",
+    redirect_uri:verificationPublicOrigin(env,origin)+"/auth/discord/callback",
     scope:"identify guilds.join",
     state
   });
@@ -2023,7 +2039,7 @@ export async function handleRecoveryOAuth(
     const tokens=await oauthTokenRequest(env,new URLSearchParams({
       grant_type:"authorization_code",
       code,
-      redirect_uri:url.origin+"/auth/discord/callback"
+      redirect_uri:verificationPublicOrigin(env,url.origin)+"/auth/discord/callback"
     }));
     const userResponse=await fetch("https://discord.com/api/v10/users/@me",{
       headers:{Authorization:"Bearer "+tokens.access_token}
