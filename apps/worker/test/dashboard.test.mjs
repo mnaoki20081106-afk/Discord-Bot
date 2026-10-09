@@ -45,7 +45,8 @@ async function runtime(t, options = {}) {
       DISCORD_BOT_TOKEN: 'local-test-token', DISCORD_APPLICATION_ID: botId,
       DISCORD_PUBLIC_KEY: discordPublicKey,
       DASHBOARD_PASSWORD: 'local-test-password', SESSION_ENCRYPTION_KEY: 'local-test-key-not-for-production',
-      WEB_ORIGIN: 'https://dashboard.example', WEB_PUBLIC_URL: 'https://dashboard.example/', PAYPAY_ENV: 'sandbox'
+      WEB_ORIGIN: 'https://dashboard.example', WEB_PUBLIC_URL: 'https://dashboard.example/', PAYPAY_ENV: 'sandbox',
+      ...(options.discordOAuthRedirectUri ? {DISCORD_OAUTH_REDIRECT_URI: options.discordOAuthRedirectUri} : {})
     },
     outboundService: async request => {
       const url = new URL(request.url);
@@ -1004,6 +1005,41 @@ test('verification panel oauth stores recovery access before assigning the role'
     'verification',
     'legacy recovery links must use the unified verification flow'
   );
+});
+
+test('verification uses a canonical callback on preview domains and panel links', async t => {
+  const redirect='https://canonical-worker.example/auth/discord/callback';
+  const {mf,calls} = await runtime(t,{discordOAuthRedirectUri:redirect});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  assert.equal(login.status,200);
+  const saved=await request(mf,`/api/guilds/${guildId}/settings`,login.body.token,'PUT',{
+    verifiedRoleId:targetRoleId,minAccountAgeDays:0
+  });
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  const panel=await request(mf,`/api/guilds/${guildId}/verification/panel`,login.body.token,'POST',{
+    channelId:chatChannelId
+  });
+  assert.equal(panel.status,200,JSON.stringify(panel.body));
+  const panelPost=calls.find(call=>call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`);
+  assert.equal(
+    new URL(panelPost.body.components[0].components[0].url).origin,
+    'https://canonical-worker.example'
+  );
+
+  const started=await mf.dispatchFetch(
+    `https://preview-worker.example/auth/verification/start?guild_id=${guildId}`,
+    {redirect:'manual'}
+  );
+  assert.equal(started.status,302);
+  const authUrl=new URL(started.headers.get('location'));
+  assert.equal(authUrl.searchParams.get('redirect_uri'),redirect);
+  const state=authUrl.searchParams.get('state');
+  const callback=await mf.dispatchFetch(
+    `https://preview-worker.example/auth/discord/callback?code=ok&state=${encodeURIComponent(state)}`
+  );
+  assert.equal(callback.status,200,await callback.clone().text());
+  const exchange=calls.find(call=>call.method==='POST'&&call.path==='/api/v10/oauth2/token');
+  assert.equal(exchange.body.redirect_uri,redirect);
 });
 
 test('cancelled discord verification consumes state without registering', async t => {
