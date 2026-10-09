@@ -133,6 +133,8 @@ OAuth2 Redirect URL:
 https://YOUR-WORKER.workers.dev/auth/discord/callback
 ```
 
+本番環境では `DISCORD_OAUTH_REDIRECT_URI` をWorkerの変数に設定し、Discord Developer Portal のOAuth2 Redirectsに**同じURLを完全一致で登録**してください。WorkerのプレビューURLや別ドメインから認証を開始しても、Discordへの送信時とコールバックのトークン交換時に同じURLが使われます。
+
 BOTの招待URLは管理画面が生成します。
 Administrator権限は要求せず、現在の機能に必要な権限のみ要求します。
 

@@ -55,6 +55,7 @@ import {
   handleBackupApi,
   handleRecoveryOAuth,
   upgradeTrackedVerificationPanel,
+  verificationPublicOrigin,
   verificationPanelPayload
 } from "./backup";
 import { recordPanelDeployment } from "./backup-db";
@@ -946,7 +947,7 @@ async function publishVerificationPanel(
   env:Env,guildId:string,channelId:string,workerOrigin:string
 ){
   const message=await sendPanelMessage(
-    env,guildId,channelId,verificationPanelPayload(workerOrigin,guildId)
+    env,guildId,channelId,verificationPanelPayload(verificationPublicOrigin(env,workerOrigin),guildId)
   );
   await recordPanelDeployment(env,{
     guildId,kind:"verification",channelId,messageId:message.id??null
@@ -3172,7 +3173,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v72-ticket-recovery",
+          version:"bot-coexistence-v73-verification-oauth",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),

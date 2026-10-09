@@ -8,6 +8,7 @@ export interface Env {
   DISCORD_PUBLIC_KEY: string;
   DISCORD_BOT_TOKEN: string;
   DISCORD_CLIENT_SECRET: string;
+  DISCORD_OAUTH_REDIRECT_URI?: string;
   SESSION_ENCRYPTION_KEY: string;
   DASHBOARD_PASSWORD: string;
   SECURITY_API_BASE_URL?: string;

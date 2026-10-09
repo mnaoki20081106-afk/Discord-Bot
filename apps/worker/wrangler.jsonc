@@ -37,6 +37,7 @@
   "vars": {
     "WEB_ORIGIN": "https://worked-for-us.jp",
     "WEB_PUBLIC_URL": "https://worked-for-us.jp/",
+    "DISCORD_OAUTH_REDIRECT_URI": "https://discord-bot.c53gftun651-tiktok.workers.dev/auth/discord/callback",
     "PAYPAY_ENV": "sandbox"
   },
   "services": [
