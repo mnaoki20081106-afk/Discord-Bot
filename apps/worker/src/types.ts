@@ -3,7 +3,6 @@ export interface Env {
   DISCORD_GATEWAY: DurableObjectNamespace;
   WEB_ORIGIN: string;
   WEB_PUBLIC_URL: string;
-  PAYPAY_ENV: "sandbox" | "staging" | "production";
   DISCORD_APPLICATION_ID: string;
   DISCORD_PUBLIC_KEY: string;
   DISCORD_BOT_TOKEN: string;
@@ -15,9 +14,6 @@ export interface Env {
   SECURITY_SERVICE?: Fetcher;
   SECURITY_BRIDGE_SECRET?: string;
   SHIIRE_BRIDGE_SECRET?: string;
-  PAYPAY_API_KEY?: string;
-  PAYPAY_API_SECRET?: string;
-  PAYPAY_MERCHANT_ID?: string;
 }
 
 export type GuildSettings = {

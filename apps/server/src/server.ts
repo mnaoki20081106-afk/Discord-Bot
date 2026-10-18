@@ -12,7 +12,8 @@ import {
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { client, invalidateSettings, startBot } from "./bot.js";
-import { env, payPayConfigured } from "./config.js";
+import { env } from "./config.js";
+import { anyPayPayAccount } from "./db.js";
 import { encrypt, hashToken, randomToken, secureEqual } from "./crypto.js";
 import {
   cleanExpiredAuth,
@@ -165,14 +166,13 @@ const botPermissionBits = new PermissionsBitField([
 
 app.get("/health", async () => ({
   ok: true,
-  discordReady: client.isReady(),
-  payPayConfigured
+  discordReady: client.isReady()
 }));
 
 app.get("/api/status", async () => ({
   discordReady: client.isReady(),
-  payPayConfigured,
-  payPayEnvironment: env.PAYPAY_ENV
+  payPayConfigured: await anyPayPayAccount(),
+  payPayEnvironment: "web-session"
 }));
 
 app.get("/auth/discord", async (_request, reply) => {
@@ -552,7 +552,7 @@ app.post("/api/guilds/:guildId/products/:productId/panel", async (request) => {
     embeds: [
       new EmbedBuilder()
         .setTitle(product.name)
-        .setDescription(product.description || "購入ボタンからPayPay決済へ進めます。")
+        .setDescription(product.description || "購入ボタンからPayPay送金リンクで決済できます。")
         .addFields({
           name: "価格",
           value: `¥${product.price_yen.toLocaleString("ja-JP")}`

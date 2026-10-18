@@ -15,7 +15,6 @@ import {
   getAuditCursor,
   getDashboardSession,
   getGuildSettings,
-  getPaymentByMerchantId,
   getProduct,
   getSession,
   listAllGuildSettings,
@@ -47,7 +46,8 @@ import {
   type DiscordRole,
   type DiscordUser
 } from "./discord";
-import { createPayPayQr, getPayPayStatus, payPayConfigured } from "./paypay";
+import { getPayPay } from "./vending-db";
+import { acceptPayPayLink, checkPayPayLink } from "./vending-payments";
 import {
   BackupHttpError,
   backupRestoreSweep,
@@ -82,6 +82,7 @@ import {
 import {
   accountCreatedAt,
   corsHeaders,
+  decrypt,
   encrypt,
   json,
   parseCookie,
@@ -1162,8 +1163,7 @@ function shouldDeferInteraction(interaction:any):boolean{
   if(interaction?.type===3){
     if(
       id==="ticket:create"||
-      id.startsWith("verify:start:")||
-      id.startsWith("buy:")
+      id.startsWith("verify:start:")
     ) return true;
 
     if(id.startsWith("vm:")){
@@ -1176,7 +1176,7 @@ function shouldDeferInteraction(interaction:any):boolean{
 
   // Vending modal submissions can involve D1, external payment APIs and Discord
   // REST calls. Always acknowledge them first and finish in the background.
-  return interaction?.type===5&&id.startsWith("vm:");
+  return interaction?.type===5&&(id.startsWith("vm:")||id.startsWith("buyl:"));
 }
 
 async function patchOriginalInteraction(
@@ -1310,10 +1310,110 @@ async function deliverPayment(env:Env,payment:PaymentRow):Promise<void>{
   await markDelivered(env,payment.id);
 }
 
-async function confirmAndDeliver(env:Env,payment:PaymentRow):Promise<void>{
-  const status=await getPayPayStatus(env,payment.merchant_payment_id);
+// Shop payments are PayPay send-money links received with the shared seller's stored
+// PayPaython-style web session (saved login + client_uuid, no OTP). No merchant/OPA API.
+const SHOP_PAYPAY_OWNER="shared-dashboard";
+
+async function confirmAndDeliver(env:Env,payment:PaymentRow):Promise<string>{
+  if(payment.status==="COMPLETED"){
+    await deliverPayment(env,payment);
+    return "COMPLETED";
+  }
+  if(!payment.paypay_url||(payment.status!=="CREATED"&&payment.status!=="PENDING")) return payment.status;
+  const claimed=await env.DB.prepare(
+    "UPDATE payments SET status='PROCESSING',updated_at=? WHERE id=? AND status IN ('CREATED','PENDING')"
+  ).bind(Date.now(),payment.id).run();
+  if((claimed.meta.changes??0)!==1) return "PROCESSING";
+
+  const link=await decrypt(env.SESSION_ENCRYPTION_KEY,payment.paypay_url);
+  let status="PENDING";
+  let reason="";
+  try{
+    const account=await getPayPay(env,SHOP_PAYPAY_OWNER,env.SESSION_ENCRYPTION_KEY);
+    if(account){
+      const result=await acceptPayPayLink(link,account);
+      status=result.ok?"COMPLETED":result.pending?"PENDING":"FAILED";
+      reason=result.status;
+    }else{
+      reason="LOGIN_REQUIRED";
+    }
+  }catch(error){
+    console.error("shop payment accept failed",error);
+  }
   await setPaymentStatus(env,payment.id,status);
+  if(status==="FAILED"){
+    await env.DB.prepare("DELETE FROM vending_used_payment_links WHERE link_hash=? AND order_id=?")
+      .bind(await sha256Hex(link),payment.id).run();
+  }
   if(status==="COMPLETED") await deliverPayment(env,{...payment,status});
+  return status==="PENDING"&&reason==="LOGIN_REQUIRED"?"LOGIN_REQUIRED":status;
+}
+
+async function submitShopLink(interaction:any,env:Env):Promise<Response>{
+  await ensureSchema(env);
+  const product=await getProduct(env,String(interaction.data.custom_id).slice("buyl:".length));
+  if(!product||!product.active||product.guild_id!==interaction.guild_id){
+    return interactionResponse(ephemeral("この商品は現在購入できません。"));
+  }
+  const link=String(interaction.data.components?.[0]?.components?.[0]?.value??"").trim();
+  if(!/^https:\/\/pay\.paypay\.ne\.jp\/[A-Za-z0-9]+/.test(link)){
+    return interactionResponse(ephemeral("PayPayの送金リンクを入力してください。"));
+  }
+  if(!(await getPayPay(env,SHOP_PAYPAY_OWNER,env.SESSION_ENCRYPTION_KEY))){
+    return interactionResponse(ephemeral("販売者のPayPayが未登録です。"));
+  }
+  const info:any=await checkPayPayLink(link);
+  if(!info) return interactionResponse(ephemeral("送金リンクを確認できませんでした。"));
+  const amount=Number(info?.payload?.message?.data?.amount??0);
+  if(!Number.isSafeInteger(amount)||amount<product.price_yen){
+    return interactionResponse(ephemeral(`金額が不足しています。必要: ${product.price_yen}円 / リンク: ${amount}円`));
+  }
+  if(info?.payload?.pendingP2PInfo?.isSetPasscode){
+    return interactionResponse(ephemeral("パスコード付きのリンクは使用できません。"));
+  }
+  if(String(info?.payload?.orderStatus??"")!=="PENDING"){
+    return interactionResponse(ephemeral("このリンクは既に受け取り・辞退・キャンセルされています。新しい送金リンクを入力してください。"));
+  }
+
+  const paymentId=randomId();
+  try{
+    await env.DB.prepare(
+      "INSERT INTO vending_used_payment_links(link_hash,provider,order_id,used_at) VALUES (?, 'shop', ?, ?)"
+    ).bind(await sha256Hex(link),paymentId,Date.now()).run();
+  }catch{
+    return interactionResponse(ephemeral("この送金リンクは既に使用されています。"));
+  }
+  const payment:PaymentRow={
+    id:paymentId,
+    merchant_payment_id:`dsm_${Date.now()}_${randomToken(6).replace(/[^a-zA-Z0-9_-]/g,"")}`,
+    guild_id:interaction.guild_id,
+    user_id:interaction.member.user.id,
+    product_id:product.id,
+    status:"CREATED",
+    paypay_url:await encrypt(env.SESSION_ENCRYPTION_KEY,link),
+    amount_yen:product.price_yen,
+    created_at:Date.now(),
+    updated_at:Date.now(),
+    delivered_at:null
+  };
+  await createPayment(env,payment);
+  const outcome=await confirmAndDeliver(env,payment).catch(error=>{
+    console.error("shop payment failed",paymentId,error);
+    return "ERROR";
+  });
+  const row=await env.DB.prepare("SELECT status,delivered_at FROM payments WHERE id=?")
+    .bind(paymentId).first<{status:string;delivered_at:number|null}>();
+  if(row?.delivered_at) return interactionResponse(ephemeral("決済と納品が完了しました。"));
+  if(row?.status==="COMPLETED"){
+    return interactionResponse(ephemeral("決済は完了しましたがDM納品に失敗しました。DMを開放してください。1分ごとに自動で再送します。"));
+  }
+  if(outcome==="LOGIN_REQUIRED"){
+    return interactionResponse(ephemeral("販売者のPayPayログインが切れています。販売者が再ログインすると自動で受け取ります。"));
+  }
+  if(row?.status==="FAILED"){
+    return interactionResponse(ephemeral("PayPay決済を確認できませんでした。別の有効な送金リンクを入力してください。"));
+  }
+  return interactionResponse(ephemeral("PayPay受け取りが保留されています。受け取り保留を解除してください。1分ごとに自動確認し、受け取れ次第納品します。"));
 }
 
 async function createTicketFromInteraction(env:Env,interaction:any):Promise<Response>{
@@ -1377,6 +1477,10 @@ async function processInteraction(
   if(isVendingInteraction(interaction)){
     const vendingResponse=await handleVendingInteraction(interaction,env,ctx);
     if(vendingResponse) return vendingResponse;
+  }
+
+  if(interaction.type===5&&interactionCustomId(interaction).startsWith("buyl:")){
+    return submitShopLink(interaction,env);
   }
 
   if(interaction.type===2){
@@ -1447,34 +1551,18 @@ async function processInteraction(
       if(!product||!product.active||product.guild_id!==interaction.guild_id){
         return interactionResponse(ephemeral("この商品は現在購入できません。"));
       }
-      if(!payPayConfigured(env)) return interactionResponse(ephemeral("PayPayがまだ設定されていません。"));
-      const merchantPaymentId=`dsm_${Date.now()}_${randomToken(6).replace(/[^a-zA-Z0-9_-]/g,"")}`;
-      const qr=await createPayPayQr(env,{
-        merchantPaymentId,
-        amountYen:product.price_yen,
-        description:product.name
+      return interactionResponse({
+        type:9,
+        data:{
+          custom_id:`buyl:${product.id}`,
+          title:"PayPay送金リンク",
+          components:[{type:1,components:[{
+            type:4,custom_id:"link",style:1,required:true,min_length:20,max_length:200,
+            label:`${product.price_yen}円以上のPayPay送金リンク`,
+            placeholder:"https://pay.paypay.ne.jp/..."
+          }]}]
+        }
       });
-      const payment:PaymentRow={
-        id:randomId(),
-        merchant_payment_id:merchantPaymentId,
-        guild_id:interaction.guild_id,
-        user_id:interaction.member.user.id,
-        product_id:product.id,
-        status:"CREATED",
-        paypay_url:qr.url,
-        amount_yen:product.price_yen,
-        created_at:Date.now(),
-        updated_at:Date.now(),
-        delivered_at:null
-      };
-      await createPayment(env,payment);
-      return interactionResponse(ephemeral(
-        `**${product.name}** — ¥${product.price_yen.toLocaleString("ja-JP")}\n支払い完了後、自動で納品されます。`,
-        [{
-          type:1,
-          components:[{type:2,style:5,label:"PayPayで支払う",url:qr.url}]
-        }]
-      ));
     }
   }
 
@@ -1625,8 +1713,8 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       discordError,
       guildCount:null,
       dashboardPasswordConfigured:Boolean(env.DASHBOARD_PASSWORD),
-      payPayConfigured:payPayConfigured(env),
-      payPayEnvironment:env.PAYPAY_ENV,
+      payPayConfigured:Boolean(await getPayPay(env,SHOP_PAYPAY_OWNER,env.SESSION_ENCRYPTION_KEY).catch(()=>null)),
+      payPayEnvironment:"web-session",
       runtime:"cloudflare-workers",
       inviteUrl:
         `https://discord.com/oauth2/authorize?client_id=${env.DISCORD_APPLICATION_ID}`+
@@ -2971,19 +3059,6 @@ async function oauthCallback(request:Request,env:Env):Promise<Response>{
   });
 }
 
-async function handlePayPayWebhook(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
-  let payload:any={};
-  try{payload=await request.json();}catch{}
-  const merchantId=payload?.merchantPaymentId||payload?.data?.merchantPaymentId;
-  if(merchantId){
-    ctx.waitUntil((async()=>{
-      const payment=await getPaymentByMerchantId(env,String(merchantId));
-      if(payment) await confirmAndDeliver(env,payment);
-    })().catch(console.error));
-  }
-  return new Response("OK",{status:200});
-}
-
 async function neutralize(
   env:Env,
   guildId:string,
@@ -3114,7 +3189,6 @@ async function auditWatch(env:Env):Promise<void>{
 }
 
 async function paymentSweep(env:Env):Promise<void>{
-  if(!payPayConfigured(env)) return;
   for(const payment of await listPendingPayments(env,8)){
     await confirmAndDeliver(env,payment).catch(console.error);
   }
@@ -3226,9 +3300,6 @@ export default {
 
       await ensureSchema(env);
 
-      if(url.pathname==="/paypay/webhook"&&request.method==="POST"){
-        return handlePayPayWebhook(request,env,ctx);
-      }
       if(url.pathname.startsWith("/media/vending/")){
         const mediaResponse=await handleVendingMedia(request,env,url);
         if(mediaResponse) return mediaResponse;

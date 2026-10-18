@@ -60,8 +60,79 @@ export async function checkPayPayLink(link:string){
   return data;
 }
 
+export type PayPaySession={accessToken:string;cookies:Record<string,string>};
+
+type PayPayAccount={
+  phone:string;
+  password:string;
+  uuid:string;
+  session?:PayPaySession|null;
+  persistSession?:(session:PayPaySession)=>Promise<void>;
+};
+
+function mergeCookies(cookies:Record<string,string>,setCookie:string|null){
+  if(!setCookie) return;
+  // Workers joins multiple Set-Cookie headers with ", ". Split only where a new name=value starts.
+  for(const part of setCookie.split(/,\s*(?=[^;,=\s]+=)/)){
+    const pair=part.split(";")[0]?.trim()??"";
+    const eq=pair.indexOf("=");
+    if(eq>0) cookies[pair.slice(0,eq)]=pair.slice(eq+1);
+  }
+}
+
+// PayPaython (WebAPI) puts the access token in the `token` cookie; there is no Authorization header.
+function sessionCookie(session:PayPaySession):string{
+  return cookieHeader({...session.cookies,token:session.accessToken});
+}
+
+function cookieHeader(cookies:Record<string,string>):string{
+  return Object.entries(cookies).map(([name,value])=>`${name}=${value}`).join("; ");
+}
+
+// PayPay's receive endpoint expects JST wall-clock time with a fixed +0900 suffix.
+function jstRequestAt():string{
+  return new Date(Date.now()+9*3600_000).toISOString().slice(0,19)+"+0900";
+}
+
+async function payPayPasswordLogin(account:PayPayAccount,referer:string):Promise<PayPaySession|null>{
+  const response=await fetch("https://www.paypay.ne.jp/app/v1/oauth/token",{
+    method:"POST",
+    headers:payHeaders({
+      "Origin":"https://www.paypay.ne.jp",
+      "Referer":referer
+    }),
+    body:JSON.stringify({
+      scope:"SIGN_IN",client_uuid:account.uuid,grant_type:"password",
+      username:account.phone,password:account.password,add_otp_prefix:true,language:"ja"
+    })
+  });
+  const data:any=await response.json().catch(()=>null);
+  // Without access_token PayPay is asking for OTP again; the seller has to re-run the OTP login.
+  if(!data?.access_token) return null;
+  const cookies:Record<string,string>={};
+  mergeCookies(cookies,response.headers.get("set-cookie"));
+  cookies.token=data.access_token;
+  return {accessToken:data.access_token,cookies};
+}
+
+async function postAcceptP2PLink(payload:unknown,session:PayPaySession):Promise<{ok:boolean;authFailed:boolean}>{
+  const response=await fetch("https://www.paypay.ne.jp/app/v2/p2p-api/acceptP2PSendMoneyLink",{
+    method:"POST",
+    headers:payHeaders({"Cookie":sessionCookie(session)}),
+    body:JSON.stringify(payload)
+  });
+  mergeCookies(session.cookies,response.headers.get("set-cookie"));
+  if(response.status===401||response.status===403) return {ok:false,authFailed:true};
+  const data:any=await response.json().catch(()=>null);
+  const code=data?.header?.resultCode;
+  // WebAPI tokens last ~2h; PayPay answers an expired one with S0001 (or S9999) at HTTP 200.
+  if(code==="S0001"||code==="S9999") return {ok:false,authFailed:true};
+  return {ok:response.ok&&code==="S0000",authFailed:false};
+}
+
 export async function acceptPayPayLink(
-  link:string,account:{phone:string;password:string;uuid:string}
+  link:string,
+  account:PayPayAccount,
 ):Promise<{ok:boolean;pending:boolean;amount:number;status:string}>{
   const code=payCode(link);
   const info:any=await checkPayPayLink(link);
@@ -73,26 +144,18 @@ export async function acceptPayPayLink(
   }
   if(status!=="PENDING") return {ok:false,pending:false,amount,status};
 
-  const login=await fetch("https://www.paypay.ne.jp/app/v1/oauth/token",{
-    method:"POST",
-    headers:payHeaders({
-      "Origin":"https://www.paypay.ne.jp",
-      "Referer":"https://pay.paypay.ne.jp/"+code
-    }),
-    body:JSON.stringify({
-      scope:"SIGN_IN",client_uuid:account.uuid,grant_type:"password",
-      username:account.phone,password:account.password,add_otp_prefix:true,language:"ja"
-    })
-  });
-  const loginData:any=await login.json();
-  const accessToken=loginData?.access_token;
-  if(!accessToken) return {ok:false,pending:true,amount,status:"LOGIN_REQUIRED"};
+  // Reuse the seller's stored session. Password login (and its OTP exposure) only happens
+  // when there is no session yet, or PayPay rejects the stored one with 401/403.
+  const referer="https://pay.paypay.ne.jp/"+code;
+  let session=account.session??null;
+  if(!session) session=await payPayPasswordLogin(account,referer);
+  if(!session) return {ok:false,pending:true,amount,status:"LOGIN_REQUIRED"};
 
   const data=info.payload.message.data;
   const receivePayload={
     verificationCode:code,
     client_uuid:account.uuid,
-    requestAt:new Date().toISOString(),
+    requestAt:jstRequestAt(),
     requestId:data.requestId,
     orderId:data.orderId,
     senderMessageId:info.payload.message.messageId,
@@ -100,15 +163,26 @@ export async function acceptPayPayLink(
     iosMinimumVersion:"3.45.0",
     androidMinimumVersion:"3.45.0"
   };
-  const headers=payHeaders({"Authorization":"Bearer "+accessToken});
-  const cookie=login.headers.get("set-cookie");
-  if(cookie) (headers as Record<string,string>)["Cookie"]=cookie;
 
-  const received=await fetch("https://www.paypay.ne.jp/app/v2/p2p-api/acceptP2PSendMoneyLink",{
-    method:"POST",headers,body:JSON.stringify(receivePayload)
-  });
-  const receivedData:any=await received.json().catch(()=>null);
-  const ok=received.ok&&receivedData?.header?.resultCode==="S0000";
+  let received=await postAcceptP2PLink(receivePayload,session);
+  if(received.authFailed){
+    // The stored session expired. A 401 means the request was not processed, so one retry is safe.
+    session=await payPayPasswordLogin(account,referer);
+    if(!session) return {ok:false,pending:true,amount,status:"LOGIN_REQUIRED"};
+    received=await postAcceptP2PLink(receivePayload,session);
+  }
+
+  if(account.persistSession){
+    try{
+      await account.persistSession(session);
+    }catch(error){
+      console.error("PayPay session save failed",error);
+    }
+  }
+  // Public link state cannot prove WHICH account received the money, so only the
+  // authenticated acceptance response may authorize delivery. Anything else stays pending
+  // and is re-checked while the link is still PENDING (e.g. until 受け取り保留 is released).
+  const ok=received.ok;
   return {ok,pending:!ok,amount,status:ok?"COMPLETED":"PENDING"};
 }
 

@@ -7,7 +7,7 @@
 - DB: Cloudflare D1 Free
 - 定期監視: Cloudflare Cron Triggers
 - スパム対策: Discord AutoMod
-- 決済通知: PayPay Webhook
+- 決済: PayPay送金リンクの受け取り（PayPaython方式のWebセッション）
 
 Render/Koyebのkeepaliveは不要です。
 
@@ -50,14 +50,6 @@ DISCORD_PUBLIC_KEY
 DISCORD_BOT_TOKEN
 DISCORD_CLIENT_SECRET
 SESSION_ENCRYPTION_KEY
-```
-
-PayPayを使用する場合のみ:
-
-```text
-PAYPAY_API_KEY
-PAYPAY_API_SECRET
-PAYPAY_MERCHANT_ID
 ```
 
 `SESSION_ENCRYPTION_KEY` は32 byteのランダム値をbase64化したものです。
@@ -107,17 +99,14 @@ https://mnaoki20081106-afk.github.io/Discord-Bot/
 
 ### 5. PayPay
 
-PayPay Webhook URL:
+公式のOpen Payment APIは使いません。購入者が貼ったPayPay送金リンクを、
+販売者が事前登録したPayPayアカウントのセッションで受け取ります。
 
-```text
-https://discord-server-manager.example.workers.dev/paypay/webhook
-```
-
-Webhookの内容をそのまま信用せず、WorkerがPayPay Get Payment Details APIへ
-再照会して `COMPLETED` を確認した時だけ商品を納品します。
-
-まず `PAYPAY_ENV=sandbox` でテストし、本番Credentialを設定した後に
-`production` へ変更します。
+- 管理画面（自販機のPayPay登録）で電話番号・パスワードをOTP認証して登録します。
+  登録時のclient_uuidとセッションは暗号化してD1に保存され、受け取りのたびの再ログインやOTPは不要です。
+- アクセストークンが失効（S0001 / S9999）した時だけ、保存済みclient_uuidでOTPなしに再ログインします。
+- 受け取り保留のリンクは `PENDING` のまま1分ごとに自動で再試行します。
+- 受け取り応答が成功した時だけ商品を納品します。リンクの状態だけでは納品しません。
 
 ## セキュリティ方式
 

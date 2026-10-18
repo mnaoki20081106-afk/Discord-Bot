@@ -137,6 +137,21 @@ export async function migrate(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS payments_pending_idx
       ON payments(status, delivered_at, created_at);
+
+    CREATE TABLE IF NOT EXISTS paypay_accounts (
+      guild_id TEXT PRIMARY KEY,
+      phone_enc TEXT NOT NULL,
+      password_enc TEXT NOT NULL,
+      client_uuid TEXT NOT NULL,
+      session_enc TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS used_payment_links (
+      link_hash TEXT PRIMARY KEY,
+      payment_id TEXT NOT NULL,
+      used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
 }
 
@@ -299,4 +314,84 @@ export async function markDelivered(id: string): Promise<void> {
     "UPDATE payments SET delivered_at=now(), updated_at=now() WHERE id=$1",
     [id]
   );
+}
+
+export type PayPayAccountRow = {
+  guild_id: string;
+  phone_enc: string;
+  password_enc: string;
+  client_uuid: string;
+  session_enc: string | null;
+};
+
+export async function getPayPayAccountRow(guildId: string): Promise<PayPayAccountRow | null> {
+  const result = await pool.query<PayPayAccountRow>(
+    "SELECT guild_id,phone_enc,password_enc,client_uuid,session_enc FROM paypay_accounts WHERE guild_id=$1",
+    [guildId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// New credentials invalidate any session held for the previous login.
+export async function savePayPayAccount(
+  guildId: string,
+  phoneEnc: string,
+  passwordEnc: string,
+  clientUuid: string,
+  sessionEnc: string
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO paypay_accounts(guild_id,phone_enc,password_enc,client_uuid,session_enc,updated_at)
+     VALUES ($1,$2,$3,$4,$5,now())
+     ON CONFLICT (guild_id) DO UPDATE SET
+       phone_enc=EXCLUDED.phone_enc, password_enc=EXCLUDED.password_enc,
+       client_uuid=EXCLUDED.client_uuid, session_enc=EXCLUDED.session_enc, updated_at=now()`,
+    [guildId, phoneEnc, passwordEnc, clientUuid, sessionEnc]
+  );
+}
+
+// Scoped to the current client_uuid so a stale save cannot overwrite a newer login.
+export async function savePayPaySession(
+  guildId: string,
+  clientUuid: string,
+  sessionEnc: string
+): Promise<void> {
+  await pool.query(
+    "UPDATE paypay_accounts SET session_enc=$3 WHERE guild_id=$1 AND client_uuid=$2",
+    [guildId, clientUuid, sessionEnc]
+  );
+}
+
+export async function removePayPayAccount(guildId: string): Promise<boolean> {
+  const result = await pool.query("DELETE FROM paypay_accounts WHERE guild_id=$1", [guildId]);
+  return result.rowCount === 1;
+}
+
+export async function claimPaymentLink(linkHash: string, paymentId: string): Promise<boolean> {
+  const result = await pool.query(
+    "INSERT INTO used_payment_links(link_hash,payment_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+    [linkHash, paymentId]
+  );
+  return result.rowCount === 1;
+}
+
+export async function releasePaymentLink(linkHash: string, paymentId: string): Promise<void> {
+  await pool.query("DELETE FROM used_payment_links WHERE link_hash=$1 AND payment_id=$2", [
+    linkHash,
+    paymentId
+  ]);
+}
+
+// Only one worker may receive a given payment at a time (poller vs. the submit handler).
+export async function claimPaymentProcessing(id: string): Promise<boolean> {
+  const result = await pool.query(
+    "UPDATE payments SET status='PROCESSING', updated_at=now() WHERE id=$1 AND status IN ('CREATED','PENDING')",
+    [id]
+  );
+  return result.rowCount === 1;
+}
+
+export async function anyPayPayAccount(): Promise<boolean> {
+  const result = await pool.query("SELECT 1 FROM paypay_accounts LIMIT 1");
+  return (result.rowCount ?? 0) > 0;
 }

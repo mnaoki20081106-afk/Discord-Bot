@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import type { PayPaySession } from "./vending-payments";
 import { decrypt, encrypt, randomId, sha256Hex } from "./utils";
 
 export type Vm = {
@@ -109,6 +110,15 @@ export async function ensureVendingSchema(env:Env){
   if(!achievementRouteColumnNames.has("count_name_synced_at")){
     await env.DB.prepare(
       "ALTER TABLE vending_achievement_routes ADD COLUMN count_name_synced_at INTEGER NOT NULL DEFAULT 0"
+    ).run();
+  }
+
+  const paymentAccountColumns=(await env.DB.prepare(
+    "PRAGMA table_info(vending_payment_accounts)"
+  ).all<{name:string}>()).results;
+  if(!paymentAccountColumns.some(column=>column.name==="paypay_session_enc")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_payment_accounts ADD COLUMN paypay_session_enc TEXT"
     ).run();
   }
 
@@ -514,13 +524,29 @@ export async function finishDelivery(env:Env,order:VmOrder){
 }
 
 export async function savePayPay(env:Env,userId:string,phone:string,password:string,uuid:string,secret:string){
-  await env.DB.prepare("INSERT INTO vending_payment_accounts(user_id,paypay_phone_enc,paypay_password_enc,paypay_uuid,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET paypay_phone_enc=excluded.paypay_phone_enc,paypay_password_enc=excluded.paypay_password_enc,paypay_uuid=excluded.paypay_uuid,updated_at=excluded.updated_at").bind(userId,await encrypt(secret,phone),await encrypt(secret,password),uuid,Date.now()).run();
+  // New credentials invalidate any session held for the previous login.
+  await env.DB.prepare("INSERT INTO vending_payment_accounts(user_id,paypay_phone_enc,paypay_password_enc,paypay_uuid,paypay_session_enc,updated_at) VALUES (?,?,?,?,NULL,?) ON CONFLICT(user_id) DO UPDATE SET paypay_phone_enc=excluded.paypay_phone_enc,paypay_password_enc=excluded.paypay_password_enc,paypay_uuid=excluded.paypay_uuid,paypay_session_enc=NULL,updated_at=excluded.updated_at").bind(userId,await encrypt(secret,phone),await encrypt(secret,password),uuid,Date.now()).run();
 }
 export async function getPayPay(env:Env,userId:string,secret:string){
-  const r=await env.DB.prepare("SELECT paypay_phone_enc,paypay_password_enc,paypay_uuid FROM vending_payment_accounts WHERE user_id=?").bind(userId).first<{paypay_phone_enc:string|null;paypay_password_enc:string|null;paypay_uuid:string|null}>();
+  const r=await env.DB.prepare("SELECT paypay_phone_enc,paypay_password_enc,paypay_uuid,paypay_session_enc FROM vending_payment_accounts WHERE user_id=?").bind(userId).first<{paypay_phone_enc:string|null;paypay_password_enc:string|null;paypay_uuid:string|null;paypay_session_enc:string|null}>();
   if(!r?.paypay_phone_enc||!r.paypay_password_enc||!r.paypay_uuid) return null;
-  return {phone:await decrypt(secret,r.paypay_phone_enc),password:await decrypt(secret,r.paypay_password_enc),uuid:r.paypay_uuid};
+  let session:PayPaySession|null=null;
+  if(r.paypay_session_enc){
+    try{ session=JSON.parse(await decrypt(secret,r.paypay_session_enc)) as PayPaySession; }
+    catch{ session=null; }
+  }
+  const uuid=r.paypay_uuid;
+  return {
+    phone:await decrypt(secret,r.paypay_phone_enc),
+    password:await decrypt(secret,r.paypay_password_enc),
+    uuid,
+    session,
+    // Scoped to the current uuid so a session saved from an old login cannot overwrite newer credentials.
+    persistSession:async(next:PayPaySession)=>{
+      await env.DB.prepare("UPDATE vending_payment_accounts SET paypay_session_enc=? WHERE user_id=? AND paypay_uuid=?").bind(await encrypt(secret,JSON.stringify(next)),userId,uuid).run();
+    }
+  };
 }
-export async function removePayPay(env:Env,userId:string){ await env.DB.prepare("UPDATE vending_payment_accounts SET paypay_phone_enc=NULL,paypay_password_enc=NULL,paypay_uuid=NULL,updated_at=? WHERE user_id=?").bind(Date.now(),userId).run(); }
+export async function removePayPay(env:Env,userId:string){ await env.DB.prepare("UPDATE vending_payment_accounts SET paypay_phone_enc=NULL,paypay_password_enc=NULL,paypay_uuid=NULL,paypay_session_enc=NULL,updated_at=? WHERE user_id=?").bind(Date.now(),userId).run(); }
 export async function savePayChallenge(env:Env,userId:string,payload:string,secret:string){ const id=randomId(); await env.DB.prepare("INSERT INTO vending_payment_login_challenges(id,user_id,provider,payload_enc,expires_at) VALUES (?,?,'paypay',?,?)").bind(id,userId,await encrypt(secret,payload),Date.now()+5*60_000).run(); return id; }
 export async function takePayChallenge(env:Env,id:string,userId:string,secret:string){ const r=await env.DB.prepare("SELECT payload_enc,expires_at FROM vending_payment_login_challenges WHERE id=? AND user_id=? AND provider='paypay'").bind(id,userId).first<{payload_enc:string;expires_at:number}>(); if(!r||r.expires_at<Date.now()) return null; await env.DB.prepare("DELETE FROM vending_payment_login_challenges WHERE id=?").bind(id).run(); return decrypt(secret,r.payload_enc); }

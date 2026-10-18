@@ -22,19 +22,33 @@ import {
   type Message,
   type Role
 } from "discord.js";
-import { randomBytes, randomUUID } from "node:crypto";
-import { env, payPayConfigured } from "./config.js";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { env } from "./config.js";
+import { decrypt as decryptLink, encrypt } from "./crypto.js";
 import {
+  claimPaymentLink,
+  claimPaymentProcessing,
   createPayment,
   getGuildSettings,
+  getPayPayAccountRow,
   getProduct,
   listUndeliveredPayments,
   markDelivered,
+  releasePaymentLink,
+  removePayPayAccount,
+  savePayPayAccount,
   setPaymentStatus,
   type GuildSettings,
   type Payment
 } from "./db.js";
-import { createPayPayQr, getPayPayPaymentStatus } from "./paypay.js";
+import {
+  acceptPayPayLink,
+  checkPayPayLink,
+  loadPayPayAccount,
+  payPayLoginOtp,
+  payPayLoginStart,
+  sealSession
+} from "./paypay.js";
 
 export const client = new Client({
   intents: [
@@ -74,7 +88,21 @@ const commands = [
         .setDescription("チケットパネルを置くチャンネル")
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
         .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName("paypay-login")
+    .setDescription("商品販売の受取に使うPayPayアカウントを登録します（SMS認証あり）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption((option) =>
+      option.setName("phone").setDescription("電話番号").setRequired(true)
     )
+    .addStringOption((option) =>
+      option.setName("password").setDescription("PayPayパスワード").setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName("paypay-logout")
+    .setDescription("登録済みのPayPayアカウント情報を削除します")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map((command) => command.toJSON());
 
 const settingsCache = new Map<string, { settings: GuildSettings; expiresAt: number }>();
@@ -82,6 +110,20 @@ const spamHistory = new Map<string, number[]>();
 const joinHistory = new Map<string, number[]>();
 const raidModeUntil = new Map<string, number>();
 const actionHistory = new Map<string, number[]>();
+// Pending PayPay OTP logins: the password never leaves memory until the OTP succeeds.
+const payPayLogins = new Map<
+  string,
+  {
+    guildId: string;
+    userId: string;
+    phone: string;
+    password: string;
+    uuid: string;
+    otpReferenceId: string;
+    otpPrefix: string;
+    expiresAt: number;
+  }
+>();
 const challenges = new Map<
   string,
   { guildId: string; userId: string; code: string; expiresAt: number }
@@ -516,6 +558,8 @@ async function createTicket(interaction: Interaction): Promise<void> {
   await interaction.reply({ ephemeral: true, content: `作成しました: <#${channel.id}>` });
 }
 
+// Shop payments are PayPay send-money links received on the guild's stored seller session
+// (saved login + client_uuid, no OTP). No merchant/OPA API is involved.
 async function purchase(interaction: Interaction): Promise<void> {
   if (!interaction.isButton() || !interaction.guild) return;
   const productId = interaction.customId.slice("buy:".length);
@@ -524,31 +568,87 @@ async function purchase(interaction: Interaction): Promise<void> {
     await interaction.reply({ ephemeral: true, content: "この商品は現在購入できません。" });
     return;
   }
-  if (!payPayConfigured) {
+  if (!(await getPayPayAccountRow(interaction.guild.id))) {
     await interaction.reply({
       ephemeral: true,
       content: "PayPay決済がまだ管理者によって設定されていません。"
     });
     return;
   }
+  await interaction.showModal(
+    new ModalBuilder()
+      .setCustomId(`buyl:${product.id}`)
+      .setTitle("PayPay送金リンク")
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("link")
+            .setLabel(`${product.price_yen}円以上のPayPay送金リンク`)
+            .setPlaceholder("https://pay.paypay.ne.jp/...")
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(20)
+            .setMaxLength(200)
+            .setRequired(true)
+        )
+      )
+  );
+}
 
+const linkHash = (link: string): string => createHash("sha256").update(link).digest("hex");
+
+async function submitPurchaseLink(interaction: Interaction): Promise<void> {
+  if (!interaction.isModalSubmit() || !interaction.guild) return;
   await interaction.deferReply({ ephemeral: true });
-  const merchantPaymentId =
-    `dsm_${Date.now()}_${randomBytes(6).toString("hex")}`;
-  const qr = await createPayPayQr({
-    merchantPaymentId,
-    amountYen: product.price_yen,
-    description: product.name
-  });
+  const product = await getProduct(interaction.customId.slice("buyl:".length));
+  if (!product || !product.active || product.guild_id !== interaction.guild.id) {
+    await interaction.editReply("この商品は現在購入できません。");
+    return;
+  }
+  const link = interaction.fields.getTextInputValue("link").trim();
+  if (!/^https:\/\/pay\.paypay\.ne\.jp\/[A-Za-z0-9]+/.test(link)) {
+    await interaction.editReply("PayPayの送金リンクを入力してください。");
+    return;
+  }
+  if (!(await getPayPayAccountRow(interaction.guild.id))) {
+    await interaction.editReply("販売者のPayPayが未登録です。");
+    return;
+  }
+  const info = await checkPayPayLink(link);
+  if (!info) {
+    await interaction.editReply("送金リンクを確認できませんでした。");
+    return;
+  }
+  const amount = Number(info.payload?.message?.data?.amount ?? 0);
+  if (!Number.isSafeInteger(amount) || amount < product.price_yen) {
+    await interaction.editReply(
+      `金額が不足しています。必要: ${product.price_yen}円 / リンク: ${amount}円`
+    );
+    return;
+  }
+  if (info.payload?.pendingP2PInfo?.isSetPasscode) {
+    await interaction.editReply("パスコード付きのリンクは使用できません。");
+    return;
+  }
+  if (String(info.payload?.orderStatus ?? "") !== "PENDING") {
+    await interaction.editReply(
+      "このリンクは既に受け取り・辞退・キャンセルされています。新しい送金リンクを入力してください。"
+    );
+    return;
+  }
 
+  const paymentId = randomUUID();
+  if (!(await claimPaymentLink(linkHash(link), paymentId))) {
+    await interaction.editReply("この送金リンクは既に使用されています。");
+    return;
+  }
   const payment: Payment = {
-    id: randomUUID(),
-    merchant_payment_id: merchantPaymentId,
+    id: paymentId,
+    merchant_payment_id: `dsm_${Date.now()}_${randomBytes(6).toString("hex")}`,
     guild_id: interaction.guild.id,
     user_id: interaction.user.id,
     product_id: product.id,
     status: "CREATED",
-    paypay_url: qr.url,
+    paypay_url: encrypt(link),
     amount_yen: product.price_yen,
     created_at: new Date(),
     updated_at: new Date(),
@@ -556,19 +656,29 @@ async function purchase(interaction: Interaction): Promise<void> {
   };
   await createPayment(payment);
 
-  await interaction.editReply({
-    content:
-      `**${product.name}** — ¥${product.price_yen.toLocaleString("ja-JP")}\n` +
-      "PayPayで支払いを完了すると自動で商品を受け取れます。",
-    components: [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setLabel("PayPayで支払う")
-          .setStyle(ButtonStyle.Link)
-          .setURL(qr.url)
-      )
-    ]
+  const outcome = await settlePayment(payment).catch((error) => {
+    console.error("shop payment failed", paymentId, error);
+    return "ERROR";
   });
+  if (outcome === "DELIVERED") {
+    await interaction.editReply("決済と納品が完了しました。");
+  } else if (outcome === "COMPLETED") {
+    await interaction.editReply(
+      "決済は完了しましたがDM納品に失敗しました。DMを開放してください。自動で再送します。"
+    );
+  } else if (outcome === "LOGIN_REQUIRED") {
+    await interaction.editReply(
+      "販売者のPayPayログインが切れています。販売者が再ログインすると自動で受け取ります。"
+    );
+  } else if (outcome === "FAILED") {
+    await interaction.editReply(
+      "PayPay決済を確認できませんでした。別の有効な送金リンクを入力してください。"
+    );
+  } else {
+    await interaction.editReply(
+      "PayPay受け取りが保留されています。受け取り保留を解除してください。1分ごとに自動確認し、受け取れ次第納品します。"
+    );
+  }
 }
 
 async function deliverPayment(payment: Payment): Promise<void> {
@@ -590,32 +700,183 @@ async function deliverPayment(payment: Payment): Promise<void> {
   await markDelivered(payment.id);
 }
 
+// Returns DELIVERED | COMPLETED (paid, DM failed) | PENDING | LOGIN_REQUIRED | FAILED | PROCESSING.
+async function settlePayment(payment: Payment): Promise<string> {
+  if (payment.status === "COMPLETED") {
+    await deliverPayment(payment);
+    return "DELIVERED";
+  }
+  if (!payment.paypay_url || (payment.status !== "CREATED" && payment.status !== "PENDING")) {
+    return payment.status;
+  }
+  if (!(await claimPaymentProcessing(payment.id))) return "PROCESSING";
+
+  const link = decryptLink(payment.paypay_url);
+  let status = "PENDING";
+  let reason = "";
+  try {
+    const account = await loadPayPayAccount(payment.guild_id);
+    if (account) {
+      const result = await acceptPayPayLink(link, account);
+      status = result.ok ? "COMPLETED" : result.pending ? "PENDING" : "FAILED";
+      reason = result.status;
+    } else {
+      reason = "LOGIN_REQUIRED";
+    }
+  } catch (error) {
+    console.error("shop payment accept failed", payment.id, error);
+  }
+  await setPaymentStatus(payment.id, status);
+  if (status === "FAILED") await releasePaymentLink(linkHash(link), payment.id);
+  if (status === "COMPLETED") {
+    try {
+      await deliverPayment({ ...payment, status });
+      return "DELIVERED";
+    } catch (error) {
+      console.error("shop delivery failed", payment.id, error);
+      return "COMPLETED";
+    }
+  }
+  return status === "PENDING" && reason === "LOGIN_REQUIRED" ? "LOGIN_REQUIRED" : status;
+}
+
 let paymentPollRunning = false;
 
 async function paymentPoll(): Promise<void> {
-  if (!payPayConfigured || paymentPollRunning) return;
+  if (paymentPollRunning) return;
   paymentPollRunning = true;
   try {
-    const payments = await listUndeliveredPayments();
-    for (const payment of payments) {
-      try {
-        let status = payment.status;
-        if (status !== "COMPLETED") {
-          status = await getPayPayPaymentStatus(payment.merchant_payment_id);
-          await setPaymentStatus(payment.id, status);
-        }
-        if (status === "COMPLETED") await deliverPayment(payment);
-      } catch (error) {
-        console.error("payment poll failed", payment.id, error);
-      }
+    for (const [key, login] of payPayLogins) {
+      if (login.expiresAt < Date.now()) payPayLogins.delete(key);
+    }
+    for (const payment of await listUndeliveredPayments()) {
+      // Re-check held (受け取り保留) links at most once a minute; the poll itself ticks every 3s.
+      if (
+        payment.status === "PENDING" &&
+        Date.now() - new Date(payment.updated_at).getTime() < 60_000
+      ) continue;
+      await settlePayment(payment).catch((error) =>
+        console.error("payment poll failed", payment.id, error)
+      );
     }
   } finally {
     paymentPollRunning = false;
   }
 }
 
+async function paypayLogin(interaction: Interaction): Promise<void> {
+  if (!interaction.isChatInputCommand() || !interaction.guild) return;
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ ephemeral: true, content: "管理者のみ実行できます。" });
+    return;
+  }
+  await interaction.deferReply({ ephemeral: true });
+  const phone = interaction.options.getString("phone", true).trim();
+  const password = interaction.options.getString("password", true);
+  const uuid = randomUUID().toUpperCase();
+  const result = await payPayLoginStart(phone, password, uuid);
+  if (result.response_type === "ErrorResponse") {
+    await interaction.editReply("PayPayログインに失敗しました。電話番号とパスワードを確認してください。");
+    return;
+  }
+  if (!result.otp_reference_id) {
+    await interaction.editReply("PayPayからの応答が不正です。時間をおいて再度お試しください。");
+    return;
+  }
+  const id = randomBytes(8).toString("hex");
+  payPayLogins.set(id, {
+    guildId: interaction.guild.id,
+    userId: interaction.user.id,
+    phone,
+    password,
+    uuid,
+    otpReferenceId: String(result.otp_reference_id),
+    otpPrefix: String(result.otp_prefix ?? ""),
+    expiresAt: Date.now() + 5 * 60_000
+  });
+  await interaction.editReply({
+    content: "SMSにワンタイムパスワードを送信しました。ボタンから入力してください。",
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`paypay:otp:${id}`)
+          .setLabel("認証コードを入力")
+          .setStyle(ButtonStyle.Primary)
+      )
+    ]
+  });
+}
+
+async function paypayOtpModal(interaction: Interaction): Promise<void> {
+  if (!interaction.isButton()) return;
+  const login = payPayLogins.get(interaction.customId.slice("paypay:otp:".length));
+  if (!login || login.expiresAt < Date.now() || login.userId !== interaction.user.id) {
+    await interaction.reply({ ephemeral: true, content: "期限切れです。`/paypay-login` をやり直してください。" });
+    return;
+  }
+  await interaction.showModal(
+    new ModalBuilder()
+      .setCustomId(`paypay:otp:${interaction.customId.slice("paypay:otp:".length)}`)
+      .setTitle("PayPay OTP認証")
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("otp")
+            .setLabel(`SMSの認証コード（${login.otpPrefix}- の後ろ）`)
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(4)
+            .setMaxLength(4)
+            .setRequired(true)
+        )
+      )
+  );
+}
+
+async function paypayOtpSubmit(interaction: Interaction): Promise<void> {
+  if (!interaction.isModalSubmit()) return;
+  await interaction.deferReply({ ephemeral: true });
+  const key = interaction.customId.slice("paypay:otp:".length);
+  const login = payPayLogins.get(key);
+  if (!login || login.expiresAt < Date.now() || login.userId !== interaction.user.id) {
+    await interaction.editReply("期限切れです。`/paypay-login` をやり直してください。");
+    return;
+  }
+  const session = await payPayLoginOtp({
+    uuid: login.uuid,
+    otp: interaction.fields.getTextInputValue("otp").trim(),
+    otpReferenceId: login.otpReferenceId,
+    otpPrefix: login.otpPrefix
+  });
+  if (!session) {
+    await interaction.editReply("認証コードが正しくありません。もう一度入力してください。");
+    return;
+  }
+  payPayLogins.delete(key);
+  await savePayPayAccount(
+    login.guildId,
+    encrypt(login.phone),
+    encrypt(login.password),
+    login.uuid,
+    sealSession(session)
+  );
+  await interaction.editReply("PayPayアカウントを登録しました。以後は受け取りのたびにOTPなしで処理します。");
+}
+
 async function onInteraction(interaction: Interaction): Promise<void> {
   if (interaction.isChatInputCommand()) {
+    if (interaction.commandName === "paypay-login") return paypayLogin(interaction);
+    if (interaction.commandName === "paypay-logout" && interaction.guild) {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({ ephemeral: true, content: "管理者のみ実行できます。" });
+        return;
+      }
+      const removed = await removePayPayAccount(interaction.guild.id);
+      await interaction.reply({
+        ephemeral: true,
+        content: removed ? "PayPayアカウント情報を削除しました。" : "PayPayアカウントは登録されていません。"
+      });
+      return;
+    }
     if (interaction.commandName === "dashboard") {
       await interaction.reply({
         ephemeral: true,
@@ -710,6 +971,14 @@ async function onInteraction(interaction: Interaction): Promise<void> {
       return;
     }
     if (interaction.customId.startsWith("buy:")) return purchase(interaction);
+    if (interaction.customId.startsWith("paypay:otp:")) return paypayOtpModal(interaction);
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("buyl:")) {
+    return submitPurchaseLink(interaction);
+  }
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("paypay:otp:")) {
+    return paypayOtpSubmit(interaction);
   }
 
   if (interaction.isModalSubmit() && interaction.customId.startsWith("verify:modal:")) {
