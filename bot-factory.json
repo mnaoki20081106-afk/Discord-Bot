@@ -1,0 +1,220 @@
+{
+  "name": "discord-bot",
+  "runtime": "worker",
+  "provider": "cloudflare",
+  "working_directory": "apps/worker",
+  "wrangler_config": "wrangler.jsonc",
+  "d1_migrations": [],
+  "d1_schema_files": [
+    {
+      "binding": "DB",
+      "file": "schema.sql"
+    }
+  ],
+  "setup": {
+    "title": "Discord-Bot",
+    "description": "Discordサーバー管理・認証・チケット・自販機（PayPay受け取り）を1つのBOTとして起動します。Discordから取得する値には取得手順を表示し、内部暗号鍵などのランダム値はFactoryが生成・暗号化保存・再利用します。初回デプロイ後は、発行されたWorker URLをDiscord Developer Portalにも設定してください。PayPayの受取アカウントは、デプロイ後に管理サイトの自販機管理から登録します。",
+    "fields": [
+      {
+        "key": "DISCORD_BOT_TOKEN",
+        "label": "BOT Token",
+        "type": "secret",
+        "required": true,
+        "source": {
+          "title": "BOT Tokenの取得方法",
+          "steps": [
+            "Discord Developer PortalでDiscord-Bot用Applicationを開く",
+            "左メニューのBotを開く",
+            "Token欄でReset TokenまたはCopyを押して値をコピーする"
+          ],
+          "url": "https://discord.com/developers/applications",
+          "link_label": "Discord Developer Portalを開く ↗"
+        }
+      },
+      {
+        "key": "DISCORD_APPLICATION_ID",
+        "label": "Application ID",
+        "type": "text",
+        "required": true,
+        "pattern": "^\\d{17,20}$",
+        "source": {
+          "title": "Application IDの取得方法",
+          "steps": [
+            "Discord Developer PortalでDiscord-Bot用Applicationを開く",
+            "General Informationを開く",
+            "Application IDのCopyを押す"
+          ],
+          "url": "https://discord.com/developers/applications",
+          "link_label": "Discord Developer Portalを開く ↗"
+        }
+      },
+      {
+        "key": "DISCORD_PUBLIC_KEY",
+        "label": "Public Key",
+        "type": "secret",
+        "required": true,
+        "source": {
+          "title": "Public Keyの取得方法",
+          "steps": [
+            "Discord Developer PortalでDiscord-Bot用Applicationを開く",
+            "General Informationを開く",
+            "Public Keyをコピーする"
+          ],
+          "url": "https://discord.com/developers/applications",
+          "link_label": "Discord Developer Portalを開く ↗"
+        }
+      },
+      {
+        "key": "DISCORD_CLIENT_SECRET",
+        "label": "Client Secret",
+        "type": "secret",
+        "required": true,
+        "source": {
+          "title": "Client Secretの取得方法",
+          "steps": [
+            "Discord Developer PortalでDiscord-Bot用Applicationを開く",
+            "OAuth2を開く",
+            "Client Secretをコピーする。表示できない場合はReset Secretを使う"
+          ],
+          "url": "https://discord.com/developers/applications",
+          "link_label": "Discord Developer Portalを開く ↗"
+        }
+      },
+      {
+        "key": "SESSION_ENCRYPTION_KEY",
+        "label": "Session Encryption Key",
+        "type": "secret",
+        "required": true,
+        "help": "Discord Developer Portalから取得する値ではありません。Factoryが32バイトのランダム鍵を自動生成し、暗号化保存します。このBOTではDiscord OAuthのaccess token / refresh tokenをD1へ暗号化保存するために使用します。同じBOTリポジトリ + 同じCloudflareアカウント + 同じfield keyでは再デプロイ時も同じ鍵を再利用するため、手入力や手動ローテーションは不要です。",
+        "generate": {
+          "strategy": "base64",
+          "bytes": 32
+        }
+      },
+      {
+        "key": "DASHBOARD_PASSWORD",
+        "label": "管理サイト Password",
+        "type": "secret",
+        "required": true,
+        "placeholder": "好きなパスワード",
+        "help": "GitHub Pagesの管理画面へログインするためのパスワードです。自分で分かる値を設定してください。"
+      },
+      {
+        "key": "SHIIRE_BRIDGE_SECRET",
+        "label": "Discord-Shiire連携 Secret",
+        "type": "secret",
+        "required": false,
+        "pattern": "^.{32,}$",
+        "placeholder": "Discord-Shiire側と同じ32文字以上の値",
+        "help": "Discord-Shiireと連携する場合のみ入力します。別リポジトリと同じ値を共有する必要があるためFactory自動生成にはしません。"
+      },
+      {
+        "key": "SECURITY_API_BASE_URL",
+        "label": "Discord-Security Worker URL",
+        "type": "url",
+        "required": false,
+        "placeholder": "https://discord-security.<account>.workers.dev/",
+        "help": "別Workerのdiscord-securityと連携する場合のみ入力します。デプロイ後に発行された実際のHTTPS originを入力してください。"
+      },
+      {
+        "key": "SECURITY_BRIDGE_SECRET",
+        "label": "Discord-Security連携 Secret",
+        "type": "secret",
+        "required": false,
+        "pattern": "^.{32,}$",
+        "placeholder": "Discord-Security側と同じ32文字以上の値",
+        "help": "Discord-Securityと連携する場合のみ入力します。両方のWorkerで同じ値を使います。"
+      }
+    ],
+    "discord": {
+      "intents": [
+        {
+          "id": "server-members-intent",
+          "label": "Server Members Intent",
+          "required": true,
+          "description": "入退室検知・メンバー保護に必要です。",
+          "path": "Discord Developer Portal > Bot > Privileged Gateway Intents",
+          "url": "https://discord.com/developers/applications"
+        }
+      ],
+      "permissions": [
+        {
+          "id": "manage-guild",
+          "label": "サーバーの管理",
+          "required": true,
+          "description": "サーバー設定・監査・保護機能に使用します。"
+        },
+        {
+          "id": "manage-channels",
+          "label": "チャンネルの管理",
+          "required": true,
+          "description": "サーバー編集・復元・Lockdownに必要です。"
+        },
+        {
+          "id": "manage-roles",
+          "label": "ロールの管理",
+          "required": true,
+          "description": "認証ロール付与と危険ロール解除に必要です。"
+        },
+        {
+          "id": "kick-ban",
+          "label": "メンバーをキック / BAN",
+          "required": true,
+          "description": "高信頼度の悪性BOTや攻撃への対処に必要です。"
+        },
+        {
+          "id": "moderate-members",
+          "label": "メンバーをタイムアウト",
+          "required": true,
+          "description": "スパム・荒らしへの可逆的な制裁に必要です。"
+        },
+        {
+          "id": "manage-messages-webhooks",
+          "label": "メッセージ / Webhookの管理",
+          "required": true,
+          "description": "危険メッセージ削除とWebhook保護に必要です。"
+        }
+      ],
+      "checks": [
+        {
+          "id": "role-order-human-admin",
+          "label": "人間の管理者ロールをDiscord-Botより上に配置",
+          "required": true,
+          "description": "人間の管理者を自動制裁対象にせず、管理者が常にBOTを管理できる階層にします。",
+          "path": "Discord > サーバー設定 > ロール"
+        },
+        {
+          "id": "role-order-bot",
+          "label": "Discord-Botを操作対象ロールより上に配置",
+          "required": true,
+          "description": "認証ロール付与・危険ロール解除などを行えるようDiscordのロール階層制限を満たします。",
+          "path": "Discord > サーバー設定 > ロール"
+        },
+        {
+          "id": "post-deploy-interactions-url",
+          "label": "初回デプロイ後: Interactions Endpoint URLを設定",
+          "required": false,
+          "description": "Factoryの初回デプロイ完了後に発行されたWorkerのHTTPS URLを使い、Discord Developer Portal > General Information > Interactions Endpoint URLへ「https://<Worker URL>/interactions」を設定してSave Changesします。DiscordのSlash Commandやボタン操作を受けるために必要です。",
+          "path": "Discord Developer Portal > General Information > Interactions Endpoint URL",
+          "url": "https://discord.com/developers/applications"
+        },
+        {
+          "id": "post-deploy-oauth-redirect",
+          "label": "初回デプロイ後: OAuth2 Redirect URLを設定",
+          "required": false,
+          "description": "Discord Developer Portal > OAuth2 > Redirectsへ「https://<Worker URL>/auth/discord/callback」を追加してSave Changesします。認証ロール付与・復旧用OAuthで実際に使用するURLです。",
+          "path": "Discord Developer Portal > OAuth2 > Redirects",
+          "url": "https://discord.com/developers/applications"
+        }
+      ],
+      "notes": [
+        "Worker設定の SECURITY_SERVICE は別Workerの discord-security へのService Bindingです。Factoryで起動する前に、同じCloudflareアカウントに discord-security がデプロイ済みであることを確認してください（未デプロイだとデプロイに失敗します）。",
+        "SESSION_ENCRYPTION_KEYはDiscordの値ではなくFactory管理の内部暗号鍵です。Discord OAuthトークンをD1へ暗号化保存するために使い、Factoryが再デプロイ時も同じ値を再利用します。",
+        "Worker URLは初回デプロイ後に確定するため、Interactions Endpoint URLとOAuth2 Redirect URLはデプロイ後にDiscord Developer Portalへ設定します。",
+        "Interactions Endpoint URL: https://<Factoryで発行されたWorker URL>/interactions",
+        "OAuth2 Redirect URL: https://<Factoryで発行されたWorker URL>/auth/discord/callback",
+        "Discord側のURL設定後はWorkerの再デプロイは不要です。"
+      ]
+    }
+  }
+}
