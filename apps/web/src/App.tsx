@@ -6,6 +6,7 @@ import VendingManager from "./VendingManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
 import SecurityManager from "./SecurityManager";
+import MediationManager from "./MediationManager";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -155,7 +156,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "mediation" | "members" | "verification" | "tickets" | "vending" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -745,6 +746,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-mediation"
+                role="tab"
+                aria-controls="admin-panel-mediation"
+                aria-selected={activeView === "mediation"}
+                className={activeView === "mediation" ? "active" : ""}
+                onClick={() => setActiveView("mediation")}
+              >
+                仲介
+              </button>
+              <button
+                type="button"
                 id="admin-tab-members"
                 role="tab"
                 aria-controls="admin-panel-members"
@@ -1301,6 +1313,26 @@ export default function App() {
                   key={"SecurityManager:"+selectedId}
                   guildId={selectedId!}
                   channels={meta.channels}
+                  onNotice={flash}
+                  onError={fail}
+                />
+              )}
+            </section>
+
+            <section
+              id="admin-panel-mediation"
+              className="admin-tab-panel"
+              role="tabpanel"
+              aria-labelledby="admin-tab-mediation"
+              hidden={activeView !== "mediation"}
+            >
+              {activeView === "mediation" && (
+                <MediationManager
+                  key={"MediationManager:"+selectedId}
+                  guildId={selectedId!}
+                  channels={meta.channels}
+                  categories={meta.categories}
+                  roles={meta.roles}
                   onNotice={flash}
                   onError={fail}
                 />

@@ -4352,3 +4352,30 @@ body.dsm-touch-reordering .discord-category {
     flex: 1 1 130px;
   }
 }
+
+/* ---- Mediation ---------------------------------------------------------- */
+.mediation-manager { padding: 24px; }
+.mediation-manager .vending-payment-badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.mediation-manager .vending-section-nav { margin-top: 16px; }
+.mediation-manager .alert { margin-top: 14px; line-height: 1.6; }
+.mediation-manager .alert:not(.error):not(.success) { color: #d7dcea; border: 1px solid #2b3550; background: #111827; }
+.mediation-save-row { align-items: center; justify-content: flex-end; margin-top: 12px; }
+.mediation-section { margin-top: 6px; }
+.mediation-section textarea { width: 100%; resize: vertical; }
+.mediation-section .button-row { flex-wrap: wrap; align-items: center; }
+.mediation-section .button-row input { min-width: 0; flex: 1 1 180px; }
+.mediation-stats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.mediation-paypay { margin-top: 14px; padding: 14px; border: 1px solid #222b40; border-radius: 12px; }
+.mediation-paypay h3, .mediation-trades h3 { margin: 0; font-size: 15px; }
+.mediation-trades { margin-top: 22px; }
+.mediation-trades .table-scroll { overflow-x: auto; margin-top: 10px; }
+.mediation-trades table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.mediation-trades th, .mediation-trades td { padding: 7px 8px; border-bottom: 1px solid #1d2539; text-align: left; white-space: nowrap; }
+.mediation-trades th { color: #7f8eaa; font-weight: 600; }
+.mediation-trades code { font-size: 11px; }
+.mediation-trades a { color: #8ea2ff; }
+@media (max-width: 720px) {
+  .mediation-manager .form-grid.two, .mediation-manager .form-grid.three { grid-template-columns: 1fr; }
+  .mediation-save-row { justify-content: flex-start; }
+  .mediation-section .button-row input { flex: none; width: 100%; }
+}

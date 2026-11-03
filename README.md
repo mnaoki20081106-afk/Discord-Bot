@@ -1,6 +1,6 @@
 # Discord Server Manager
 
-Discordサーバーの **セキュリティ / 認証 / Ticket / チャンネル構築 / PayPay自販機** を
+Discordサーバーの **セキュリティ / 認証 / Ticket / チャンネル構築 / PayPay自販機 / 仲介** を
 Webダッシュボードからまとめて管理するモノレポです。
 
 - Dashboard: React + Vite → **GitHub Pages**
@@ -74,6 +74,14 @@ Webからテンプレートを1クリックで適用できます。
 - Support
 
 既存チャンネルを消さず、不足しているRole / Category / Channelだけを追加します。
+
+### Mediation
+
+PayPayで運営が代金を預かる仲介botです。パネルから取引を始めると2人だけの取引チャンネルが作られ、
+仲介費 → 金額の合意 → 役割の選択 → 代金の預かり → 受け渡し → 両者合意で売り手へ支払い、の順に進みます。
+通報・PayPay失敗時はスタッフが判断・手動対応できます。管理画面の「仲介」タブから設定します。
+
+See [docs/MEDIATION.md](./docs/MEDIATION.md).
 
 ### Vending machine
 
