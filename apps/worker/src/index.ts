@@ -73,6 +73,15 @@ import {
   sendMemberActivityTest
 } from "./member-activity";
 import { ensureDiscordGateway } from "./discord-gateway";
+import {
+  MEDIATION_COMMANDS,
+  MediationHttpError,
+  handleMediationApi,
+  handleMediationInteraction,
+  isMediationInteraction,
+  mediationShouldDefer,
+  mediationSweep
+} from "./mediation";
 export { DiscordGateway } from "./discord-gateway";
 import {
   openSecurityMaintenanceLease,
@@ -1156,6 +1165,7 @@ function isVendingInteraction(interaction:any):boolean{
 }
 
 function shouldDeferInteraction(interaction:any):boolean{
+  if(isMediationInteraction(interaction)) return mediationShouldDefer(interaction);
   const id=interactionCustomId(interaction);
   if(interaction?.type===2){
     return interaction?.data?.name==="security-status";
@@ -1474,6 +1484,10 @@ async function processInteraction(
   env:Env,
   ctx:ExecutionContext
 ):Promise<Response>{
+  if(isMediationInteraction(interaction)){
+    return handleMediationInteraction(interaction,env);
+  }
+
   if(isVendingInteraction(interaction)){
     const vendingResponse=await handleVendingInteraction(interaction,env,ctx);
     if(vendingResponse) return vendingResponse;
@@ -1607,7 +1621,8 @@ async function registerCommands(env:Env):Promise<void>{
     method:"PUT",
     body:JSON.stringify([
       {name:"dashboard",description:"管理ダッシュボードを開きます",type:1},
-      {name:"security-status",description:"セキュリティ設定を表示します",type:1}
+      {name:"security-status",description:"セキュリティ設定を表示します",type:1},
+      ...MEDIATION_COMMANDS
     ])
   });
 }
@@ -3314,6 +3329,12 @@ export default {
           const vendingResponse=await handleVendingApi(request,env,url);
           if(vendingResponse) return vendingResponse;
         }
+        if(/^\/api\/guilds\/\d+\/mediation(?:\/|$)/.test(url.pathname)){
+          const mediationResponse=await handleMediationApi(request,env,url,{
+            registerCommands:()=>registerCommands(env)
+          });
+          if(mediationResponse) return mediationResponse;
+        }
         return await handleApi(request,env,url);
       }
       throw new HttpError(404,"Not found");
@@ -3322,6 +3343,7 @@ export default {
       const status=
         error instanceof HttpError?error.status:
         error instanceof VendingHttpError?error.status:
+        error instanceof MediationHttpError?error.status:
         error instanceof BackupHttpError?error.status:
         error instanceof DiscordApiError?(error.status===429?429:error.status===403?403:502):
         500;
@@ -3332,7 +3354,7 @@ export default {
             :error.message.includes('"code":50013')||error.message.includes('"code": 50013')
               ?"BOTにこの操作の権限がありません。BOTのサーバーロールとロールの並び順、チャンネル個別の権限を確認してください"
               :"DiscordがBOTの操作を拒否しました。BOTのサーバーロールと対象チャンネルの権限を確認してください"
-          :error instanceof HttpError||error instanceof VendingHttpError||error instanceof BackupHttpError||error instanceof DiscordApiError
+          :error instanceof HttpError||error instanceof VendingHttpError||error instanceof MediationHttpError||error instanceof BackupHttpError||error instanceof DiscordApiError
             ?error.message
             :"サーバー処理に失敗しました";
       return json(env,{error:status>=500?"server_error":"request_error",message},status);
@@ -3346,6 +3368,7 @@ export default {
       auditWatch(env),
       paymentSweep(env),
       vendingSweep(env),
+      mediationSweep(env).catch(error=>console.error("mediation sweep failed",error)),
       ensureDiscordGateway(env),
       botAccessGuardSweep(env),
       backupRestoreSweep(env)
