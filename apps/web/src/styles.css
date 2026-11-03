@@ -4379,3 +4379,47 @@ body.dsm-touch-reordering .discord-category {
   .mediation-save-row { justify-content: flex-start; }
   .mediation-section .button-row input { flex: none; width: 100%; }
 }
+
+/* ---- Server editor: threads & category touch reorder -------------------- */
+.discord-channel.discord-thread {
+  height: 30px;
+  padding-left: 26px;
+  font-size: 13px;
+}
+.discord-channel.discord-thread::before {
+  content: "└";
+  position: absolute;
+  left: 12px;
+  color: #4e5058;
+  font-size: 12px;
+}
+.discord-channel.discord-thread .channel-hash {
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+}
+.discord-channel.discord-thread.archived { opacity: .55; }
+.discord-category.long-pressing {
+  border-radius: 6px;
+  background: rgba(114, 128, 255, .16);
+  transform: scale(.985);
+  transition: transform .12s ease, background .12s ease;
+}
+.discord-channel-group.touch-dragging-category { opacity: .35; }
+.discord-channel-group.touch-category-before {
+  border-radius: 6px;
+  box-shadow: inset 0 4px 0 #8b96ff;
+  background: linear-gradient(to bottom, rgba(114,128,255,.16), transparent 40px);
+}
+.discord-channel-group.touch-category-after {
+  border-radius: 6px;
+  box-shadow: inset 0 -4px 0 #8b96ff;
+  background: linear-gradient(to top, rgba(114,128,255,.16), transparent 40px);
+}
+.editor-form .editor-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.editor-form .editor-checkbox input { width: auto; margin-top: 3px; }
+.editor-thread-create { width: 100%; margin-top: 12px; }

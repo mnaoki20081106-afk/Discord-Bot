@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 export type ServerEditorMeta = {
 channels: Array<{
@@ -19,6 +19,14 @@ categories: Array<{
 id: string;
 name: string;
 position?: number;
+}>;
+threads?: Array<{
+id: string;
+name: string;
+parentId: string | null;
+type: "public" | "private" | "announcement";
+archived?: boolean;
+locked?: boolean;
 }>;
 roles: Array<{
 id: string;
@@ -213,9 +221,13 @@ permissionMode(channel, targetId, key)
 type TouchDropTarget =
 | { kind: "channel"; id: string; placement: "before" | "after" }
 | { kind: "category"; id: string }
+| { kind: "categoryOrder"; id: string; placement: "before" | "after" }
 | { kind: "uncategorized" }
 | null;
+type CreateType = "text" | "voice" | "category" | "thread";
 type TouchGesture = {
+// チャンネルを動かすか、カテゴリを動かすか
+kind: "channel" | "category";
 channelId: string;
 identifier: number;
 startX: number;
@@ -230,7 +242,8 @@ armed: boolean;
 type Selection =
 | { kind: "channel"; id: string }
 | { kind: "category"; id: string }
-| { kind: "create"; type: "text" | "voice" | "category"; parentId: string | null }
+| { kind: "thread"; id: string }
+| { kind: "create"; type: CreateType; parentId: string | null }
 | null;
 type Props = {
 guildId: string;
@@ -252,7 +265,11 @@ const [selection, setSelection] = useState<Selection>(null);
 const [name, setName] = useState("");
 const [topic, setTopic] = useState("");
 const [parentId, setParentId] = useState("");
-const [createType, setCreateType] = useState<"text" | "voice" | "category">("text");
+const [createType, setCreateType] = useState<CreateType>("text");
+const [threadParentId, setThreadParentId] = useState("");
+const [threadPrivate, setThreadPrivate] = useState(false);
+const [threadArchiveMinutes, setThreadArchiveMinutes] = useState(1440);
+const [threadMessage, setThreadMessage] = useState("");
 const [saving, setSaving] = useState(false);
 const [permissionSaving, setPermissionSaving] = useState(false);
 const [permissionSaveFeedback, setPermissionSaveFeedback] = useState<{
@@ -268,12 +285,15 @@ const [dragging, setDragging] = useState<
 >(null);
 const [pressingChannelId, setPressingChannelId] = useState<string | null>(null);
 const [touchDraggingId, setTouchDraggingId] = useState<string | null>(null);
+const [touchDragKind, setTouchDragKind] = useState<"channel" | "category">("channel");
+const touchDragKindRef = useRef<"channel" | "category">("channel");
 const [touchDropTarget, setTouchDropTarget] = useState<TouchDropTarget>(null);
 const [reorderFeedback, setReorderFeedback] = useState<{
 kind: "saving" | "success" | "error";
 message: string;
 } | null>(null);
 const [touchDragGhost, setTouchDragGhost] = useState<{
+kind: "channel" | "category";
 channelId: string;
 name: string;
 type?: ServerEditorMeta["channels"][number]["type"];
@@ -326,6 +346,31 @@ const selectedCategory = useMemo(
 ? meta.categories.find((category) => category.id === selection.id) ?? null
 : null,
 [selection, meta.categories]
+);
+const threads = meta.threads ?? [];
+const threadsByParent = useMemo(() => {
+const map = new Map<string, NonNullable<ServerEditorMeta["threads"]>>();
+for (const thread of meta.threads ?? []) {
+if (!thread.parentId) continue;
+const list = map.get(thread.parentId) ?? [];
+list.push(thread);
+map.set(thread.parentId, list);
+}
+return map;
+}, [meta.threads]);
+const selectedThread = useMemo(
+() =>
+      selection?.kind === "thread"
+? threads.find((thread) => thread.id === selection.id) ?? null
+: null,
+[selection, threads]
+);
+const threadParents = useMemo(
+() =>
+meta.channels.filter((channel) =>
+["text", "announcement", "forum", "media"].includes(channel.type ?? "text")
+),
+[meta.channels]
 );
 const uncategorized = useMemo(
 () => meta.channels.filter((channel) => !channel.parentId),
@@ -475,12 +520,28 @@ setName(category.name);
 setTopic("");
 setParentId("");
 }
-function openCreate(parent: string | null = null, type: "text" | "voice" | "category" = "text") {
+function openCreate(parent: string | null = null, type: CreateType = "text") {
 setSelection({ kind: "create", parentId: parent, type });
 setCreateType(type);
 setName("");
 setTopic("");
+if (type === "thread") {
+setParentId("");
+setThreadParentId(parent ?? threadParents[0]?.id ?? "");
+setThreadPrivate(false);
+setThreadArchiveMinutes(1440);
+setThreadMessage("");
+} else {
 setParentId(parent ?? "");
+}
+}
+function openThread(id: string) {
+const thread = threads.find((item) => item.id === id);
+if (!thread) return;
+setSelection({ kind: "thread", id });
+setName(thread.name);
+setTopic("");
+setParentId("");
 }
 function enterBulkSelection(channelId: string) {
 const channel = meta.channels.find((item) => item.id === channelId);
@@ -764,9 +825,30 @@ title={`${permissionPreviewRoleName}: ${label}`}
 </span>
 );
 }
+  async function saveThread(event: FormEvent) {
+event.preventDefault();
+if (!selectedThread || !name.trim()) return;
+if (name.trim() === selectedThread.name) {
+onNotice("変更はありません");
+return;
+}
+setSaving(true);
+try {
+await api(`/api/guilds/${guildId}/channels/${selectedThread.id}`, {
+method: "PATCH",
+body: JSON.stringify({ name: name.trim() })
+});
+await onRefresh();
+onNotice("スレッドを更新しました");
+} catch (reason) {
+onError(reason);
+} finally {
+setSaving(false);
+}
+}
   async function saveExisting(event: FormEvent) {
 event.preventDefault();
-if (!selection || selection.kind === "create" || !name.trim()) return;
+if (!selection || selection.kind === "create" || selection.kind === "thread" || !name.trim()) return;
 const channel = selectedChannel;
 const targetId = permissionTargetId;
 const baselineDraft = channel ? draftFor(channel, targetId) : null;
@@ -885,19 +967,37 @@ setSaving(true);
 try {
 await api(`/api/guilds/${guildId}/channels`, {
 method: "POST",
-body: JSON.stringify({
+body: JSON.stringify(
+createType === "thread"
+? {
+name: name.trim(),
+type: "thread",
+parentId: threadParentId || null,
+privateThread: threadPrivate,
+autoArchiveMinutes: threadArchiveMinutes,
+message: threadMessage
+}
+: {
 name: name.trim(),
 type: createType,
 parentId: createType === "category" ? null : parentId || null,
 topic: createType === "text" ? topic : undefined
-})
+}
+)
 });
 await onRefresh();
 setSelection(null);
 setName("");
 setTopic("");
 setParentId("");
-onNotice(createType === "category" ? "カテゴリを追加しました" : "チャンネルを追加しました");
+setThreadMessage("");
+onNotice(
+createType === "category"
+? "カテゴリを追加しました"
+: createType === "thread"
+? "スレッドを作成しました"
+: "チャンネルを追加しました"
+);
 } catch (reason) {
 onError(reason);
 } finally {
@@ -906,7 +1006,8 @@ setSaving(false);
 }
 async function deleteSelected() {
 if (!selection || selection.kind === "create") return;
-const label = selection.kind === "category" ? "カテゴリ" : "チャンネル";
+const label =
+selection.kind === "category" ? "カテゴリ" : selection.kind === "thread" ? "スレッド" : "チャンネル";
 if (!window.confirm(`${label}「${name}」を削除しますか？`)) return;
 setSaving(true);
 try {
@@ -960,7 +1061,7 @@ setSaving(false);
 setDragging(null);
 }
 }
-async function reorderCategory(id: string, position: number) {
+async function reorderCategory(id: string, targetId: string, placement: "before" | "after") {
 setSaving(true);
 setReorderFeedback({
 kind: "saving",
@@ -969,7 +1070,7 @@ message: "カテゴリの並び順を反映中…"
 try {
 await api(`/api/guilds/${guildId}/channels/reorder`, {
 method: "PATCH",
-body: JSON.stringify({ id, position })
+body: JSON.stringify({ id, targetId, placement })
 });
 await onRefresh();
 setReorderFeedback({
@@ -1007,7 +1108,10 @@ function dropOnCategory(target: ServerEditorMeta["categories"][number]) {
 if (!dragging) return;
 if (dragging.kind === "category") {
 if (dragging.id !== target.id) {
-        void reorderCategory(dragging.id, target.position ?? 0);
+// 下へ動かすときは相手の後ろ、上へ動かすときは相手の前に入れる
+const from = meta.categories.findIndex((item) => item.id === dragging.id);
+const to = meta.categories.findIndex((item) => item.id === target.id);
+        void reorderCategory(dragging.id, target.id, from < to ? "after" : "before");
 } else {
 setDragging(null);
 }
@@ -1036,13 +1140,17 @@ setPressingChannelId(null);
 }
 function beginTouchDrag(gesture: TouchGesture, touch: React.Touch) {
 const channel = meta.channels.find((item) => item.id === gesture.channelId);
+const category = meta.categories.find((item) => item.id === gesture.channelId);
 touchDraggingIdRef.current = gesture.channelId;
+touchDragKindRef.current = gesture.kind;
+setTouchDragKind(gesture.kind);
 setTouchDraggingId(gesture.channelId);
-setDragging({ kind: "channel", id: gesture.channelId });
+setDragging({ kind: gesture.kind, id: gesture.channelId });
 setTouchDragGhost({
+kind: gesture.kind,
 channelId: gesture.channelId,
-name: channel?.name ?? "channel",
-type: channel?.type,
+name: gesture.kind === "category" ? category?.name ?? "category" : channel?.name ?? "channel",
+type: gesture.kind === "category" ? undefined : channel?.type,
 width: gesture.width,
 height: gesture.height,
 x: touch.clientX - gesture.grabOffsetX,
@@ -1052,14 +1160,16 @@ setPressingChannelId(null);
 suppressClickUntilRef.current = Date.now() + 700;
 }
 function startChannelLongPress(
-event: React.TouchEvent<HTMLButtonElement>,
-channelId: string
+event: React.TouchEvent<HTMLElement>,
+channelId: string,
+kind: "channel" | "category" = "channel"
 ) {
 if (event.touches.length !== 1 || saving || bulkMode) return;
 clearPendingTouch();
 const touch = event.touches[0]!;
 const rect = event.currentTarget.getBoundingClientRect();
 const gesture: TouchGesture = {
+kind,
 channelId,
 identifier: touch.identifier,
 startX: touch.clientX,
@@ -1081,7 +1191,7 @@ try { navigator.vibrate?.(12); } catch { /* unsupported */ }
 }, 450);
 touchGestureRef.current = gesture;
 }
-function trackPendingLongPress(event: React.TouchEvent<HTMLButtonElement>) {
+function trackPendingLongPress(event: React.TouchEvent<HTMLElement>) {
 const gesture = touchGestureRef.current;
 if (!gesture || touchDraggingIdRef.current) return;
 const touch = Array.from(event.touches).find(
@@ -1111,7 +1221,8 @@ if (gesture?.armed) {
 window.clearTimeout(gesture.timer);
 touchGestureRef.current = null;
 setPressingChannelId(null);
-enterBulkSelection(gesture.channelId);
+// カテゴリは長押しして離しても何もしない（動かしたときだけ並べ替え）
+if (gesture.kind === "channel") enterBulkSelection(gesture.channelId);
 return;
 }
 clearPendingTouch();
@@ -1119,6 +1230,32 @@ clearPendingTouch();
 function updateTouchDropTarget(clientX: number, clientY: number) {
 const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
 if (!element) return;
+if (touchDragKindRef.current === "category") {
+// カテゴリは、指が乗っているカテゴリ（中のチャンネルを含む）の前後に入れる
+const group = element.closest<HTMLElement>("[data-category-id]");
+const groupId = group?.dataset.categoryId;
+if (group && groupId && groupId !== touchDraggingIdRef.current) {
+const rect = group.getBoundingClientRect();
+const next: TouchDropTarget = {
+kind: "categoryOrder",
+id: groupId,
+placement: clientY < rect.top + rect.height / 2 ? "before" : "after"
+};
+touchDropTargetRef.current = next;
+setTouchDropTarget(next);
+return;
+}
+if (element.closest("[data-uncategorized-group]")) {
+const first = meta.categories.find((item) => item.id !== touchDraggingIdRef.current);
+const next: TouchDropTarget = first ? { kind: "categoryOrder", id: first.id, placement: "before" } : null;
+touchDropTargetRef.current = next;
+setTouchDropTarget(next);
+return;
+}
+touchDropTargetRef.current = null;
+setTouchDropTarget(null);
+return;
+}
 const channelElement = element.closest<HTMLElement>("[data-channel-id]");
 if (channelElement?.dataset.channelId) {
 const targetId = channelElement.dataset.channelId;
@@ -1162,6 +1299,9 @@ setTouchDropTarget(null);
 function finishTouchDrag(channelId: string) {
 const target = touchDropTargetRef.current;
 const gesture = touchGestureRef.current;
+const kind = touchDragKindRef.current;
+touchDragKindRef.current = "channel";
+setTouchDragKind("channel");
 if (gesture) window.clearTimeout(gesture.timer);
 touchGestureRef.current = null;
 touchDraggingIdRef.current = null;
@@ -1173,6 +1313,13 @@ setTouchDragGhost(null);
 setDragging(null);
 suppressClickUntilRef.current = Date.now() + 700;
 if (!target) return;
+if (kind === "category") {
+if (target.kind === "categoryOrder" && target.id !== channelId) {
+        void reorderCategory(channelId, target.id, target.placement);
+}
+return;
+}
+if (target.kind === "categoryOrder") return;
 if (target.kind === "channel") {
 const targetChannel = meta.channels.find((channel) => channel.id === target.id);
 if (!targetChannel || targetChannel.id === channelId) return;
@@ -1198,6 +1345,12 @@ placement: "start"
 }
 function touchDropDescription(): string {
 if (!touchDropTarget) return "移動先を選んでください";
+if (touchDropTarget.kind === "categoryOrder") {
+const category = meta.categories.find((item) => item.id === touchDropTarget.id);
+return category
+? `カテゴリ「${category.name}」の${touchDropTarget.placement === "before" ? "前" : "後"}へ移動`
+: "移動先を選んでください";
+}
 if (touchDropTarget.kind === "channel") {
 const target = meta.channels.find(
 (channel) => channel.id === touchDropTarget.id
@@ -1214,6 +1367,27 @@ return category
 : "カテゴリへ移動";
 }
 return "カテゴリなしの先頭へ移動";
+}
+function renderThreads(parentChannelId: string) {
+const list = threadsByParent.get(parentChannelId);
+if (!list?.length || bulkMode) return null;
+return list.map((thread) => (
+<button
+type="button"
+key={thread.id}
+className={`discord-channel discord-thread ${selection?.kind === "thread" && selection.id === thread.id ? "selected" : ""} ${thread.archived ? "archived" : ""}`}
+onClick={() => {
+if (Date.now() < suppressClickUntilRef.current) return;
+openThread(thread.id);
+}}
+title={thread.type === "private" ? "プライベートスレッド" : "スレッド"}
+>
+<span className="channel-hash">{thread.type === "private" ? "🔒" : "🧵"}</span>
+<span className="channel-name">{thread.name}</span>
+<span />
+<span className="channel-edit">›</span>
+</button>
+));
 }
 useEffect(() => {
 return () => {
@@ -1290,6 +1464,8 @@ event.preventDefault();
 finishTouchDrag(touchDraggingId);
 };
 const handleCancel = () => {
+touchDragKindRef.current = "channel";
+setTouchDragKind("channel");
 touchDropTargetRef.current = null;
 touchDraggingIdRef.current = null;
 touchGestureRef.current = null;
@@ -1323,9 +1499,15 @@ transform: `translate3d(${touchDragGhost.x}px, ${touchDragGhost.y}px, 0) scale(1
 aria-hidden="true"
 >
 <span className="channel-hash">
-{touchDragGhost.type === "voice" || touchDragGhost.type === "stage" ? "🔊" : "#"}
+{touchDragGhost.kind === "category"
+? "⌄"
+: touchDragGhost.type === "voice" || touchDragGhost.type === "stage"
+? "🔊"
+: "#"}
 </span>
-<span className="channel-name">{touchDragGhost.name}</span>
+<span className="channel-name">
+{touchDragGhost.kind === "category" ? touchDragGhost.name.toUpperCase() : touchDragGhost.name}
+</span>
 <span className="touch-ghost-grip">⋮⋮</span>
 </div>
 )}
@@ -1455,7 +1637,7 @@ aria-label="チャンネルを追加"
 </div>
 )}
 <div className="discord-channel-scroll" ref={channelScrollRef}>
-{touchDraggingId && (
+{touchDraggingId && touchDragKind === "channel" && (
 <div
 className={`uncategorized-touch-drop ${
                   touchDropTarget?.kind === "uncategorized" ? "active" : ""
@@ -1466,10 +1648,10 @@ data-uncategorized-drop="true"
 </div>
 )}
 {uncategorized.length > 0 && (
-<div className="discord-channel-group uncategorized-group">
+<div className="discord-channel-group uncategorized-group" data-uncategorized-group="true">
 {uncategorized.map((channel) => (
+<Fragment key={channel.id}>
 <button
-key={channel.id}
 data-channel-id={channel.id}
 draggable={!bulkMode}
 onDragStart={() => setDragging({ kind: "channel", id: channel.id })}
@@ -1508,6 +1690,8 @@ className={`bulk-select-indicator ${
 <span className="channel-edit">›</span>
 )}
 </button>
+{renderThreads(channel.id)}
+</Fragment>
 ))}
 </div>
 )}
@@ -1521,19 +1705,37 @@ className={`discord-channel-group ${
                     touchDropTarget.id === category.id
                       ? "touch-category-target"
                       : ""
+                  } ${
+                    touchDropTarget?.kind === "categoryOrder" &&
+                    touchDropTarget.id === category.id
+                      ? `touch-category-${touchDropTarget.placement}`
+                      : ""
+                  } ${
+                    touchDraggingId === category.id ? "touch-dragging-category" : ""
                   }`}
 key={category.id}
 data-category-id={category.id}
 >
 <div
-className={`discord-category ${selected ? "selected" : ""} ${dragging?.kind === "category" && dragging.id === category.id ? "dragging" : ""}`}
+className={`discord-category ${selected ? "selected" : ""} ${dragging?.kind === "category" && dragging.id === category.id ? "dragging" : ""} ${pressingChannelId === category.id ? "long-pressing" : ""}`}
                     draggable
 onDragStart={() => setDragging({ kind: "category", id: category.id })}
 onDragEnd={() => setDragging(null)}
 onDragOver={(event) => event.preventDefault()}
 onDrop={() => dropOnCategory(category)}
+onTouchStart={(event) => startChannelLongPress(event, category.id, "category")}
+onTouchMove={trackPendingLongPress}
+onTouchEnd={endPendingLongPress}
+onTouchCancel={endPendingLongPress}
+onContextMenu={(event) => event.preventDefault()}
 >
-<button className="discord-category-name" onClick={() => openCategory(category.id)}>
+<button
+className="discord-category-name"
+onClick={() => {
+if (Date.now() < suppressClickUntilRef.current) return;
+openCategory(category.id);
+}}
+>
 <span>⌄</span>
 <strong>{category.name.toUpperCase()}</strong>
 </button>
@@ -1547,8 +1749,8 @@ aria-label={`${category.name} にチャンネルを追加`}
 </button>
 </div>
 {children.map((channel) => (
+<Fragment key={channel.id}>
 <button
-key={channel.id}
 data-channel-id={channel.id}
 draggable={!bulkMode}
 onDragStart={(event) => {
@@ -1596,6 +1798,8 @@ className={`bulk-select-indicator ${
 <span className="channel-edit">›</span>
 )}
 </button>
+{renderThreads(channel.id)}
+</Fragment>
 ))}
 </div>
 );
@@ -1725,7 +1929,7 @@ onClick={() => void saveBulkPermissions()}
 <h3>プレビューから編集</h3>
 <p>
                 カテゴリ横の＋でその中にチャンネルを追加。チャンネル名を押すと、
-                名前・トピック・所属カテゴリを変更できます。スマホは長押しして離すと一括選択、長押し後そのまま動かすと並べ替えできます。
+                名前・トピック・所属カテゴリを変更できます。スマホは長押しして離すと一括選択、長押し後そのまま動かすと並べ替えできます（カテゴリ名も長押しで並べ替え可能）。
 </p>
 <div className="editor-quick-actions">
 <button className="primary" onClick={() => openCreate(null, "text")}>
@@ -1733,6 +1937,9 @@ onClick={() => void saveBulkPermissions()}
 </button>
 <button className="secondary" onClick={() => openCreate(null, "category")}>
                   ＋ カテゴリ
+</button>
+<button className="secondary" onClick={() => openCreate(null, "thread")} disabled={threadParents.length === 0}>
+                  ＋ スレッド
 </button>
 </div>
 </div>
@@ -1753,14 +1960,16 @@ onClick={() => void saveBulkPermissions()}
 <select
 value={createType}
 onChange={(event) => {
-const next = event.target.value as "text" | "voice" | "category";
+const next = event.target.value as CreateType;
 setCreateType(next);
 if (next === "category") setParentId("");
+if (next === "thread" && !threadParentId) setThreadParentId(threadParents[0]?.id ?? "");
 }}
 >
 <option value="text"># テキストチャンネル</option>
 <option value="voice">🔊 ボイスチャンネル</option>
 <option value="category">カテゴリ</option>
+<option value="thread">🧵 スレッド</option>
 </select>
 </label>
 <label>
@@ -1771,10 +1980,65 @@ if (next === "category") setParentId("");
 maxLength={100}
 value={name}
 onChange={(event) => setName(event.target.value)}
-placeholder={createType === "category" ? "INFORMATION" : "general"}
+placeholder={createType === "category" ? "INFORMATION" : createType === "thread" ? "質問スレッド" : "general"}
 />
 </label>
-{createType !== "category" && (
+{createType === "thread" && (() => {
+const parent = meta.channels.find((channel) => channel.id === threadParentId);
+const isForum = parent?.type === "forum" || parent?.type === "media";
+const isAnnouncement = parent?.type === "announcement";
+return (
+<>
+<label>
+<span>スレッドを作るチャンネル</span>
+<select required value={threadParentId} onChange={(event) => setThreadParentId(event.target.value)}>
+<option value="">選択してください</option>
+{threadParents.map((channel) => (
+<option value={channel.id} key={channel.id}>
+{channel.type === "forum" || channel.type === "media" ? "💬 " : "# "}
+{channel.name}
+</option>
+))}
+</select>
+</label>
+{!isForum && !isAnnouncement && (
+<label className="editor-checkbox">
+<input
+type="checkbox"
+checked={threadPrivate}
+onChange={(event) => setThreadPrivate(event.target.checked)}
+/>
+<span>プライベートスレッド（招待された人とスレッド管理権限のある人だけが見られる）</span>
+</label>
+)}
+<label>
+<span>自動アーカイブ</span>
+<select
+value={threadArchiveMinutes}
+onChange={(event) => setThreadArchiveMinutes(Number(event.target.value))}
+>
+<option value={60}>1時間 発言がなければ</option>
+<option value={1440}>24時間 発言がなければ</option>
+<option value={4320}>3日 発言がなければ</option>
+<option value={10080}>1週間 発言がなければ</option>
+</select>
+</label>
+{isForum && (
+<label>
+<span>最初の投稿</span>
+<textarea
+required
+value={threadMessage}
+onChange={(event) => setThreadMessage(event.target.value)}
+maxLength={2000}
+placeholder="フォーラムの投稿には本文が必要です"
+/>
+</label>
+)}
+</>
+);
+})()}
+{createType !== "category" && createType !== "thread" && (
 <>
 <label>
 <span>カテゴリ</span>
@@ -1803,6 +2067,40 @@ placeholder="任意"
 <button className="primary editor-save" type="submit" disabled={saving}>
 {saving ? "作成中…" : "追加する"}
 </button>
+</form>
+)}
+{!bulkMode && selectedThread && (
+<form className="editor-form" onSubmit={(event) => void saveThread(event)}>
+<div className="editor-inspector-title">
+<div>
+<span className="eyebrow">THREAD</span>
+<h3>スレッドを編集</h3>
+<p>
+{`#${meta.channels.find((channel) => channel.id === selectedThread.parentId)?.name ?? "?"} のスレッド`}
+{selectedThread.type === "private" ? "（プライベート）" : ""}
+</p>
+</div>
+<button type="button" className="editor-close" onClick={() => setSelection(null)}>
+                  ×
+</button>
+</div>
+<label>
+<span>名前</span>
+<input
+                  required
+maxLength={100}
+value={name}
+onChange={(event) => setName(event.target.value)}
+/>
+</label>
+<div className="editor-action-row">
+<button className="primary" type="submit" disabled={saving}>
+{saving ? "保存中…" : "名前を保存"}
+</button>
+<button className="danger" type="button" disabled={saving} onClick={() => void deleteSelected()}>
+                  削除
+</button>
+</div>
 </form>
 )}
 {!bulkMode && (selectedChannel || selectedCategory) && selection?.kind !== "create" && (
@@ -1930,6 +2228,15 @@ aria-live="polite"
 </div>
 </div>
 </>
+)}
+{selectedChannel && ["text", "announcement", "forum", "media"].includes(selectedChannel.type ?? "text") && (
+<button
+type="button"
+className="secondary editor-thread-create"
+onClick={() => openCreate(selectedChannel.id, "thread")}
+>
+                  🧵 このチャンネルにスレッドを作成
+</button>
 )}
 <div className="editor-action-row">
 <button className="primary" type="submit" disabled={saving}>

@@ -848,6 +848,13 @@ async function discordMeta(env:Env,guildId:string){
 
   const channelsPromise=botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
   const rolesPromise=botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`);
+  // スレッドはプレビュー表示用。取得できなくてもチャンネル編集は続けられるようにする
+  const threadsPromise=botJson<{threads?:Array<DiscordChannel&{thread_metadata?:{archived?:boolean;locked?:boolean}}>}>(
+    env,`/guilds/${guildId}/threads/active`
+  ).then(result=>result.threads??[]).catch(error=>{
+    console.error("active thread list failed",guildId,error);
+    return [] as Array<DiscordChannel&{thread_metadata?:{archived?:boolean;locked?:boolean}}>;
+  });
 
   try{
     channels=await channelsPromise;
@@ -864,6 +871,7 @@ async function discordMeta(env:Env,guildId:string){
   }
 
   member=await getBotGuildMember(env,guildId,roles);
+  const activeThreads=await threadsPromise;
 
   const basePermissions=botBasePermissions(guildId,roles,member);
   const botAdministrator=(basePermissions&8n)===8n;
@@ -905,11 +913,22 @@ async function discordMeta(env:Env,guildId:string){
       }),
     categories:channels
       .filter(c=>c.type===4)
-      .sort((a,b)=>(a.position??0)-(b.position??0))
+      .sort((a,b)=>(a.position??0)-(b.position??0)||(BigInt(a.id)<BigInt(b.id)?-1:1))
       .map(c=>({
         id:c.id,
         name:c.name,
         position:c.position??0
+      })),
+    threads:activeThreads
+      .filter(t=>[10,11,12].includes(t.type)&&t.parent_id)
+      .sort((a,b)=>(BigInt(a.id)<BigInt(b.id)?-1:1))
+      .map(t=>({
+        id:t.id,
+        name:t.name,
+        parentId:t.parent_id??null,
+        type:t.type===12?"private":t.type===10?"announcement":"public",
+        archived:Boolean(t.thread_metadata?.archived),
+        locked:Boolean(t.thread_metadata?.locked)
       })),
     roles:roles
       .filter(r=>!r.managed)
@@ -2130,9 +2149,51 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(channelsMatch&&request.method==="POST"){
     const guildId=channelsMatch[1]!;
     await requireGuild(request,env,guildId);
-    const input=await bodyObject<{name:string;type:"text"|"voice"|"category";parentId?:string|null;topic?:string}>(request);
+    const input=await bodyObject<{
+      name:string;
+      type:"text"|"voice"|"category"|"thread";
+      parentId?:string|null;
+      topic?:string;
+      privateThread?:boolean;
+      autoArchiveMinutes?:number;
+      message?:string;
+    }>(request);
     const name=input.name?.trim();
     if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
+    if(input.type==="thread"){
+      // スレッドは親チャンネルの下に作る。フォーラム/メディアは最初の投稿が必須
+      const parentChannelId=String(input.parentId??"");
+      if(!/^\d+$/.test(parentChannelId)) throw new HttpError(400,"スレッドを作るチャンネルを選んでください");
+      const parent=await botJson<DiscordChannel>(env,`/channels/${parentChannelId}`);
+      if((parent.guild_id??guildId)!==guildId) throw new HttpError(400,"スレッドを作るチャンネルが不正です");
+      const autoArchive=[60,1440,4320,10080].includes(Number(input.autoArchiveMinutes))
+        ?Number(input.autoArchiveMinutes)
+        :1440;
+      let threadBody:Record<string,unknown>;
+      if(parent.type===15||parent.type===16){
+        const message=String(input.message??"").trim();
+        if(!message) throw new HttpError(400,"フォーラムのスレッドには最初の投稿内容が必要です");
+        threadBody={name,auto_archive_duration:autoArchive,message:{content:message.slice(0,2000)}};
+      }else if(parent.type===0||parent.type===5){
+        if(parent.type===5&&input.privateThread){
+          throw new HttpError(400,"アナウンスチャンネルにはプライベートスレッドを作れません");
+        }
+        threadBody={
+          name,
+          auto_archive_duration:autoArchive,
+          type:parent.type===5?10:input.privateThread?12:11,
+          ...(input.privateThread?{invitable:false}:{})
+        };
+      }else{
+        throw new HttpError(400,"このチャンネルにはスレッドを作れません（テキスト・アナウンス・フォーラムのみ）");
+      }
+      const thread=await botJson<DiscordChannel>(env,`/channels/${parentChannelId}/threads`,{
+        method:"POST",
+        headers:{"X-Audit-Log-Reason":"Dashboard: thread created"},
+        body:JSON.stringify(threadBody)
+      });
+      return json(env,{id:thread.id,name:thread.name,type:"thread",parentId:parentChannelId});
+    }
     const botOverwrite=[{
       id:env.DISCORD_APPLICATION_ID.trim(),
       type:1,
@@ -2180,15 +2241,39 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const source=channels.find(channel=>channel.id===input.id);
     if(!source) throw new HttpError(404,"移動するチャンネルが見つかりません");
 
-    // Keep the existing desktop category reorder behavior.
     if(source.type===4){
-      if(!Number.isInteger(input.position)){
+      const byOrder=(a:DiscordChannel,b:DiscordChannel)=>
+        (a.position??0)-(b.position??0)||(BigInt(a.id)<BigInt(b.id)?-1:1);
+      const categories=channels.filter(channel=>channel.type===4).sort(byOrder);
+      const others=categories.filter(channel=>channel.id!==source.id);
+      let index:number;
+      if(input.targetId){
+        if(input.targetId===source.id) return json(env,{ok:true,kind:"category",unchanged:true});
+        const targetIndex=others.findIndex(channel=>channel.id===input.targetId);
+        if(targetIndex<0) throw new HttpError(400,"移動先カテゴリが見つかりません");
+        index=targetIndex+(input.placement==="after"?1:0);
+      }else if(Number.isInteger(input.position)){
+        // 旧クライアント互換: 指定位置のカテゴリの場所へ入れる
+        const at=others.findIndex(channel=>(channel.position??0)>=Number(input.position));
+        index=at<0?others.length:at;
+      }else{
         throw new HttpError(400,"カテゴリの並び替え位置が不正です");
       }
+      const reordered=[...others];
+      reordered.splice(Math.max(0,Math.min(index,others.length)),0,source);
+      // 1つだけ position を変えると他のカテゴリと値が重なって順番が確定しないので、全カテゴリの順番を送る
       await botJson(env,`/guilds/${guildId}/channels`,{
         method:"PATCH",
-        body:JSON.stringify([{id:source.id,position:input.position}])
+        headers:{"X-Audit-Log-Reason":"Dashboard: category reorder"},
+        body:JSON.stringify(reordered.map((channel,position)=>({id:channel.id,position})))
       });
+      const confirmed=(await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`))
+        .filter(channel=>channel.type===4)
+        .sort(byOrder)
+        .map(channel=>channel.id);
+      if(confirmed.join(",")!==reordered.map(channel=>channel.id).join(",")){
+        throw new HttpError(502,"Discord側でカテゴリの並び替えを反映できませんでした");
+      }
       return json(env,{ok:true,kind:"category"});
     }
 
@@ -3262,7 +3347,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v74-mediation",
+          version:"bot-coexistence-v75-threads-category-order",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
