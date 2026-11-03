@@ -47,7 +47,7 @@ async function runtime(t) {
       const raw = method === 'GET' || method === 'DELETE' ? '' : await request.clone().text().catch(() => '');
       let body = null;
       try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
-      calls.push({method, host: url.hostname, path: url.pathname, search: url.search, body});
+      calls.push({method, host: url.hostname, path: url.pathname, search: url.search, body, contentType: request.headers.get('content-type') ?? ''});
 
       if (url.hostname === 'www.paypay.ne.jp') {
         if (url.pathname === '/app/v1/oauth/token') {
@@ -209,6 +209,12 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
 
   const t0 = await openTrade(env);
   assert.equal(t0.status, 'FEE');
+  const again = await interact(env, {
+    type: 3, channel_id: panelChannel, member: member(userB),
+    data: {custom_id: 'md:partner', component_type: 5, values: [userA], resolved: {users: {[userA]: {id: userA, username: 'a'}}, members: {[userA]: {roles: [], joined_at: oldJoin}}}}
+  });
+  assert.match(again.content, /すでに取引が進行中/);
+  assert.equal((await env.db.prepare('SELECT COUNT(*) AS n FROM mediation_trades').first()).n, 1);
   assert.equal(t0.fee_total, 200);
   const createCall = env.calls.find(c => c.method === 'POST' && c.path === `/api/v10/guilds/${guildId}/channels`);
   assert.equal(createCall.body.parent_id, categoryId);
@@ -217,6 +223,8 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
 
   // ⓪ fee: A pays it all, B chooses "other"
   env.links.set('fee1', {amount: 200, status: 'PENDING'});
+  const badHost = await interact(env, submit(userA, `md:feem:self:${id}`, {link: 'https://www.paypay.ne.jp/fee1', passcode: ''}));
+  assert.match(badHost.content, /送金リンクではない/);
   const feeModal = await interact(env, button(userA, `md:fee:self:${id}`));
   assert.equal(feeModal.type, 9);
   await interact(env, submit(userA, `md:feem:self:${id}`, {link: payLink('fee1'), passcode: ''}));
@@ -287,7 +295,9 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
   assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok');
   await eventually(async () => (await trade(env)).channel_deleted === 1);
   assert.equal((await trade(env)).transcript_saved, 1);
-  assert.ok(env.calls.some(c => c.method === 'POST' && c.path === `/api/v10/channels/${logChannel}/messages`));
+  const logUpload = env.calls.find(c => c.method === 'POST' && c.path === `/api/v10/channels/${logChannel}/messages`);
+  assert.ok(logUpload);
+  assert.match(logUpload.contentType, /^multipart\/form-data/, 'transcript must be uploaded as multipart');
   assert.ok(env.calls.some(c => c.method === 'DELETE' && c.path === `/api/v10/channels/${tradeChannel}`));
   const rename = env.calls.find(c => c.method === 'PATCH' && c.path === `/api/v10/channels/${resultChannel}`);
   assert.equal(rename?.body?.name, '仲介実績ー実績1件');
@@ -367,4 +377,19 @@ test('mismatched amounts cancel the trade and auto-agree completes after the con
   const done = await eventually(async () => (await trade(env)).status === 'PAID' && await trade(env));
   assert.equal(done.decision, '自動同意');
   assert.equal(env.created.at(-1).amount, 3000);
+});
+
+test('trades stuck mid-way alert staff once', async t => {
+  const env = await setup(t);
+  await request(env.mf, `/api/guilds/${guildId}/mediation/settings`, env.token, 'PUT', {feeAmount: 0});
+  const t0 = await openTrade(env);
+  await env.db.prepare("UPDATE mediation_trades SET status='CONFIRMING',amount=1000,buyer_id=?,seller_id=?,updated_at=? WHERE id=?").bind(userA, userB, Date.now() - 20 * 60_000, t0.id).run();
+  const worker = await env.mf.getWorker();
+  const staffPosts = () => env.calls.filter(c => c.method === 'POST' && c.path === `/api/v10/channels/${staffChannel}/messages`);
+  assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok');
+  await eventually(() => staffPosts().length === 1);
+  assert.deepEqual(staffPosts()[0].body.components[0].components.map(b => b.custom_id), [`md:staff:confirm:${t0.id}`, `md:staff:reject:${t0.id}`]);
+  assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok');
+  await new Promise(r => setTimeout(r, 200));
+  assert.equal(staffPosts().length, 1, 'alert is sent only once per stuck status');
 });

@@ -181,6 +181,9 @@ let ready=false;
 export async function ensureMediationSchema(env:Env){
   if(ready) return;
   for(const sql of schema) await env.DB.prepare(sql).run();
+  const columns=new Set((await env.DB.prepare("PRAGMA table_info(mediation_trades)").all<{name:string}>()).results.map(c=>c.name));
+  // スタッフに通知したときのステータス。処理が途中で止まった取引を一度だけ知らせるのに使う
+  if(!columns.has("alerted_status")) await env.DB.prepare("ALTER TABLE mediation_trades ADD COLUMN alerted_status TEXT").run();
   ready=true;
 }
 
@@ -201,7 +204,7 @@ export async function markResultDirty(env:Env,guildId:string){
 }
 
 export async function listDirtyResultGuilds(env:Env){
-  return (await env.DB.prepare("SELECT guild_id,settings_json,result_renamed_at,result_renamed_name FROM mediation_settings WHERE result_dirty=1 LIMIT 10")
+  return (await env.DB.prepare("SELECT guild_id,settings_json,result_renamed_at,result_renamed_name FROM mediation_settings WHERE result_dirty=1 ORDER BY result_renamed_at ASC LIMIT 10")
     .all<{guild_id:string;settings_json:string;result_renamed_at:number;result_renamed_name:string|null}>()).results;
 }
 
@@ -242,7 +245,8 @@ export async function updateTrade(env:Env,id:number,fields:Partial<Trade>){
   const keys=Object.keys(fields).filter(k=>UPDATABLE.has(k));
   if(!keys.length) return;
   const values=keys.map(k=>(fields as any)[k]??null);
-  await env.DB.prepare(`UPDATE mediation_trades SET ${keys.map(k=>k+"=?").join(",")},updated_at=? WHERE id=?`)
+  const clearAlert=typeof fields.status==="string"&&![FEE_RECEIVING,CONFIRMING,PAYOUT].includes(fields.status);
+  await env.DB.prepare(`UPDATE mediation_trades SET ${keys.map(k=>k+"=?").join(",")}${clearAlert?",alerted_status=NULL":""},updated_at=? WHERE id=?`)
     .bind(...values,Date.now(),id).run();
 }
 
@@ -250,7 +254,9 @@ export async function updateTrade(env:Env,id:number,fields:Partial<Trade>){
 export async function transition(env:Env,id:number,from:string[],to:string,fields:Partial<Trade>={}):Promise<boolean>{
   const keys=Object.keys(fields).filter(k=>UPDATABLE.has(k)&&k!=="status");
   const values=keys.map(k=>(fields as any)[k]??null);
-  const sets=["status=?",...keys.map(k=>k+"=?"),"updated_at=?"].join(",");
+  // 自動処理の段階を抜けたら通知済みの印を消し、次に止まったときにまた知らせられるようにする
+  const clearAlert=![FEE_RECEIVING,CONFIRMING,PAYOUT].includes(to);
+  const sets=["status=?",...keys.map(k=>k+"=?"),...(clearAlert?["alerted_status=NULL"]:[]),"updated_at=?"].join(",");
   const result=await env.DB.prepare(
     `UPDATE mediation_trades SET ${sets} WHERE id=? AND status IN (${from.map(()=>"?").join(",")})`
   ).bind(to,...values,Date.now(),id,...from).run();
@@ -262,6 +268,12 @@ export async function countOpenTrades(env:Env,guildId:string,userId:string):Prom
     `SELECT COUNT(*) AS n FROM mediation_trades WHERE guild_id=? AND (user_a=? OR user_b=?) AND status IN (${ACTIVE_STATUSES.map(()=>"?").join(",")})`
   ).bind(guildId,userId,userId,...ACTIVE_STATUSES).first<{n:number}>();
   return Number(row?.n??0);
+}
+
+export async function activeTradeBetween(env:Env,guildId:string,userA:string,userB:string):Promise<Trade|null>{
+  return env.DB.prepare(
+    `SELECT * FROM mediation_trades WHERE guild_id=? AND ((user_a=? AND user_b=?) OR (user_a=? AND user_b=?)) AND status IN (${ACTIVE_STATUSES.map(()=>"?").join(",")}) ORDER BY id DESC LIMIT 1`
+  ).bind(guildId,userA,userB,userB,userA,...ACTIVE_STATUSES).first<Trade>();
 }
 
 export async function addRecord(env:Env,guildId:string,buyerId:string,sellerId:string){
@@ -305,8 +317,23 @@ export async function listRecentTrades(env:Env,guildId:string,limit=30){
   ).bind(guildId,limit).all()).results;
 }
 
-export async function listAutoAgreeCandidates(env:Env){
-  return (await env.DB.prepare("SELECT * FROM mediation_trades WHERE status=? AND complete_requested_at IS NOT NULL ORDER BY complete_requested_at ASC LIMIT 25").bind(COMPLETE_PENDING).all<Trade>()).results;
+/** 自動同意の時間を過ぎた完了申請（サーバーごとの設定時間で判定し、無効なサーバーは除く） */
+export async function listAutoAgreeCandidates(env:Env,now:number){
+  const hours=`COALESCE(CAST(json_extract(s.settings_json,'$.autoAgreeHours') AS REAL),${DEFAULT_MEDIATION_SETTINGS.autoAgreeHours})`;
+  return (await env.DB.prepare(
+    `SELECT t.* FROM mediation_trades t LEFT JOIN mediation_settings s ON s.guild_id=t.guild_id WHERE t.status=? AND t.complete_requested_at IS NOT NULL AND ${hours}>0 AND t.complete_requested_at+${hours}*3600000<=? ORDER BY t.complete_requested_at ASC LIMIT 25`
+  ).bind(COMPLETE_PENDING,now).all<Trade>()).results;
+}
+
+export async function markAlerted(env:Env,id:number){
+  await env.DB.prepare("UPDATE mediation_trades SET alerted_status=status WHERE id=?").bind(id).run();
+}
+
+/** 自動処理の途中で止まり、スタッフにも通知されていない取引 */
+export async function listStuckTrades(env:Env,olderThan:number){
+  return (await env.DB.prepare(
+    "SELECT * FROM mediation_trades WHERE status IN (?,?,?) AND updated_at<? AND (alerted_status IS NULL OR alerted_status<>status) ORDER BY updated_at ASC LIMIT 10"
+  ).bind(FEE_RECEIVING,CONFIRMING,PAYOUT,olderThan).all<Trade>()).results;
 }
 
 export async function listDueDeletions(env:Env,now:number){

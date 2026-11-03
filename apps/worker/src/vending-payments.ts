@@ -163,7 +163,8 @@ export async function acceptPayPayLink(
     senderChannelUrl:info.payload.message.chatRoomId,
     iosMinimumVersion:"3.45.0",
     androidMinimumVersion:"3.45.0",
-    ...(passcode?{passcode}:{})
+    // パスコードはリンクに設定されているときだけ送る（不要な項目で受け取りを拒否されないように）
+    ...(passcode&&info?.payload?.pendingP2PInfo?.isSetPasscode?{passcode}:{})
   };
 
   let received=await postAcceptP2PLink(receivePayload,session);

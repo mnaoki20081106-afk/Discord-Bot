@@ -29,15 +29,16 @@ import {
 } from "./vending-payments";
 import {
   AMOUNT, CANCELLED, CLOSED, COMPLETE_PENDING, CONFIRMING, DISPUTE, FEE, FEE_RECEIVING, PAID, PAYMENT, PAYOUT, ROLE, TRADING,
-  addRecord, completedCount, countOpenTrades, createTrade, ensureMediationSchema, getMediationSettings, getStats, getTrade,
-  guildSummary, listAutoAgreeCandidates, listDirtyResultGuilds, listDueDeletions, listRecentTrades, markResultDirty,
+  activeTradeBetween, addRecord, completedCount, countOpenTrades, createTrade, ensureMediationSchema, getMediationSettings, getStats, getTrade,
+  guildSummary, listAutoAgreeCandidates, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
   normalizeMediationSettings, saveMediationSettings, setResultRenameState, tradeByChannel, transition, updateTrade,
   type MediationSettings, type Trade
 } from "./mediation-db";
 
 export class MediationHttpError extends Error { constructor(public status:number,message:string){super(message);} }
 
-const PAYPAY_LINK_RE=/^https:\/\/(?:[\w-]+\.)*paypay\.ne\.jp\/\S+$/;
+// 受け取り処理は pay.paypay.ne.jp/<コード> の形しか解釈できないので、それ以外は入力の時点で弾く
+const PAYPAY_LINK_RE=/^https:\/\/pay\.paypay\.ne\.jp\/[A-Za-z0-9_-]+\/?(?:[?#]\S*)?$/;
 const COLOR={blurple:0x5865f2,green:0x57f287,red:0xed4245,orange:0xe67e22,gold:0xf1c40f,teal:0x1abc9c};
 const VIEW=1024n,SEND=2048n,EMBED=16384n,ATTACH=32768n,HISTORY=65536n,MANAGE_MESSAGES=8192n,MANAGE_CHANNELS=16n,MANAGE_ROLES=268435456n,ADMIN=8n;
 const MEMBER_READ=(VIEW|HISTORY).toString();
@@ -157,8 +158,10 @@ async function notifyStaff(env:Env,settings:MediationSettings,title:string,descr
     return button(`md:staff:${action}:${tid}`,label,style);
   }))]:[];
   const payload={content:staffMentions(settings)||undefined,embeds:[embed(title,description,color)],components,allowed_mentions:{parse:["roles"]}};
-  if(await trySend(env,settings.staffChannelId,payload)) return;
-  console.error("mediation staff notification has no channel",title);
+  const sent=await trySend(env,settings.staffChannelId,payload);
+  if(!sent) console.error("mediation staff notification was not delivered",title);
+  // 判断ボタン付きの通知を出した取引は「止まった取引」の検出対象から外す
+  for(const tid of new Set(actions.map(([,id])=>id))) await markAlerted(env,tid).catch(()=>undefined);
 }
 
 async function setChat(env:Env,t:Trade,enabled:boolean){
@@ -334,6 +337,14 @@ async function onPartner(env:Env,c:Ctx){
     }
   }
 
+  // 相手選択メニューは何度でも押せるので、同じ2人の取引が二重にできないようにする
+  const existing=await activeTradeBetween(env,c.guildId,c.userId,partnerId);
+  if(existing){
+    return reply(existing.channel_id
+      ?`この相手とはすでに取引が進行中です: <#${existing.channel_id}>`
+      :"この相手とはすでに取引が進行中です。");
+  }
+
   const feeTotal=c.settings.feeAmount;
   const t=await createTrade(env,c.guildId,c.userId,partnerId,feeTotal,feeTotal>0?FEE:AMOUNT);
   const overwrites:Array<Record<string,unknown>>=[
@@ -387,6 +398,11 @@ async function onFeeButton(env:Env,c:Ctx,choice:string,tid:number){
   const t=await tradeFor(env,c,tid);
   if(typeof t==="string") return reply(t);
   if(t.status!==FEE) return reply("仲介費の選択は終了しています。");
+  if(choice!=="other"&&choice!=="self"&&choice!=="split") return reply("不正な選択です。");
+  // 仲介費が1円だと割り勘で片方の負担が0円になり、0円の送金リンクは作れない
+  if(choice==="split"&&Math.floor(t.fee_total/2)<=0){
+    return reply("仲介費が少額のため割り勘はできません。「自分が負担」か「相手が負担」を選んでください。");
+  }
   if(choice==="other"){
     const k=feeKeys(t,c.userId);
     await updateTrade(env,t.id,{[k.choice]:"other",[k.link]:null,[k.pass]:null} as Partial<Trade>);
@@ -406,6 +422,12 @@ async function onFeeModal(env:Env,c:Ctx,choice:string,tid:number){
   const passcode=modalValue(c.interaction,"passcode").trim()||null;
   if(!PAYPAY_LINK_RE.test(link)) return reply("PayPayの送金リンクではないようです。");
   const amount=feeShare(t,c.userId,choice);
+  if(amount<=0) return reply("あなたの負担額は0円です。もう一度ボタンから選び直してください。");
+  // 割り勘で2人が同じリンクを出すと、1回分しか受け取れない
+  const otherLinkEnc=c.userId===t.user_a?t.fee_link_b_enc:t.fee_link_a_enc;
+  if(otherLinkEnc&&await dec(env,otherLinkEnc)===link){
+    return reply("相手が提出したものと同じリンクです。自分で作った送金リンクを提出してください。");
+  }
   // 金額だけ確認する。受け取るのは2人の選択が一致してから
   let info=null;
   try{ info=await inspectPayPayLink(link); }catch{ info=null; }
@@ -445,6 +467,7 @@ async function finalizeFee(env:Env,settings:MediationSettings,tid:number){
     [t.user_b,cb,t.fee_link_b_enc,t.fee_pass_b_enc,"b"]
   ] as const){
     if(choice!=="self"&&choice!=="split") continue;
+    if(feeShare(t,uid,choice)<=0) continue;
     payers.push({uid,link:(await dec(env,linkEnc))??"",pass:await dec(env,passEnc),amount:feeShare(t,uid,choice),side});
   }
 
@@ -907,11 +930,18 @@ async function onStaff(env:Env,c:Ctx,action:string,tid:number){
 async function markStaffDone(env:Env,c:Ctx,note:string){
   const message=c.interaction.message;
   if(!message?.id||!c.interaction.channel_id) return;
-  const base=message.embeds?.[0]??embed("処理済み");
-  const fields=[...(base.fields??[]),{name:"処理",value:`${note}（<@${c.userId}>）`,inline:false}];
+  const base=message.embeds?.[0]??{};
+  // 受け取った embed には送信できない読み取り専用の項目も含まれるので、必要な項目だけで作り直す
+  const fields=[...(Array.isArray(base.fields)?base.fields:[]),{name:"処理",value:`${note}（<@${c.userId}>）`,inline:false}].slice(-25);
+  const rebuilt={
+    title:String(base.title??"処理済み").slice(0,256),
+    ...(base.description?{description:String(base.description).slice(0,4096)}:{}),
+    color:typeof base.color==="number"?base.color:COLOR.blurple,
+    fields:fields.map((f:any)=>({name:String(f.name).slice(0,256),value:String(f.value).slice(0,1024),inline:Boolean(f.inline)}))
+  };
   try{
     await botJson(env,`/channels/${c.interaction.channel_id}/messages/${message.id}`,{
-      method:"PATCH",body:JSON.stringify({embeds:[{...base,fields}],components:[]})
+      method:"PATCH",body:JSON.stringify({embeds:[rebuilt],components:[]})
     });
   }catch(error){ console.error("mediation staff message edit failed",error); }
 }
@@ -1061,8 +1091,13 @@ async function saveTranscript(env:Env,settings:MediationSettings,t:Trade){
   form.set("payload_json",JSON.stringify({content:`取引 ${no(t)} のログ（<#${t.channel_id}>）`,allowed_mentions:{parse:[]}}));
   form.set("files[0]",new File([lines.join("\n")],filename,{type:"text/plain;charset=utf-8"}));
   files.forEach((f,i)=>form.set(`files[${i+1}]`,new File([f.blob],f.name)));
-  const res=await botFetch(env,`/channels/${settings.logChannelId}/messages`,{method:"POST",body:form});
-  if(!res.ok) throw new Error("transcript upload failed: "+res.status);
+  // botFetch はボディがあると Content-Type を application/json に固定するので、multipart は直接送る
+  const res=await fetch(`https://discord.com/api/v10/channels/${settings.logChannelId}/messages`,{
+    method:"POST",
+    headers:{Authorization:`Bot ${env.DISCORD_BOT_TOKEN.trim()}`},
+    body:form
+  });
+  if(!res.ok) throw new Error("transcript upload failed: "+res.status+" "+(await res.text().catch(()=>"")).slice(0,200));
 }
 
 export async function mediationSweep(env:Env){
@@ -1075,7 +1110,7 @@ export async function mediationSweep(env:Env){
   };
 
   // 1. 完了申請から一定時間返事がない取引を、自動で同意として完了させる
-  for(const t of await listAutoAgreeCandidates(env)){
+  for(const t of await listAutoAgreeCandidates(env,now)){
     try{
       const s=await settingsOf(t.guild_id);
       if(s.autoAgreeHours<=0||!t.complete_requested_at) continue;
@@ -1084,6 +1119,29 @@ export async function mediationSweep(env:Env){
       await trySend(env,t.channel_id,{content:`<@${t.user_a}> <@${t.user_b}>`,embeds:[agreedEmbed(t,s,true)]});
       await finishAgreed(env,s,t,"自動同意");
     }catch(error){ console.error("mediation auto agree failed",t.id,error); }
+  }
+
+  // 1b. PayPay処理の途中でWorkerが止まった取引を、スタッフに一度だけ知らせる
+  for(const t of await listStuckTrades(env,now-15*60_000)){
+    try{
+      const s=await settingsOf(t.guild_id);
+      const head=`チャンネル: <#${t.channel_id}>\n当事者: <@${t.user_a}> / <@${t.user_b}>　金額: ${yen(t.amount)}\n\n`;
+      if(t.status===FEE_RECEIVING){
+        await notifyStaff(env,s,`⚠️ 取引 ${no(t)}｜仲介費の受け取りが途中で止まっています`,
+          head+"運営PayPayの受け取り履歴を確認し、受け取れていれば「仲介費の受け取り完了」、だめなら「仲介費の差し戻し」。",
+          [["feeok",t.id],["feeng",t.id]],COLOR.gold);
+      }else if(t.status===CONFIRMING){
+        await notifyStaff(env,s,`⚠️ 取引 ${no(t)}｜代金の受け取りが途中で止まっています`,
+          head+"運営PayPayの受け取り履歴を確認し、受け取れていれば「運営で預かり完了」、だめなら「差し戻し」。",
+          [["confirm",t.id],["reject",t.id]],COLOR.gold);
+      }else{
+        const target=t.payout_target??t.seller_id;
+        await notifyStaff(env,s,`⚠️ 取引 ${no(t)}｜支払いが途中で止まっています`,
+          head+`支払先の候補: <@${target}>（${t.decision??"判断の記録なし"}）\n`+
+          "送金リンクが作られていないか運営PayPayを確認し、手動で送金してから「支払い完了」を押してください。",
+          [["done",t.id]]);
+      }
+    }catch(error){ console.error("mediation stuck alert failed",t.id,error); }
   }
 
   // 2. 終了・中止した取引チャンネルを、ログを保存してから削除する
@@ -1098,6 +1156,11 @@ export async function mediationSweep(env:Env){
             continue;
           }
           console.error("mediation transcript failed",t.id,error);
+          // 一時的な失敗でログを失わないよう、削除予定から30分までは5分ごとに保存をやり直す
+          if(t.delete_at!==null&&now-t.delete_at<30*60_000){
+            await updateTrade(env,t.id,{delete_at:now+5*60_000});
+            continue;
+          }
         }
         await updateTrade(env,t.id,{transcript_saved:1});
       }
