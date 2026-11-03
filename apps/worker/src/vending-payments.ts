@@ -133,13 +133,14 @@ async function postAcceptP2PLink(payload:unknown,session:PayPaySession):Promise<
 export async function acceptPayPayLink(
   link:string,
   account:PayPayAccount,
+  passcode?:string|null,
 ):Promise<{ok:boolean;pending:boolean;amount:number;status:string}>{
   const code=payCode(link);
   const info:any=await checkPayPayLink(link);
   if(!info) return {ok:false,pending:false,amount:0,status:"INVALID"};
   const amount=Number(info?.payload?.message?.data?.amount??0);
   const status=String(info?.payload?.orderStatus??"UNKNOWN");
-  if(info?.payload?.pendingP2PInfo?.isSetPasscode){
+  if(info?.payload?.pendingP2PInfo?.isSetPasscode&&!passcode){
     return {ok:false,pending:false,amount,status:"PASSCODE_REQUIRED"};
   }
   if(status!=="PENDING") return {ok:false,pending:false,amount,status};
@@ -161,7 +162,8 @@ export async function acceptPayPayLink(
     senderMessageId:info.payload.message.messageId,
     senderChannelUrl:info.payload.message.chatRoomId,
     iosMinimumVersion:"3.45.0",
-    androidMinimumVersion:"3.45.0"
+    androidMinimumVersion:"3.45.0",
+    ...(passcode?{passcode}:{})
   };
 
   let received=await postAcceptP2PLink(receivePayload,session);
@@ -184,6 +186,70 @@ export async function acceptPayPayLink(
   // and is re-checked while the link is still PENDING (e.g. until 受け取り保留 is released).
   const ok=received.ok;
   return {ok,pending:!ok,amount,status:ok?"COMPLETED":"PENDING"};
+}
+
+export type PayPayLinkInfo={amount:number;pending:boolean;hasPasscode:boolean;status:string};
+
+// Inspect a send-money link without receiving it. Returns null when PayPay does not know the link.
+export async function inspectPayPayLink(link:string):Promise<PayPayLinkInfo|null>{
+  const info:any=await checkPayPayLink(link);
+  if(!info) return null;
+  const status=String(info?.payload?.orderStatus??"UNKNOWN");
+  return {
+    amount:Number(info?.payload?.message?.data?.amount??0),
+    pending:status==="PENDING",
+    hasPasscode:Boolean(info?.payload?.pendingP2PInfo?.isSetPasscode),
+    status
+  };
+}
+
+async function postCreateP2PLink(payload:unknown,session:PayPaySession):Promise<{link:string|null;authFailed:boolean;code:string}>{
+  const response=await fetch("https://www.paypay.ne.jp/app/v2/p2p-api/executeP2PSendMoneyLink",{
+    method:"POST",
+    headers:payHeaders({
+      "Cookie":sessionCookie(session),
+      "Origin":"https://www.paypay.ne.jp",
+      "Referer":"https://www.paypay.ne.jp/app/p2p/"
+    }),
+    body:JSON.stringify(payload)
+  });
+  mergeCookies(session.cookies,response.headers.get("set-cookie"));
+  if(response.status===401||response.status===403) return {link:null,authFailed:true,code:String(response.status)};
+  const data:any=await response.json().catch(()=>null);
+  const code=String(data?.header?.resultCode??response.status);
+  if(code==="S0001"||code==="S9999") return {link:null,authFailed:true,code};
+  const created=data?.payload?.link;
+  return {link:response.ok&&code==="S0000"&&typeof created==="string"?created:null,authFailed:false,code};
+}
+
+// Create a send-money link from the stored operator account (PayPaython-style web session).
+// Throws when PayPay refuses, so callers can fall back to manual staff payment.
+export async function createPayPayLink(account:PayPayAccount,amount:number,passcode?:string|null):Promise<string>{
+  if(!Number.isSafeInteger(amount)||amount<=0) throw new Error("invalid amount");
+  const referer="https://www.paypay.ne.jp/app/p2p/";
+  let session=account.session??null;
+  if(!session) session=await payPayPasswordLogin(account,referer);
+  if(!session) throw new Error("PayPayの再ログインが必要です（管理画面の支払いタブからログインしてください）");
+  const payload={
+    requestId:crypto.randomUUID(),
+    amount,
+    socketConnection:"P2P",
+    theme:"default-sendmoney",
+    source:"sendmoney_home_sns",
+    ...(passcode?{passcode}:{})
+  };
+  let created=await postCreateP2PLink(payload,session);
+  if(created.authFailed){
+    // 401/403 and expired-token answers are not processed, so one retry with a fresh session is safe.
+    session=await payPayPasswordLogin(account,referer);
+    if(!session) throw new Error("PayPayの再ログインが必要です（管理画面の支払いタブからログインしてください）");
+    created=await postCreateP2PLink(payload,session);
+  }
+  if(account.persistSession){
+    try{ await account.persistSession(session); }catch(error){ console.error("PayPay session save failed",error); }
+  }
+  if(!created.link) throw new Error("PayPay送金リンクの作成に失敗しました ("+created.code+")");
+  return created.link;
 }
 
 function kyashHeaders(clientUuid:string,installationUuid:string,accessToken?:string){
