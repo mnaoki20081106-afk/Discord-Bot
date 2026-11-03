@@ -74,6 +74,7 @@ import {
   sendMemberActivityTest
 } from "./member-activity";
 import { retireDiscordGateway } from "./discord-gateway";
+import { handleGatewayRelay } from "./gateway-relay";
 import {
   MEDIATION_COMMANDS,
   MediationHttpError,
@@ -3369,7 +3370,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v77-single-gateway",
+          version:"bot-coexistence-v78-vps-gateway-relay",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -3421,6 +3422,9 @@ export default {
       }
 
       await ensureSchema(env);
+
+      const relayResponse=await handleGatewayRelay(request,env,url);
+      if(relayResponse) return relayResponse;
 
       if(url.pathname.startsWith("/media/vending/")){
         const mediaResponse=await handleVendingMedia(request,env,url);

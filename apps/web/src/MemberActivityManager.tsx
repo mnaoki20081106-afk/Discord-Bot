@@ -205,7 +205,7 @@ export default function MemberActivityManager({
             <div>
               <strong>入退室通知を有効化</strong>
               <small>
-                1分ごとにメンバー一覧を確認し、入室・退室を通知します（最大1〜2分ほど遅れます）。
+                入室・退室を通知します。VPSの中継が動いていれば即時、止まっていても1分ごとの確認で1〜2分以内に届きます。
               </small>
             </div>
             <input
