@@ -254,16 +254,46 @@ function linkProblem(info:{pending:boolean;amount:number;hasPasscode:boolean},ex
   return null;
 }
 
-/** 金額を確かめてから運営アカウントで受け取る。受け取れなければ例外 */
-async function receiveExact(env:Env,guildId:string,link:string,passcode:string|null,expected:number){
+/** 同じ取引で、本人の入力ミスとして再入力させる回数の上限。超えたらスタッフ対応 */
+const MAX_RECEIVE_RETRIES=3;
+
+/**
+ * 結果の種類:
+ *  ok      … 運営アカウントで受け取れた
+ *  invalid … 受け取る前の確認で問題があった（金額違い・期限切れなど）。お金は動いていない
+ *  retry   … 受け取りを断られたが、リンクはまだ受け取り待ちのまま＝お金は動いていない（パスコード間違いなど）
+ *  staff   … 運営側の問題か、受け取れたかどうか分からない。スタッフが確認する
+ */
+type ReceiveResult={kind:"ok"}|{kind:"invalid"|"retry"|"staff";reason:string};
+
+async function tryReceive(env:Env,guildId:string,link:string,passcode:string|null,expected:number,label:string):Promise<ReceiveResult>{
   const account=await payAccount(env,guildId);
-  if(!account) throw new Error("運営PayPayが未ログインです（管理画面の 仲介 → 支払い からログインしてください）");
-  const info=await inspectPayPayLink(link);
-  if(!info) throw new Error("リンク情報を取得できませんでした");
-  const problem=linkProblem(info,expected,passcode,"必要な金額");
-  if(problem) throw new Error(problem);
-  const result=await acceptPayPayLink(link,account,passcode);
-  if(!result.ok) throw new Error("受け取りに失敗しました ("+result.status+")");
+  if(!account) return {kind:"staff",reason:"運営PayPayが未ログインです（管理画面の 仲介 → 支払い からログインしてください）"};
+  const info=await inspectPayPayLink(link).catch(()=>null);
+  if(!info) return {kind:"invalid",reason:"送金リンクを確認できませんでした。リンクが正しいか確認してください。"};
+  const problem=linkProblem(info,expected,passcode,label);
+  if(problem) return {kind:"invalid",reason:problem};
+  let result;
+  try{ result=await acceptPayPayLink(link,account,passcode); }
+  catch(error){ return {kind:"staff",reason:"受け取りの途中でエラー: "+errorText(error)}; }
+  if(result.ok) return {kind:"ok"};
+  if(result.status==="LOGIN_REQUIRED") return {kind:"staff",reason:"運営PayPayの再ログインが必要です（管理画面の 仲介 → 支払い）"};
+  // リンクがまだ受け取り待ちなら、運営には入金されていない。本人にもう一度入力してもらえば安全
+  const after=await inspectPayPayLink(link).catch(()=>null);
+  if(after?.pending){
+    return {kind:"retry",reason:info.hasPasscode
+      ?"受け取れませんでした。パスコードが間違っている可能性があります。"
+      :"受け取れませんでした。リンクが正しいか確認してください。"};
+  }
+  return {kind:"staff",reason:"受け取りに失敗しました ("+result.status+")"};
+}
+
+/** 再入力の回数を1つ増やし、まだ上限内なら true */
+async function allowRetry(env:Env,t:Trade):Promise<boolean>{
+  const used=Number(t.receive_failures??0);
+  if(used>=MAX_RECEIVE_RETRIES) return false;
+  await updateTrade(env,t.id,{receive_failures:used+1});
+  return true;
 }
 
 // ---- 取引の取得とチェック -----------------------------------------------------
@@ -394,11 +424,25 @@ function feeKeys(t:Trade,uid:string){
   return {choice:`fee_choice_${side}`,link:`fee_link_${side}_enc`,pass:`fee_pass_${side}_enc`} as const;
 }
 
+/**
+ * 割り勘で片方だけ受け取れて、もう片方が再入力するときの制限。
+ * 支払い済みの人は選び直せず、残りの人は「割り勘」のまま再提出する。
+ */
+function feeChoiceGuard(t:Trade,uid:string,choice:string):string|null{
+  const mine=uid===t.user_a?t.fee_paid_a:t.fee_paid_b;
+  const theirs=uid===t.user_a?t.fee_paid_b:t.fee_paid_a;
+  if(mine) return "あなたの仲介費は受け取り済みです。相手の提出を待ってください。";
+  if(theirs&&choice!=="split") return "相手は割り勘分の仲介費を支払い済みです。「割り勘」を選んで、送金リンクを提出してください。";
+  return null;
+}
+
 async function onFeeButton(env:Env,c:Ctx,choice:string,tid:number){
   const t=await tradeFor(env,c,tid);
   if(typeof t==="string") return reply(t);
   if(t.status!==FEE) return reply("仲介費の選択は終了しています。");
   if(choice!=="other"&&choice!=="self"&&choice!=="split") return reply("不正な選択です。");
+  const guard=feeChoiceGuard(t,c.userId,choice);
+  if(guard) return reply(guard);
   // 仲介費が1円だと割り勘で片方の負担が0円になり、0円の送金リンクは作れない
   if(choice==="split"&&Math.floor(t.fee_total/2)<=0){
     return reply("仲介費が少額のため割り勘はできません。「自分が負担」か「相手が負担」を選んでください。");
@@ -418,6 +462,8 @@ async function onFeeModal(env:Env,c:Ctx,choice:string,tid:number){
   if(typeof t==="string") return reply(t);
   if(t.status!==FEE) return reply("仲介費の選択は終了しています。");
   if(choice!=="self"&&choice!=="split") return reply("不正な選択です。");
+  const guard=feeChoiceGuard(t,c.userId,choice);
+  if(guard) return reply(guard);
   const link=modalValue(c.interaction,"link").trim();
   const passcode=modalValue(c.interaction,"passcode").trim()||null;
   if(!PAYPAY_LINK_RE.test(link)) return reply("PayPayの送金リンクではないようです。");
@@ -461,39 +507,59 @@ async function finalizeFee(env:Env,settings:MediationSettings,tid:number){
   }
   if(!await transition(env,tid,[FEE],FEE_RECEIVING)) return;
 
-  const payers:Array<{uid:string;link:string;pass:string|null;amount:number;side:"a"|"b"}>=[];
+  const payers:Array<{uid:string;link:string;pass:string|null;amount:number;side:"a"|"b";paid:boolean}>=[];
   for(const [uid,choice,linkEnc,passEnc,side] of [
     [t.user_a,ca,t.fee_link_a_enc,t.fee_pass_a_enc,"a"],
     [t.user_b,cb,t.fee_link_b_enc,t.fee_pass_b_enc,"b"]
   ] as const){
     if(choice!=="self"&&choice!=="split") continue;
     if(feeShare(t,uid,choice)<=0) continue;
-    payers.push({uid,link:(await dec(env,linkEnc))??"",pass:await dec(env,passEnc),amount:feeShare(t,uid,choice),side});
+    const alreadyPaid=side==="a"?t.fee_paid_a:t.fee_paid_b;
+    payers.push({uid,link:alreadyPaid?"":(await dec(env,linkEnc))??"",pass:alreadyPaid?null:await dec(env,passEnc),amount:feeShare(t,uid,choice),side,paid:Boolean(alreadyPaid)});
   }
 
-  const received:string[]=[];
   for(const p of payers){
-    try{
-      await receiveExact(env,t.guild_id,p.link,p.pass,p.amount);
-      received.push(p.uid);
+    if(p.paid) continue; // 前回までに受け取り済み（割り勘で片方だけ再入力した場合）
+    const result=await tryReceive(env,t.guild_id,p.link,p.pass,p.amount,"必要な金額");
+    if(result.kind==="ok"){
+      p.paid=true;
       await updateTrade(env,tid,{[p.side==="a"?"fee_paid_a":"fee_paid_b"]:p.amount} as Partial<Trade>);
-    }catch(error){
-      const lines=payers.map(x=>`<@${x.uid}> ${yen(x.amount)}: ||${x.link}||（パスコード: ||${x.pass??"なし"}||）${received.includes(x.uid)?" ← 受け取り済み":""}`).join("\n");
-      await send(env,t.channel_id!,{embeds:[embed("確認中","仲介費の受け取りをスタッフが確認しています。しばらくお待ちください。")]});
-      await notifyStaff(env,settings,`⚠️ 取引 ${no(t)}｜仲介費の自動受け取りに失敗`,
-        `チャンネル: <#${t.channel_id}>\n${lines}\nエラー: \`${errorText(error)}\`\n\n`+
-        "未受け取りのリンクを運営PayPayで**すぐ受け取って**から「仲介費の受け取り完了」。\n"+
-        "受け取れない（無効・金額違い）なら「仲介費の差し戻し」。",
-        [["feeok",tid],["feeng",tid]],COLOR.gold);
+      continue;
+    }
+    // お金が動いていないなら、その人だけもう一度提出してもらう
+    if(result.kind==="invalid"||(result.kind==="retry"&&await allowRetry(env,t))){
+      const k=feeKeys(t,p.uid);
+      await transition(env,tid,[FEE_RECEIVING],FEE,{[k.choice]:null,[k.link]:null,[k.pass]:null} as Partial<Trade>);
+      const paidNote=payers.filter(x=>x.paid).map(x=>`<@${x.uid}> の ${yen(x.amount)} は受け取り済みです。`).join("\n");
+      await send(env,t.channel_id!,{
+        content:`<@${p.uid}>`,
+        embeds:[embed("仲介費を受け取れませんでした",
+          `${result.reason}\n<@${p.uid}> さん、もう一度「${FEE_LABELS[p.side==="a"?ca:cb]}」を押して送金リンクを提出してください。`+
+          (result.kind==="retry"?"リンクはそのまま使えます（パスコードを確認してください）。":"")+
+          (paidNote?`\n\n${paidNote}`:""),COLOR.orange)],
+        components:feeMessage(t).components
+      });
       return;
     }
+    // 運営側の問題、または受け取れたかどうか分からないときだけスタッフが確認する
+    const lines=payers.map(x=>x.paid
+      ?`<@${x.uid}> ${yen(x.amount)} ← 受け取り済み`
+      :`<@${x.uid}> ${yen(x.amount)}: ||${x.link}||（パスコード: ||${x.pass??"なし"}||）`).join("\n");
+    await send(env,t.channel_id!,{embeds:[embed("確認中","仲介費の受け取りをスタッフが確認しています。しばらくお待ちください。")]});
+    await notifyStaff(env,settings,`⚠️ 取引 ${no(t)}｜仲介費の自動受け取りに失敗`,
+      `チャンネル: <#${t.channel_id}>\n${lines}\nエラー: \`${result.reason}\`\n\n`+
+      "未受け取りのリンクを運営PayPayで**すぐ受け取って**から「仲介費の受け取り完了」。\n"+
+      "受け取れない（無効・金額違い）なら「仲介費の差し戻し」。",
+      [["feeok",tid],["feeng",tid]],COLOR.gold);
+    return;
   }
   if(!await transition(env,tid,[FEE_RECEIVING],AMOUNT)) return;
   await startAmount(env,settings,tid);
 }
 
 async function startAmount(env:Env,settings:MediationSettings,tid:number){
-  await updateTrade(env,tid,{status:AMOUNT,fee_link_a_enc:null,fee_pass_a_enc:null,fee_link_b_enc:null,fee_pass_b_enc:null});
+  // 再入力の回数は、仲介費と代金で別々に数える
+  await updateTrade(env,tid,{status:AMOUNT,fee_link_a_enc:null,fee_pass_a_enc:null,fee_link_b_enc:null,fee_pass_b_enc:null,receive_failures:0});
   const t=(await getTrade(env,tid))!;
   const payers=[
     t.fee_paid_a?`<@${t.user_a}> ${yen(t.fee_paid_a)}`:null,
@@ -614,42 +680,30 @@ async function onPayModal(env:Env,c:Ctx,tid:number){
   if(!await transition(env,t.id,[PAYMENT],CONFIRMING,{paylink_enc:await enc(env,link),passcode_enc:await enc(env,passcode)})){
     return reply("現在は提出できません。");
   }
-  const amount=Number(t.amount);
-
-  // 1. 金額と状態の確認（まだ受け取らない）
-  let info;
-  try{
-    info=await inspectPayPayLink(link);
-    if(!info) throw new Error("リンク情報を取得できませんでした");
-  }catch(error){
-    await payFallback(env,c.settings,t,link,passcode,"リンク確認に失敗: "+errorText(error));
-    return reply("送金リンクを受け付けました。スタッフが確認します。");
+  // 金額と状態を確認してから、運営アカウントで受け取る（これ以降、買い手は取り消せない）
+  const result=await tryReceive(env,t.guild_id,link,passcode,Number(t.amount),"合意した金額");
+  if(result.kind==="ok"){
+    await startTrading(env,(await getTrade(env,t.id))!);
+    return reply("代金を運営が預かりました。");
   }
-  const problem=linkProblem(info,amount,passcode,"合意した金額");
-  if(problem){
+  // お金が動いていないなら、買い手にもう一度提出してもらう（パスコード間違いなど）
+  if(result.kind==="invalid"||(result.kind==="retry"&&await allowRetry(env,t))){
     await updateTrade(env,t.id,{status:PAYMENT,paylink_enc:null,passcode_enc:null});
-    const msg=paymentMessage(t);
+    const hint=result.kind==="retry"
+      ?"パスコードを確認して、もう一度「送金リンクを提出」から提出してください。リンクはそのまま使えます。"
+      :"間違ったリンクはPayPayアプリでキャンセルし、正しいリンクを作り直して再提出してください。";
     await send(env,t.channel_id!,{
       content:`<@${t.buyer_id}>`,
-      embeds:[embed("送金リンクを受け付けられませんでした",`${problem}\n間違ったリンクはPayPayアプリでキャンセルし、正しいリンクを作り直して再提出してください。`,COLOR.orange)],
-      components:msg.components
+      embeds:[embed("送金リンクを受け付けられませんでした",`${result.reason}\n${hint}`,COLOR.orange)],
+      components:paymentMessage(t).components
     });
-    return reply(problem);
+    return reply(`${result.reason}\n${hint}`);
   }
-
-  // 2. 運営アカウントで受け取る（これ以降、買い手は取り消せない）
-  try{
-    const account=await payAccount(env,t.guild_id);
-    if(!account) throw new Error("運営PayPayが未ログインです");
-    const result=await acceptPayPayLink(link,account,passcode);
-    if(!result.ok) throw new Error("受け取りに失敗しました ("+result.status+")");
-  }catch(error){
-    // 受け取れたかどうか不明なので、スタッフに確認させる
-    await payFallback(env,c.settings,t,link,passcode,"受け取りに失敗: "+errorText(error));
-    return reply("送金リンクを受け付けました。スタッフが確認します。");
-  }
-  await startTrading(env,(await getTrade(env,t.id))!);
-  return reply("代金を運営が預かりました。");
+  // 運営側の問題、または受け取れたかどうか分からないときだけスタッフが確認する
+  await payFallback(env,c.settings,t,link,passcode,result.kind==="retry"
+    ?`${result.reason}（再入力が${MAX_RECEIVE_RETRIES}回を超えました）`
+    :result.reason);
+  return reply("送金リンクを受け付けました。スタッフが確認します。");
 }
 
 async function payFallback(env:Env,settings:MediationSettings,t:Trade,link:string,passcode:string|null,reason:string){

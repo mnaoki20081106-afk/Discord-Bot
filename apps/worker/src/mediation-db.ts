@@ -164,6 +164,7 @@ export type Trade={
   delete_at:number|null;
   channel_deleted:number;
   transcript_saved:number;
+  receive_failures?:number;
   created_at:number;
   updated_at:number;
 };
@@ -184,6 +185,8 @@ export async function ensureMediationSchema(env:Env){
   const columns=new Set((await env.DB.prepare("PRAGMA table_info(mediation_trades)").all<{name:string}>()).results.map(c=>c.name));
   // スタッフに通知したときのステータス。処理が途中で止まった取引を一度だけ知らせるのに使う
   if(!columns.has("alerted_status")) await env.DB.prepare("ALTER TABLE mediation_trades ADD COLUMN alerted_status TEXT").run();
+  // パスコード間違いなど、本人に再入力させた回数
+  if(!columns.has("receive_failures")) await env.DB.prepare("ALTER TABLE mediation_trades ADD COLUMN receive_failures INTEGER NOT NULL DEFAULT 0").run();
   ready=true;
 }
 
@@ -238,7 +241,7 @@ const UPDATABLE=new Set([
   "channel_id","fee_choice_a","fee_choice_b","fee_link_a_enc","fee_pass_a_enc","fee_link_b_enc","fee_pass_b_enc",
   "fee_paid_a","fee_paid_b","amount_a","amount_b","amount","role_a","role_b","buyer_id","seller_id","paylink_enc",
   "passcode_enc","complete_requester","complete_requested_at","report_by","report_reason","decision","payout_target",
-  "payout_amount","payout_link_enc","status","delete_at","channel_deleted","transcript_saved"
+  "payout_amount","payout_link_enc","status","delete_at","channel_deleted","transcript_saved","receive_failures"
 ]);
 
 export async function updateTrade(env:Env,id:number,fields:Partial<Trade>){

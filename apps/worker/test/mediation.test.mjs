@@ -255,6 +255,11 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
   const missing = await interact(env, submit(userA, `md:paym:${id}`, {link: payLink('pay1'), passcode: ''}));
   assert.match(missing.content, /パスコード/);
   assert.equal((await trade(env)).status, 'PAYMENT');
+  const wrongPass = await interact(env, submit(userA, `md:paym:${id}`, {link: payLink('pay1'), passcode: '9999'}));
+  assert.match(wrongPass.content, /パスコードが間違っている/);
+  assert.equal((await trade(env)).status, 'PAYMENT', 'a wrong passcode goes back to the buyer, not to staff');
+  assert.equal(env.links.get('pay1').status, 'PENDING');
+  assert.ok(!env.calls.some(c => c.method === 'POST' && c.path === `/api/v10/channels/${staffChannel}/messages`));
   await interact(env, submit(userA, `md:paym:${id}`, {link: payLink('pay1'), passcode: '1234'}));
   cur = await trade(env);
   assert.equal(cur.status, 'TRADING');
@@ -392,4 +397,44 @@ test('trades stuck mid-way alert staff once', async t => {
   assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok');
   await new Promise(r => setTimeout(r, 200));
   assert.equal(staffPosts().length, 1, 'alert is sent only once per stuck status');
+});
+
+test('split fee keeps the received share when the other member mistypes, and repeated wrong passcodes go to staff', async t => {
+  const env = await setup(t);
+  await loginPayPay(env);
+  const t0 = await openTrade(env);
+  const id = t0.id;
+  env.links.set('feeA', {amount: 100, status: 'PENDING'});
+  env.links.set('feeB', {amount: 100, status: 'PENDING', passcode: '4321'});
+  await interact(env, submit(userA, `md:feem:split:${id}`, {link: payLink('feeA'), passcode: ''}));
+  await interact(env, submit(userB, `md:feem:split:${id}`, {link: payLink('feeB'), passcode: '0000'}));
+  let cur = await trade(env);
+  assert.equal(cur.status, 'FEE');
+  assert.equal(cur.fee_paid_a, 100, 'A\'s share stays received');
+  assert.equal(cur.fee_choice_b, null);
+  assert.equal(env.links.get('feeB').status, 'PENDING');
+  const aAgain = await interact(env, button(userA, `md:fee:self:${id}`));
+  assert.match(aAgain.content, /受け取り済み/);
+  const bOther = await interact(env, button(userB, `md:fee:other:${id}`));
+  assert.match(bOther.content, /割り勘/);
+  await interact(env, submit(userB, `md:feem:split:${id}`, {link: payLink('feeB'), passcode: '4321'}));
+  cur = await trade(env);
+  assert.equal(cur.status, 'AMOUNT');
+  assert.equal(cur.fee_paid_b, 100);
+  assert.equal(cur.receive_failures, 0);
+  assert.equal(env.accepted.filter(a => a.verificationCode === 'feeA').length, 1, 'A\'s link is received only once');
+
+  await interact(env, submit(userA, `md:amountm:${id}`, {amount: '2000'}));
+  await interact(env, submit(userB, `md:amountm:${id}`, {amount: '2000'}));
+  await interact(env, button(userA, `md:role:buyer:${id}`));
+  await interact(env, button(userB, `md:role:seller:${id}`));
+  env.links.set('pay4', {amount: 2000, status: 'PENDING', passcode: '1111'});
+  for (let i = 0; i < 3; i++) {
+    const r = await interact(env, submit(userA, `md:paym:${id}`, {link: payLink('pay4'), passcode: '2222'}));
+    assert.match(r.content, /パスコード/);
+    assert.equal((await trade(env)).status, 'PAYMENT');
+  }
+  await interact(env, submit(userA, `md:paym:${id}`, {link: payLink('pay4'), passcode: '2222'}));
+  assert.equal((await trade(env)).status, 'CONFIRMING', 'after 3 retries staff takes over');
+  assert.ok(env.calls.some(c => c.method === 'POST' && c.path === `/api/v10/channels/${staffChannel}/messages`));
 });
