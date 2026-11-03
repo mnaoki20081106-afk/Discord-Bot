@@ -1076,6 +1076,8 @@ if (touchGestureRef.current !== gesture) return;
 gesture.armed = true;
 setPressingChannelId(channelId);
 suppressClickUntilRef.current = Date.now() + 700;
+// 長押しが成立したことを指に伝える（ここから先はスクロールせずドラッグになる）
+try { navigator.vibrate?.(12); } catch { /* unsupported */ }
 }, 450);
 touchGestureRef.current = gesture;
 }
@@ -1091,13 +1093,13 @@ touch.clientX - gesture.startX,
 touch.clientY - gesture.startY
 );
 if (!gesture.armed) {
-if (distance > 10) clearPendingTouch();
+// 長押しが成立する前に指が動いたらスクロールの意図とみなし、ドラッグにはしない
+if (distance > 8) clearPendingTouch();
 return;
 }
-if (distance > 6) {
-event.preventDefault();
-beginTouchDrag(gesture, touch);
-}
+// スクロールの抑止は channelScrollRef のネイティブ listener が行う
+// （React の onTouchMove は passive なので、ここで preventDefault しても効かない）
+if (distance > 6) beginTouchDrag(gesture, touch);
 }
 function endPendingLongPress() {
 if (touchDraggingIdRef.current) {
@@ -1217,6 +1219,35 @@ useEffect(() => {
 return () => {
 const gesture = touchGestureRef.current;
 if (gesture) window.clearTimeout(gesture.timer);
+};
+}, []);
+// スクロールとドラッグが同時に起きないようにする。
+// - 長押しが成立した後は、ネイティブの非 passive listener で touchmove を止めてスクロールさせない
+// - 長押しの待ち時間中にリストやページがスクロールしたら、長押しを取り消す
+useEffect(() => {
+const scroller = channelScrollRef.current;
+if (!scroller) return;
+const blockScrollWhileHolding = (event: TouchEvent) => {
+const gesture = touchGestureRef.current;
+if (!gesture) return;
+if ((gesture.armed || touchDraggingIdRef.current) && event.cancelable) {
+event.preventDefault();
+}
+};
+const cancelPendingOnScroll = () => {
+const gesture = touchGestureRef.current;
+if (!gesture || gesture.armed || touchDraggingIdRef.current) return;
+window.clearTimeout(gesture.timer);
+touchGestureRef.current = null;
+setPressingChannelId(null);
+};
+scroller.addEventListener("touchmove", blockScrollWhileHolding, { passive: false });
+scroller.addEventListener("scroll", cancelPendingOnScroll, { passive: true });
+window.addEventListener("scroll", cancelPendingOnScroll, { passive: true, capture: true });
+return () => {
+scroller.removeEventListener("touchmove", blockScrollWhileHolding);
+scroller.removeEventListener("scroll", cancelPendingOnScroll);
+window.removeEventListener("scroll", cancelPendingOnScroll, { capture: true });
 };
 }, []);
 useEffect(() => {
