@@ -2952,18 +2952,49 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         topic?:string|null;
         parentId?:string|null;
       }>(request);
+      // Discordはチャンネル名・トピックの変更を1チャンネルにつき10分に2回までに制限している。
+      // 変わっていない項目まで送ると、カテゴリ移動だけでもこの枠を使ってしまうので、変わった項目だけ送る。
+      const current=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
       const payload:Record<string,unknown>={};
       if(input.name!==undefined){
         const name=input.name.trim();
         if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
-        payload.name=name;
+        if(name!==current.name) payload.name=name;
       }
-      if(input.topic!==undefined) payload.topic=input.topic===null?null:String(input.topic).slice(0,1024);
-      if(input.parentId!==undefined) payload.parent_id=input.parentId||null;
-      const updated=await botJson<DiscordChannel>(env,`/channels/${channelId}`,{
-        method:"PATCH",
-        body:JSON.stringify(payload)
-      });
+      if(input.topic!==undefined){
+        const topic=input.topic===null?null:String(input.topic).slice(0,1024);
+        if((topic??"")!==(current.topic??"")) payload.topic=topic;
+      }
+      if(input.parentId!==undefined&&(input.parentId||null)!==(current.parent_id??null)){
+        payload.parent_id=input.parentId||null;
+      }
+      if(Object.keys(payload).length===0){
+        return json(env,{
+          id:current.id,
+          name:current.name,
+          parentId:current.parent_id??null,
+          topic:current.topic??"",
+          position:current.position??0,
+          unchanged:true
+        });
+      }
+      let updated:DiscordChannel;
+      try{
+        updated=await botJson<DiscordChannel>(env,`/channels/${channelId}`,{
+          method:"PATCH",
+          body:JSON.stringify(payload)
+        });
+      }catch(error){
+        if(error instanceof DiscordApiError&&error.status===429&&("name" in payload||"topic" in payload)){
+          const ms=error.retryAfterMs??0;
+          const wait=ms>=60_000?`約${Math.ceil(ms/60_000)}分`:ms>0?`約${Math.ceil(ms/1000)}秒`:"しばらく";
+          throw new HttpError(
+            429,
+            `Discordの制限で、チャンネル名・トピックの変更は1つのチャンネルにつき10分に2回までです。${wait}待ってから保存してください`
+          );
+        }
+        throw error;
+      }
       return json(env,{
         id:updated.id,
         name:updated.name,
@@ -3347,7 +3378,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v75-threads-category-order",
+          version:"bot-coexistence-v76-rename-ratelimit",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),

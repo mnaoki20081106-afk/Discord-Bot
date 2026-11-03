@@ -59,6 +59,14 @@ async function runtime(t) {
         const c = channels.find(x => x.id === one[1]);
         return c ? Response.json({...c, guild_id: guildId}) : Response.json({message: 'Unknown Channel'}, {status: 404});
       }
+      if (request.method === 'PATCH' && one) {
+        const c = channels.find(x => x.id === one[1]);
+        if (('name' in body || 'topic' in body) && (c.renames = (c.renames ?? 0) + 1) > 2) {
+          return Response.json({message: 'You are being rate limited.', retry_after: 312.5, global: false}, {status: 429});
+        }
+        Object.assign(c, 'name' in body ? {name: body.name} : {}, 'parent_id' in body ? {parent_id: body.parent_id} : {});
+        return Response.json({...c, guild_id: guildId});
+      }
       const th = p.match(/^\/channels\/(\d+)\/threads$/);
       if (request.method === 'POST' && th) {
         return Response.json({id: '6000000000000000' + String(++threadSeq).padStart(2, '0'), name: body.name, type: body.type ?? 11, parent_id: th[1]});
@@ -133,4 +141,25 @@ test('threads: listed in meta and created under text, announcement and forum cha
   assert.deepEqual(threadCall().body.message, {content: 'hello'});
 
   assert.equal((await create({name: 'nope', parentId: '500000000000000004'})).status, 400, 'voice channels cannot have threads');
+});
+
+test('channel rename hitting Discord\'s 2-per-10-minutes limit fails fast with a clear message', async t => {
+  const env = await runtime(t);
+  const id = '500000000000000001';
+  const patch = body => request(env.mf, `/api/guilds/${guildId}/channels/${id}`, env.token, 'PATCH', body);
+  const sent = () => env.calls.filter(c => c.method === 'PATCH' && c.path === `/channels/${id}`).map(c => c.body);
+
+  assert.equal((await patch({name: 'general', parentId: '400000000000000002', topic: ''})).status, 200);
+  assert.deepEqual(sent().at(-1), {parent_id: '400000000000000002'}, 'unchanged name/topic are not sent');
+  assert.equal((await patch({name: 'general', parentId: '400000000000000002', topic: ''})).body.unchanged, true);
+
+  assert.equal((await patch({name: 'r1'})).status, 200);
+  assert.equal((await patch({name: 'r2'})).status, 200);
+  const started = Date.now();
+  const limited = await patch({name: 'r3'});
+  const elapsed = Date.now() - started;
+  assert.equal(limited.status, 429);
+  assert.match(limited.body.message, /10分に2回/);
+  assert.match(limited.body.message, /約6分/);
+  assert.ok(elapsed < 3000, `must not wait for Discord's retry_after (took ${elapsed}ms)`);
 });
