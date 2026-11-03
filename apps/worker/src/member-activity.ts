@@ -261,6 +261,50 @@ async function persistSnapshot(
   ).bind(guildId, scanAt).run();
 }
 
+/**
+ * 差分だけ書き込む。Cron で毎分見比べるので、全員分を毎回書き直すと D1 無料枠（1日10万行の書き込み）を超えてしまう。
+ */
+async function persistSnapshotDiff(
+  env: Env,
+  guildId: string,
+  joined: DiscordGuildMember[],
+  left: MemberSnapshotRow[],
+  scanAt: number
+): Promise<void> {
+  const statements = [
+    ...joined.map(member =>
+      env.DB.prepare(`
+        INSERT INTO member_activity_members(
+          guild_id,user_id,username,global_name,avatar,is_bot,first_seen_at,last_seen_at
+        ) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(guild_id,user_id) DO UPDATE SET
+          username=excluded.username,
+          global_name=excluded.global_name,
+          avatar=excluded.avatar,
+          is_bot=excluded.is_bot,
+          last_seen_at=excluded.last_seen_at
+      `).bind(
+        guildId,
+        member.user.id,
+        member.user.username,
+        member.user.global_name ?? null,
+        member.user.avatar ?? null,
+        member.user.bot ? 1 : 0,
+        scanAt,
+        scanAt
+      )
+    ),
+    ...left.map(member =>
+      env.DB.prepare(
+        "DELETE FROM member_activity_members WHERE guild_id=? AND user_id=?"
+      ).bind(guildId, member.user_id)
+    )
+  ];
+  for (let index = 0; index < statements.length; index += 75) {
+    await env.DB.batch(statements.slice(index, index + 75));
+  }
+}
+
 function displayName(user: DiscordUser): string {
   return user.global_name?.trim() || user.username;
 }
@@ -387,12 +431,26 @@ async function syncGuild(
     const joined = members.filter(member => !previousById.has(member.user.id));
     const left = previous.filter(member => !currentById.has(member.user_id));
 
-    await persistSnapshot(env, row.guild_id, members, scanAt);
-    await env.DB.prepare(`
-      UPDATE member_activity_settings
-      SET initialized=1,last_scan_at=?,last_member_count=?,last_error=NULL,updated_at=?
-      WHERE guild_id=?
-    `).bind(scanAt, members.length, scanAt, row.guild_id).run();
+    // 初回は全員分を基準として保存し、2回目以降は増減した人だけを書き込む
+    if (row.initialized === 1 && previous.length > 0) {
+      await persistSnapshotDiff(env, row.guild_id, joined, left, scanAt);
+    } else {
+      await persistSnapshot(env, row.guild_id, members, scanAt);
+    }
+    // 変化がないときは設定行も書き換えない（毎分の書き込みを減らす）
+    if (
+      row.initialized !== 1 ||
+      joined.length > 0 ||
+      left.length > 0 ||
+      row.last_member_count !== members.length ||
+      row.last_error !== null
+    ) {
+      await env.DB.prepare(`
+        UPDATE member_activity_settings
+        SET initialized=1,last_scan_at=?,last_member_count=?,last_error=NULL,updated_at=?
+        WHERE guild_id=?
+      `).bind(scanAt, members.length, scanAt, row.guild_id).run();
+    }
 
     if (row.initialized === 1) {
       let sent = 0;

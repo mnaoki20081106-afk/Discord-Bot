@@ -67,12 +67,13 @@ import {
   VendingHttpError
 } from "./vending";
 import {
+  memberActivitySweep,
   getMemberActivitySettings,
   primeMemberActivity,
   saveMemberActivitySettings,
   sendMemberActivityTest
 } from "./member-activity";
-import { ensureDiscordGateway } from "./discord-gateway";
+import { retireDiscordGateway } from "./discord-gateway";
 import {
   MEDIATION_COMMANDS,
   MediationHttpError,
@@ -2032,17 +2033,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
           throw error;
         }
       }
-      try{
-        await ensureDiscordGateway(env);
-      }catch(error){
-        console.error("discord gateway start failed",error);
-        if(saved.enabled){
-          throw new HttpError(
-            502,
-            "設定は保存されましたが、リアルタイム入退室検知の起動に失敗しました。少し待ってからもう一度保存してください"
-          );
-        }
-      }
+      // 入退室は1分ごとの Cron でメンバー一覧を見比べて通知する（Main Bot の常時 Gateway 接続は廃止）
       return json(env,saved);
     }
   }
@@ -3378,7 +3369,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v76-rename-ratelimit",
+          version:"bot-coexistence-v77-single-gateway",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -3485,7 +3476,8 @@ export default {
       paymentSweep(env),
       vendingSweep(env),
       mediationSweep(env).catch(error=>console.error("mediation sweep failed",error)),
-      ensureDiscordGateway(env),
+      retireDiscordGateway(env).catch(error=>console.error("discord gateway retire failed",error)),
+      memberActivitySweep(env).catch(error=>console.error("member activity sweep failed",error)),
       botAccessGuardSweep(env),
       backupRestoreSweep(env)
     ]).then(()=>undefined));

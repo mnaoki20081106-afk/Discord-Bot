@@ -22,12 +22,16 @@ test("member activity uses Discord Gateway member events", () => {
   assert.match(memberSource, /handleMemberActivityGatewayEvent/);
 });
 
-test("minute cron keeps the shared Discord Gateway alive without member polling", () => {
+test("minute cron retires the Main Bot gateway and detects joins/leaves by member polling", () => {
+  // Two always-on gateway Durable Objects (Main + Security) exceed the Durable Objects
+  // free tier (13,000 GB-s/day), which stopped both bots every night. Only the Security
+  // Bot keeps an always-on gateway; the Main Bot detects joins/leaves from the cron.
   const scheduled = indexSource.slice(indexSource.indexOf("async scheduled"));
-  assert.doesNotMatch(scheduled, /memberActivitySweep\(env\)/);
-  assert.match(scheduled, /ensureDiscordGateway\(env\)/);
-  assert.match(gatewaySource, /discord-gateway\.internal\/start/);
-  assert.doesNotMatch(gatewaySource, /enabled \? "start" : "stop"/);
+  assert.match(scheduled, /memberActivitySweep\(env\)/);
+  assert.match(scheduled, /retireDiscordGateway\(env\)/);
+  assert.doesNotMatch(scheduled, /ensureDiscordGateway\(env\)/);
+  assert.match(gatewaySource, /discord-gateway\.internal\/stop/);
+  assert.match(gatewaySource, /main_gateway_retired_v1/);
 });
 
 test("fresh gateway sessions reconcile once before event-driven operation", () => {

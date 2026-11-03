@@ -82,6 +82,34 @@ export async function ensureDiscordGateway(env: Env): Promise<void> {
   }
 }
 
+const GATEWAY_RETIRED_FLAG = "main_gateway_retired_v1";
+
+/**
+ * Main Bot の常時 Gateway 接続をやめる。
+ * Cloudflare 無料枠の Durable Objects は1日 13,000 GB秒までで、常時接続1本で約10,800 GB秒を使う。
+ * Main と Security の2本では足りず、毎日夜に両方とも止まっていたので、常時接続は Security Bot だけにする。
+ * 入退室通知は Cron でメンバー一覧を見比べる方式（memberActivitySweep）で続ける。
+ * 一度止められたら D1 に印を付け、以後は Durable Object を起こさない。
+ */
+export async function retireDiscordGateway(env: Env): Promise<void> {
+  if (!env.DISCORD_GATEWAY) return;
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS worker_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+  ).run();
+  const done = await env.DB.prepare("SELECT value FROM worker_flags WHERE key=?")
+    .bind(GATEWAY_RETIRED_FLAG).first<{ value: string }>();
+  if (done) return;
+  const stub = env.DISCORD_GATEWAY.get(env.DISCORD_GATEWAY.idFromName("member-activity"));
+  const response = await stub.fetch("https://discord-gateway.internal/stop", { method: "POST" });
+  if (!response.ok) {
+    // 無料枠を使い切っている間は失敗する。次の Cron で再試行する。
+    throw new Error(`Discord Gateway の停止に失敗しました: ${response.status}`);
+  }
+  await env.DB.prepare(
+    "INSERT INTO worker_flags(key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"
+  ).bind(GATEWAY_RETIRED_FLAG, "1", Date.now()).run();
+}
+
 export class DiscordGateway {
   private socket: WebSocket | null = null;
   private plannedClose = false;

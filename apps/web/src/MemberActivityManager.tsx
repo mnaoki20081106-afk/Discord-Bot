@@ -205,7 +205,7 @@ export default function MemberActivityManager({
             <div>
               <strong>入退室通知を有効化</strong>
               <small>
-                Discord Gatewayで入室・退室イベントをリアルタイム検知して通知します。
+                1分ごとにメンバー一覧を確認し、入室・退室を通知します（最大1〜2分ほど遅れます）。
               </small>
             </div>
             <input
