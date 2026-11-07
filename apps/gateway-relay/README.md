@@ -12,6 +12,7 @@ Gateway への常時接続は1本で約 10,800 GB秒/日を使うため、Main B
 - Main Bot …… この中継プログラムが VPS で常時接続し、入退室などのイベントを Worker に転送
 
 中継が止まっていても、Worker が1分ごとにメンバー一覧を見比べるので、入退室通知は1〜2分遅れで届きます。
+`/check` 用チャンネルの投稿も、中継が止まっている間は1分ごとの確認で削除されます。
 
 ## インストール（VPS で1回だけ）
 
@@ -42,6 +43,8 @@ curl -fsSL https://raw.githubusercontent.com/mnaoki20081106-afk/Discord-Bot/main
 
 - Node.js 22 以上（組み込みの WebSocket）。依存パッケージなし
 - 転送するイベント: READY / GUILD_CREATE / GUILD_DELETE / GUILD_MEMBER_ADD / GUILD_MEMBER_REMOVE
+- `/check` 用チャンネル（管理画面の 仲介 → 実績 で設定）への投稿は、IDだけを Worker に送ってすぐ削除させます。
+  どのチャンネルが対象かは、1分ごとの Worker への定期連絡で受け取ります。本文は読まないので Message Content Intent は不要です
 - Worker の `/internal/gateway-relay` へ「時刻.本文」の HMAC-SHA256 署名付きで送信。
   鍵は BOT トークンから作るので、新しいシークレットを配る必要はありません
 - 送信に失敗したイベントは順番を保って再送します

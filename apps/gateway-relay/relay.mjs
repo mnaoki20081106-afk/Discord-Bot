@@ -14,12 +14,14 @@
  */
 import { createHash, createHmac } from "node:crypto";
 
-const VERSION = "1";
+const VERSION = "2";
 const TOKEN = (process.env.DISCORD_BOT_TOKEN ?? "").trim();
 const RELAY_URL = (process.env.RELAY_URL ?? "").trim();
 // テスト用に差し替えられるようにしているだけ。本番では指定しない
 const API_BASE = (process.env.DISCORD_API_BASE ?? "https://discord.com/api/v10").replace(/\/$/, "");
-const INTENTS = (1 << 0) | (1 << 1); // GUILDS + GUILD_MEMBERS（Worker 側の Durable Object と同じ）
+// GUILDS + GUILD_MEMBERS + GUILD_MESSAGES。
+// GUILD_MESSAGES は /check 用チャンネルへの投稿をすぐ消すため。本文は読まないので Message Content Intent は不要
+const INTENTS = (1 << 0) | (1 << 1) | (1 << 9);
 const FORWARD = new Set(["READY", "GUILD_CREATE", "GUILD_DELETE", "GUILD_MEMBER_ADD", "GUILD_MEMBER_REMOVE"]);
 const HEARTBEAT_TO_WORKER_MS = 60_000;
 const MAX_QUEUE = 2000;
@@ -40,6 +42,24 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const key = createHash("sha256").update("gateway-relay:" + TOKEN).digest();
 const queue = [];
 let draining = false;
+// Worker から教えてもらう「/check 用チャンネル」。この中の投稿だけを転送する
+let checkChannels = new Set();
+let botUserId = null;
+
+function applyConfig(text) {
+  try {
+    const data = JSON.parse(text);
+    if (Array.isArray(data?.config?.checkChannels)) {
+      const next = new Set(data.config.checkChannels.map(String));
+      if (next.size !== checkChannels.size || [...next].some(id => !checkChannels.has(id))) {
+        log(`/check 用チャンネル: ${next.size} 件`);
+      }
+      checkChannels = next;
+    }
+  } catch {
+    // 設定が付いていない応答は無視する
+  }
+}
 
 function sign(timestamp, body) {
   return createHmac("sha256", key).update(`${timestamp}.${body}`).digest("hex");
@@ -81,6 +101,7 @@ async function drain() {
           continue;
         }
         if (!response.ok) throw new Error("HTTP " + response.status);
+        if (item.t === "RELAY_HEARTBEAT" || item.t === "READY") applyConfig(await response.text());
         queue.shift();
         backoff = 1_000;
       } catch (error) {
@@ -95,6 +116,8 @@ async function drain() {
 }
 
 setInterval(() => enqueue("RELAY_HEARTBEAT", { version: VERSION }), HEARTBEAT_TO_WORKER_MS).unref();
+// 起動直後に一度連絡して、/check 用チャンネルの設定を受け取っておく
+enqueue("RELAY_HEARTBEAT", { version: VERSION });
 
 // ---- Discord Gateway --------------------------------------------------------------
 let ws = null;
@@ -196,6 +219,7 @@ async function connect() {
         break;
       case 0: // DISPATCH
         if (payload.t === "READY") {
+          botUserId = payload.d.user?.id ?? null;
           sessionId = payload.d.session_id;
           resumeUrl = payload.d.resume_gateway_url;
           reconnectDelay = 1_000;
@@ -206,6 +230,14 @@ async function connect() {
         if (payload.t === "RESUMED") {
           reconnectDelay = 1_000;
           log("再開しました");
+          break;
+        }
+        if (payload.t === "MESSAGE_CREATE") {
+          const m = payload.d;
+          // /check 用チャンネルの投稿だけを、ID だけにして送る（本文は送らない）
+          if (m?.guild_id && checkChannels.has(String(m.channel_id)) && m.author?.id !== botUserId) {
+            enqueue("CHECK_CHANNEL_MESSAGE", { guild_id: m.guild_id, channel_id: m.channel_id, id: m.id, author_id: m.author?.id ?? null });
+          }
           break;
         }
         if (FORWARD.has(payload.t)) {

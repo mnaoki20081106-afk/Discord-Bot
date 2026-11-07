@@ -16,6 +16,8 @@ const channelId = '423456789012345001';
 const existing = {id: '323456789012345001', username: 'old', global_name: null, avatar: null};
 const newcomer = {id: '323456789012345002', username: 'newbie', global_name: 'Newbie', avatar: null};
 const token = 'local-test-token';
+const checkChannel = '423456789012345777';
+const otherChannel = '423456789012345888';
 
 function listen(server) {
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
@@ -54,6 +56,7 @@ test('VPS relay forwards gateway events to the Worker, which posts one join noti
         return Response.json(url.searchParams.get('after') === '0' ? [{user: existing}, {user: newcomer}] : []);
       }
       if (request.method === 'POST' && p === `/channels/${channelId}/messages`) return Response.json({id: '1'});
+      if (request.method === 'DELETE' && /^\/channels\/\d+\/messages\/\d+$/.test(p)) return new Response(null, {status: 204});
       return Response.json({message: 'Missing Access'}, {status: 403});
     }
   });
@@ -68,6 +71,9 @@ test('VPS relay forwards gateway events to the Worker, which posts one join noti
     .bind(guildId, channelId, now, now).run();
   await db.prepare('INSERT OR REPLACE INTO member_activity_members(guild_id,user_id,username,global_name,avatar,is_bot,first_seen_at,last_seen_at) VALUES (?,?,?,?,?,0,?,?)')
     .bind(guildId, existing.id, existing.username, null, null, now, now).run();
+  // /check-only channel
+  await db.prepare('INSERT OR REPLACE INTO mediation_settings(guild_id,settings_json,result_dirty,updated_at) VALUES (?,?,0,?)')
+    .bind(guildId, JSON.stringify({checkChannelIds: [checkChannel]}), now).run();
 
   // Forward the relay's HTTP calls into Miniflare.
   const bridge = http.createServer(async (req, res) => {
@@ -104,6 +110,12 @@ test('VPS relay forwards gateway events to the Worker, which posts one join noti
         identify = msg.d;
         socket.send(JSON.stringify({op: 0, s: 1, t: 'READY', d: {session_id: 's', resume_gateway_url: `ws://127.0.0.1:${fake.address().port}`, user: {username: 'bot'}, guilds: [{id: guildId, unavailable: true}]}}));
         socket.send(JSON.stringify({op: 0, s: 2, t: 'GUILD_MEMBER_ADD', d: {guild_id: guildId, user: newcomer}}));
+        // After the relay has learned the /check channels, members post in two channels.
+        setTimeout(() => {
+          socket.send(JSON.stringify({op: 0, s: 3, t: 'MESSAGE_CREATE', d: {guild_id: guildId, channel_id: checkChannel, id: '900000000000000001', author: {id: existing.id}}}));
+          socket.send(JSON.stringify({op: 0, s: 4, t: 'MESSAGE_CREATE', d: {guild_id: guildId, channel_id: otherChannel, id: '900000000000000002', author: {id: existing.id}}}));
+          socket.send(JSON.stringify({op: 0, s: 5, t: 'MESSAGE_CREATE', d: {guild_id: guildId, channel_id: checkChannel, id: '900000000000000003', author: {id: botId}}}));
+        }, 1500);
       }
     });
   });
@@ -124,9 +136,15 @@ test('VPS relay forwards gateway events to the Worker, which posts one join noti
   await new Promise(resolve => setTimeout(resolve, 800));
   assert.equal(joins().length, 1, 'the READY reconcile and the GUILD_MEMBER_ADD event must not double-notify');
   assert.match(JSON.stringify(joins()[0].body), /newbie|Newbie|323456789012345002/);
-  assert.equal(identify?.intents, 3, 'GUILDS + GUILD_MEMBERS');
+  assert.equal(identify?.intents, 1 | 2 | 512, 'GUILDS + GUILD_MEMBERS + GUILD_MESSAGES');
   const row = await db.prepare('SELECT user_id FROM member_activity_members WHERE guild_id=? AND user_id=?').bind(guildId, newcomer.id).first();
   assert.ok(row, 'newcomer is recorded in the snapshot');
+
+  // A message in the /check channel is deleted right away; other channels and the bot's own posts are left alone.
+  const deletes = () => calls.filter(c => c.method === 'DELETE' && /\/messages\//.test(c.path)).map(c => c.path);
+  assert.ok(await eventually(() => deletes().length >= 1), 'check-channel message was not deleted. relay output:\n' + output);
+  await new Promise(resolve => setTimeout(resolve, 800));
+  assert.deepEqual(deletes(), [`/channels/${checkChannel}/messages/900000000000000001`]);
 });
 
 test('relay endpoint rejects bad signatures and stale timestamps', async t => {

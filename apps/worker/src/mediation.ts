@@ -1391,6 +1391,28 @@ async function cleanCheckChannel(env:Env,channelId:string){
   }
 }
 
+/** 中継が覚えておく /check 用チャンネル（全サーバー分） */
+export async function checkChannelIdsForRelay(env:Env):Promise<string[]>{
+  await ensureMediationSchema(env);
+  return (await listCheckChannelGuilds(env)).flatMap(g=>g.settings.checkChannelIds);
+}
+
+/**
+ * 中継（VPS）から届いた /check 用チャンネルへの投稿を、すぐ削除する。
+ * 設定とチャンネルの対応を Worker 側でも確かめ、BOT 自身の投稿（案内パネル）は消さない。
+ */
+export async function deleteCheckChannelMessage(env:Env,input:{guildId:string;channelId:string;messageId:string;authorId:string}){
+  if(!/^\d+$/.test(input.guildId)||!/^\d+$/.test(input.channelId)||!/^\d+$/.test(input.messageId)) return;
+  if(input.authorId===env.DISCORD_APPLICATION_ID.trim()) return;
+  await ensureMediationSchema(env);
+  const settings=await getMediationSettings(env,input.guildId);
+  if(!settings.checkChannelIds.includes(input.channelId)) return;
+  const res=await botFetch(env,`/channels/${input.channelId}/messages/${input.messageId}`,{
+    method:"DELETE",headers:{"X-Audit-Log-Reason":"Mediation: /check channel is command-only"}
+  });
+  if(!res.ok&&res.status!==404) throw new Error("check channel message delete failed: "+res.status);
+}
+
 export async function mediationSweep(env:Env){
   await ensureMediationSchema(env);
   const now=Date.now();
