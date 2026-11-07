@@ -30,7 +30,7 @@ import {
 import {
   AMOUNT, CANCELLED, CLOSED, COMPLETE_PENDING, CONFIRMING, DISPUTE, FEE, FEE_RECEIVING, PAID, PAYMENT, PAYOUT, ROLE, TRADING,
   activeTradeBetween, addRecord, completedCount, countOpenTrades, createTrade, ensureMediationSchema, getMediationSettings, getStats, getTrade,
-  getStatsMany, topTraders, listCheckChannelGuilds, guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
+  guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
   normalizeMediationSettings, saveMediationSettings, setResultRenameState, tradeByChannel, transition, updateTrade,
   type MediationSettings, type Trade
 } from "./mediation-db";
@@ -1067,112 +1067,65 @@ async function editStaffMessage(env:Env,channelId:string,message:any,note:string
 }
 
 // ---- /check -------------------------------------------------------------------
-type GuildMemberLite={user?:{id:string;username?:string;global_name?:string|null;avatar?:string|null;bot?:boolean};nick?:string|null};
+// ---- 実績確認パネル ----------------------------------------------------------------
+/** パネルを見分けるための印（embed のフッター） */
+const CHECK_PANEL_MARK="dsm-check-panel";
 
-function memberLabel(m:GuildMemberLite):string{
-  const u=m.user!;
-  const display=m.nick||u.global_name||u.username||u.id;
-  return u.username&&u.username!==display?`${display} (@${u.username})`:display;
+export function checkPanelPayload(){
+  return {
+    embeds:[embed("🔎 取引実績の確認",
+      "下のメニューからメンバーを選ぶと、その人の **買い手実績・売り手実績** を確認できます。\n"+
+      "メニューを開くとメンバーの一覧が出ます。名前を入力すると検索できます。\n\n"+
+      "結果はあなたにだけ表示されます。",
+      COLOR.teal,{footer:{text:CHECK_PANEL_MARK}})],
+    components:[row({type:5,custom_id:"md:checkuser",placeholder:"実績を確認するメンバーを選ぶ（名前で検索できます）",min_values:1,max_values:1})],
+    allowed_mentions:{parse:[]}
+  };
 }
 
-function statsLabel(stats:{buyer:number;seller:number}|undefined){
-  return stats?` ― 買い手${stats.buyer}件 / 売り手${stats.seller}件`:"";
-}
-
-/**
- * /check のメンバー候補。Discord 標準のメンバー選択は「今のチャンネルを見られる人」しか候補に出ず、
- * 取引チャンネルでは当事者2人しか選べなかったので、サーバーの全メンバーから自前で検索する。
- */
-/** /check を使えるチャンネルか。スタッフはどこでも使える */
-function checkAllowedHere(c:Ctx):boolean{
-  const allowed=c.settings.checkChannelIds??[];
-  if(!allowed.length||isStaff(c.member,c.settings)) return true;
-  return allowed.includes(String(c.interaction.channel_id??""));
-}
-
-async function onCheckAutocomplete(env:Env,c:Ctx){
-  if(!checkAllowedHere(c)){
-    return ires({type:8,data:{choices:[{name:"このチャンネルでは使えません（実績確認用のチャンネルで使ってください）",value:"__blocked__"}]}});
-  }
-  const option=(c.interaction.data?.options??[]).find((o:any)=>o.name==="member");
-  const query=String(option?.value??"").trim().replace(/^@/,"");
-  let members:GuildMemberLite[]=[];
-  try{
-    if(query){
-      const id=query.match(/^<@!?(\d+)>$/)?.[1]??(/^\d{15,22}$/.test(query)?query:null);
-      if(id){
-        const m=await botJson<GuildMemberLite>(env,`/guilds/${c.guildId}/members/${id}`).catch(()=>null);
-        if(m) members=[m];
-      }else{
-        members=await botJson<GuildMemberLite[]>(env,`/guilds/${c.guildId}/members/search?query=${encodeURIComponent(query.slice(0,100))}&limit=25`);
-      }
-    }else{
-      // 何も入力していないときは、実績のある人を多い順に出す
-      const top=await topTraders(env,c.guildId,25);
-      const fetched=await Promise.all(top.map(r=>botJson<GuildMemberLite>(env,`/guilds/${c.guildId}/members/${r.user_id}`).catch(()=>null)));
-      members=fetched.filter((m):m is GuildMemberLite=>Boolean(m));
-      if(members.length<25){
-        const more=await botJson<GuildMemberLite[]>(env,`/guilds/${c.guildId}/members?limit=50`).catch(()=>[] as GuildMemberLite[]);
-        const seen=new Set(members.map(m=>m.user?.id));
-        for(const m of more){ if(members.length>=25) break; if(m.user&&!seen.has(m.user.id)) members.push(m); }
-      }
-    }
-  }catch(error){
-    console.error("check autocomplete failed",error);
-  }
-  members=members.filter(m=>m.user&&!m.user.bot).slice(0,25);
-  const stats=await getStatsMany(env,c.guildId,members.map(m=>m.user!.id));
-  return ires({type:8,data:{choices:members.map(m=>({
-    name:(memberLabel(m)+statsLabel(stats.get(m.user!.id))).slice(0,100),
-    value:m.user!.id
-  }))}});
-}
-
-async function onCheck(env:Env,c:Ctx){
-  if(!checkAllowedHere(c)){
-    return reply(`実績確認（/check）は ${c.settings.checkChannelIds.map(id=>`<#${id}>`).join(" / ")} で使ってください。`);
-  }
-  const option=(c.interaction.data?.options??[]).find((o:any)=>o.name==="member");
-  return checkResult(env,c,String(option?.value??""));
-}
-
-/** パネルの「実績を確認する」ボタン：名前を入力する欄を出す */
-function onCheckPanelButton(){
-  return modal("md:checkm","取引実績の確認",[
-    textInput("member","確認したいメンバー（名前の一部・@メンション・ID）",{placeholder:"例: ぼぶ / @bob / 123456789012345678",max_length:100})
-  ]);
-}
-
-async function checkResult(env:Env,c:Ctx,input:string){
-  const raw=input.trim().replace(/^@/,"");
-  if(!raw) return reply("メンバーを指定してください。");
-  // 候補から選べば ID が入る。候補を選ばずに名前を打って送信した場合は、名前で探す
-  let userId=raw.match(/^<@!?(\d+)>$/)?.[1]??(/^\d{15,22}$/.test(raw)?raw:null);
-  let member:GuildMemberLite|null=null;
-  if(userId){
-    member=await botJson<GuildMemberLite>(env,`/guilds/${c.guildId}/members/${userId}`).catch(()=>null);
-  }else{
-    const found=await botJson<GuildMemberLite[]>(env,`/guilds/${c.guildId}/members/search?query=${encodeURIComponent(raw.slice(0,100))}&limit=1`).catch(()=>[] as GuildMemberLite[]);
-    member=found[0]??null;
-    userId=member?.user?.id??null;
-  }
-  if(!userId) return reply(`「${raw.slice(0,50)}」に当てはまるメンバーが見つかりませんでした。候補の一覧から選んでください。`);
+/** パネルのユーザー選択メニューで選ばれたメンバーの実績を、本人にだけ表示する */
+async function onCheckUser(env:Env,c:Ctx){
+  const userId=String(c.interaction.data?.values?.[0]??"");
+  if(!/^\d+$/.test(userId)) return reply("メンバーを選んでください。");
+  const resolved=c.interaction.data?.resolved??{};
+  const user=resolved.users?.[userId];
+  const member=resolved.members?.[userId];
   const stats=await getStats(env,c.guildId,userId);
-  const user=member?.user;
-  const name=member?memberLabel(member):userId;
+  const display=member?.nick||user?.global_name||user?.username||userId;
+  const name=user?.username&&user.username!==display?`${display} (@${user.username})`:display;
   const avatar=user?.avatar?`https://cdn.discordapp.com/avatars/${userId}/${user.avatar}.png?size=128`:undefined;
-  return ires({type:4,data:{flags:64,allowed_mentions:{parse:[]},embeds:[embed(`${name} さんの取引実績`,member?`<@${userId}>`:"（サーバーにいないメンバーです）",COLOR.teal,{
+  return ires({type:4,data:{flags:64,allowed_mentions:{parse:[]},embeds:[embed(`${name} さんの取引実績`,`<@${userId}>`+(user?.bot?"（BOT）":""),COLOR.teal,{
     ...(avatar?{thumbnail:{url:avatar}}:{}),
     fields:[{name:"買い手実績",value:`${stats.buyer} 件`,inline:true},{name:"売り手実績",value:`${stats.seller} 件`,inline:true}],
     footer:{text:"正常に完了した取引の件数です"}
   })]}});
 }
 
+// 発言禁止にする権限: メッセージ送信・スレッド作成・スレッド内送信・リアクション追加
+const CHECK_PANEL_DENY=2048n|34359738368n|68719476736n|274877906944n|64n;
+
+/** 実績確認パネルのチャンネルを発言禁止にする（選択メニューは発言禁止でも使える） */
+async function lockCheckChannel(env:Env,guildId:string,channelId:string){
+  const channel=await botJson<{permission_overwrites?:Array<{id:string;type:number;allow:string;deny:string}>}>(env,`/channels/${channelId}`);
+  const everyone=channel.permission_overwrites?.find(o=>o.id===guildId);
+  const allow=BigInt(everyone?.allow??"0")&~CHECK_PANEL_DENY;
+  const deny=BigInt(everyone?.deny??"0")|CHECK_PANEL_DENY;
+  await lease(env,guildId);
+  // BOT 自身はパネルを投稿・更新できるようにしておく
+  await botJson(env,`/channels/${channelId}/permissions/${env.DISCORD_APPLICATION_ID.trim()}`,{
+    method:"PUT",headers:{"X-Audit-Log-Reason":"Mediation: check panel bot access"},
+    body:JSON.stringify({type:1,allow:(VIEW|SEND|EMBED|HISTORY).toString(),deny:"0"})
+  });
+  await botJson(env,`/channels/${channelId}/permissions/${guildId}`,{
+    method:"PUT",headers:{"X-Audit-Log-Reason":"Mediation: check panel channel is read-only"},
+    body:JSON.stringify({type:0,allow:allow.toString(),deny:deny.toString()})
+  });
+}
+
 // ---- Interaction ルーティング --------------------------------------------------
 export const MEDIATION_COMMANDS=[
   {name:"complete",description:"取引完了（買い手は確認後に売り手へ支払い、売り手は買い手に完了を依頼）※取引チャンネル内で使用",type:1,dm_permission:false},
   {name:"report",description:"トラブルを通報し、取引を保留にします（取引チャンネル内で使用）",type:1,dm_permission:false},
-  {name:"check",description:"メンバーの取引実績を確認します",type:1,dm_permission:false,options:[{type:3,name:"member",description:"名前の一部を入力して、サーバーの全メンバーから選べます",required:true,autocomplete:true}]},
   {name:"payment",description:"【スタッフ用】取引の代金を売り手に支払う／買い手に返金する（取引チャンネル内で使用）",type:1,dm_permission:false,options:[
     {type:3,name:"action",description:"どちらに送金するか",required:true,choices:[
       {name:"売り手に支払い",value:"payseller"},
@@ -1182,7 +1135,7 @@ export const MEDIATION_COMMANDS=[
 ];
 
 export function isMediationInteraction(interaction:any):boolean{
-  if(interaction?.type===2||interaction?.type===4) return MEDIATION_COMMANDS.some(c=>c.name===interaction?.data?.name);
+  if(interaction?.type===2) return MEDIATION_COMMANDS.some(c=>c.name===interaction?.data?.name);
   if(interaction?.type===3||interaction?.type===5) return String(interaction?.data?.custom_id??"").startsWith("md:");
   return false;
 }
@@ -1191,10 +1144,10 @@ export function isMediationInteraction(interaction:any):boolean{
 export function mediationShouldDefer(interaction:any):boolean{
   if(!isMediationInteraction(interaction)) return false;
   // スラッシュコマンドはどれも確認や一覧を返すだけなので即答する
-  if(interaction.type===2||interaction.type===4) return false;
+  if(interaction.type===2) return false;
   if(interaction.type===5) return true;
   const id=String(interaction.data?.custom_id??"");
-  if(id==="md:start"||id==="md:checkopen"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
+  if(id==="md:start"||id==="md:checkuser"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
   // 確認を出すだけ・取り消すだけの操作も即答する
   if(id.startsWith("md:complete:")||id.startsWith("md:agree:")||id.startsWith("md:opcancel:")) return false;
   if(id.startsWith("md:staff:payseller:")||id.startsWith("md:staff:refund:")) return false;
@@ -1217,15 +1170,10 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
   const c=await ctxOf(env,interaction);
   if(!c) return reply("サーバー内でのみ使用できます。");
 
-  if(interaction.type===4){
-    if(interaction.data?.name==="check") return onCheckAutocomplete(env,c);
-    return ires({type:8,data:{choices:[]}});
-  }
   if(interaction.type===2){
     const name=interaction.data?.name;
     if(name==="complete") return onComplete(env,c,null);
     if(name==="report") return onReportOpen(env,c,null);
-    if(name==="check") return onCheck(env,c);
     if(name==="payment") return onPaymentCommand(env,c);
   }
 
@@ -1236,7 +1184,7 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
 
   if(interaction.type===3){
     if(id==="md:start") return onStart(env,c);
-    if(id==="md:checkopen") return checkAllowedHere(c)?onCheckPanelButton():reply("このチャンネルでは使えません。");
+    if(id==="md:checkuser") return onCheckUser(env,c);
     if(id==="md:partner") return onPartner(env,c);
     if(!tid) return reply("未対応の操作です。");
     switch(parts[1]){
@@ -1256,10 +1204,6 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
       case "pickup": return onPickup(env,c,tid);
       case "staff": return onStaff(env,c,parts[2]!,tid);
     }
-  }
-  if(interaction.type===5&&id==="md:checkm"){
-    if(!checkAllowedHere(c)) return reply("このチャンネルでは使えません。");
-    return checkResult(env,c,modalValue(interaction,"member"));
   }
   if(interaction.type===5&&tid){
     switch(parts[1]){
@@ -1331,88 +1275,6 @@ async function saveTranscript(env:Env,settings:MediationSettings,t:Trade){
   if(!res.ok) throw new Error("transcript upload failed: "+res.status+" "+(await res.text().catch(()=>"")).slice(0,200));
 }
 
-// ---- /check 用チャンネルの掃除 ----------------------------------------------------
-/** パネルを見分けるための印（embed のフッター） */
-const CHECK_PANEL_MARK="dsm-check-panel";
-
-function checkPanelPayload(){
-  return {
-    embeds:[embed("🔎 取引実績の確認",
-      "このチャンネルでは、**`/check` で相手の取引実績を確認できます。**\n"+
-      "名前の一部を入力すると、サーバーの全メンバーから候補が出ます。\n"+
-      "下の「実績を確認する」ボタンからも確認できます。\n\n"+
-      "※ このチャンネルへの発言は自動で削除されます。結果は本人にだけ表示されます。",
-      COLOR.teal,{footer:{text:CHECK_PANEL_MARK}})],
-    components:[row({...button("md:checkopen","実績を確認する",1),emoji:{name:"🔎"}})],
-    allowed_mentions:{parse:[]}
-  };
-}
-
-/**
- * /check 用チャンネルは、コマンドは使えて発言はできない状態にしたいが、Discord の権限では分けられない
- * （「メッセージを送信」を禁止すると入力欄ごと使えなくなる）。そこで1分ごとに確認し、
- * BOT のパネル以外のメッセージをすべて削除して、パネルがなければ設置する。
- */
-async function cleanCheckChannel(env:Env,channelId:string){
-  const botId=env.DISCORD_APPLICATION_ID.trim();
-  let messages:any[];
-  try{
-    messages=await botJson<any[]>(env,`/channels/${channelId}/messages?limit=100`);
-  }catch(error){
-    console.error("check channel read failed",channelId,error);
-    return;
-  }
-  const isPanel=(m:any)=>m?.author?.id===botId&&m?.embeds?.[0]?.footer?.text===CHECK_PANEL_MARK;
-  // 新しい順に並んでいるので、最初に見つかったパネルを残す
-  const keep=messages.find(isPanel);
-  const remove=messages.filter(m=>m.id!==keep?.id);
-  if(remove.length){
-    const twoWeeksAgo=Date.now()-13.5*86_400_000;
-    const recent=remove.filter(m=>snowflakeTime(m.id)>twoWeeksAgo).map(m=>m.id);
-    const old=remove.filter(m=>snowflakeTime(m.id)<=twoWeeksAgo).map(m=>m.id);
-    try{
-      if(recent.length>=2){
-        await botJson(env,`/channels/${channelId}/messages/bulk-delete`,{
-          method:"POST",
-          headers:{"X-Audit-Log-Reason":"Mediation: /check channel is command-only"},
-          body:JSON.stringify({messages:recent.slice(0,100)})
-        });
-      }else if(recent.length===1){
-        await botFetch(env,`/channels/${channelId}/messages/${recent[0]}`,{method:"DELETE"});
-      }
-      // 2週間より古いメッセージはまとめて消せないので、1件ずつ（1回に最大10件）
-      for(const id of old.slice(0,10)) await botFetch(env,`/channels/${channelId}/messages/${id}`,{method:"DELETE"});
-    }catch(error){
-      console.error("check channel cleanup failed",channelId,error);
-    }
-  }
-  if(!keep){
-    await trySend(env,channelId,checkPanelPayload());
-  }
-}
-
-/** 中継が覚えておく /check 用チャンネル（全サーバー分） */
-export async function checkChannelIdsForRelay(env:Env):Promise<string[]>{
-  await ensureMediationSchema(env);
-  return (await listCheckChannelGuilds(env)).flatMap(g=>g.settings.checkChannelIds);
-}
-
-/**
- * 中継（VPS）から届いた /check 用チャンネルへの投稿を、すぐ削除する。
- * 設定とチャンネルの対応を Worker 側でも確かめ、BOT 自身の投稿（案内パネル）は消さない。
- */
-export async function deleteCheckChannelMessage(env:Env,input:{guildId:string;channelId:string;messageId:string;authorId:string}){
-  if(!/^\d+$/.test(input.guildId)||!/^\d+$/.test(input.channelId)||!/^\d+$/.test(input.messageId)) return;
-  if(input.authorId===env.DISCORD_APPLICATION_ID.trim()) return;
-  await ensureMediationSchema(env);
-  const settings=await getMediationSettings(env,input.guildId);
-  if(!settings.checkChannelIds.includes(input.channelId)) return;
-  const res=await botFetch(env,`/channels/${input.channelId}/messages/${input.messageId}`,{
-    method:"DELETE",headers:{"X-Audit-Log-Reason":"Mediation: /check channel is command-only"}
-  });
-  if(!res.ok&&res.status!==404) throw new Error("check channel message delete failed: "+res.status);
-}
-
 export async function mediationSweep(env:Env){
   await ensureMediationSchema(env);
   const now=Date.now();
@@ -1424,13 +1286,6 @@ export async function mediationSweep(env:Env){
 
   // 完了申請への自動同意は廃止した（売り手が申請して放置すると、商品を渡さずに代金を受け取れてしまうため）。
   // 取引完了は買い手だけが実行し、買い手が完了しないときは売り手が /report で通報する。
-
-  // 0. /check 用チャンネルから発言を消し、パネルを置いておく
-  for(const g of await listCheckChannelGuilds(env)){
-    for(const channelId of g.settings.checkChannelIds){
-      await cleanCheckChannel(env,channelId).catch(error=>console.error("check channel sweep failed",channelId,error));
-    }
-  }
 
   // 1b. PayPay処理の途中でWorkerが止まった取引を、スタッフに一度だけ知らせる
   for(const t of await listStuckTrades(env,now-15*60_000)){
@@ -1550,6 +1405,8 @@ export async function handleMediationApi(
     // パネルの場所は設置APIだけが変える
     next.panelChannelId=current.panelChannelId;
     next.panelMessageId=current.panelMessageId;
+    next.checkPanelChannelId=current.checkPanelChannelId;
+    next.checkPanelMessageId=current.checkPanelMessageId;
     await saveMediationSettings(env,guildId,next);
     return json(env,{settings:next});
   }
@@ -1579,6 +1436,42 @@ export async function handleMediationApi(
     }catch(error){
       if(error instanceof DiscordApiError&&error.status===404){
         throw new MediationHttpError(404,"設置済みのパネルが見つかりません。もう一度設置してください");
+      }
+      throw error;
+    }
+    return json(env,{ok:true});
+  }
+
+  if(sub==="check-panel"&&request.method==="POST"){
+    const b=await body<{channelId?:string;lock?:boolean}>(request);
+    const channelId=String(b.channelId??"");
+    if(!/^\d{15,22}$/.test(channelId)) throw new MediationHttpError(400,"パネルを設置するチャンネルを選んでください");
+    let lockWarning:string|null=null;
+    if(b.lock!==false){
+      try{ await lockCheckChannel(env,guildId,channelId); }
+      catch(error){
+        console.error("check channel lock failed",error);
+        lockWarning="パネルは設置しましたが、チャンネルを発言禁止にできませんでした。BOTの「ロールの管理」権限とロールの順番を確認してください。";
+      }
+    }
+    const message=await send(env,channelId,checkPanelPayload());
+    const settings=await getMediationSettings(env,guildId);
+    settings.checkPanelChannelId=channelId;
+    settings.checkPanelMessageId=message.id;
+    await saveMediationSettings(env,guildId,settings);
+    return json(env,{ok:true,settings,messageUrl:`https://discord.com/channels/${guildId}/${channelId}/${message.id}`,warning:lockWarning});
+  }
+
+  if(sub==="check-panel/update"&&request.method==="POST"){
+    const settings=await getMediationSettings(env,guildId);
+    if(!settings.checkPanelChannelId||!settings.checkPanelMessageId) throw new MediationHttpError(404,"まだ実績確認パネルを設置していません");
+    try{
+      await botJson(env,`/channels/${settings.checkPanelChannelId}/messages/${settings.checkPanelMessageId}`,{
+        method:"PATCH",body:JSON.stringify(checkPanelPayload())
+      });
+    }catch(error){
+      if(error instanceof DiscordApiError&&error.status===404){
+        throw new MediationHttpError(404,"設置済みの実績確認パネルが見つかりません。もう一度設置してください");
       }
       throw error;
     }

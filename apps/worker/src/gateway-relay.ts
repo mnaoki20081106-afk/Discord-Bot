@@ -17,7 +17,6 @@ import {
   replaceBotGuildMembership,
   upsertBotGuildCache
 } from "./db";
-import { checkChannelIdsForRelay, deleteCheckChannelMessage } from "./mediation";
 
 const MAX_SKEW_MS = 5 * 60_000;
 
@@ -95,15 +94,6 @@ async function dispatch(env: Env, t: string, d: any): Promise<void> {
     case "GUILD_MEMBER_REMOVE":
       await handleMemberActivityGatewayEvent(env, "leave", d);
       return;
-    case "CHECK_CHANNEL_MESSAGE":
-      // /check 用チャンネルへの投稿。中継は設定されたチャンネルの分だけ送ってくる
-      await deleteCheckChannelMessage(env, {
-        guildId: String(d?.guild_id ?? ""),
-        channelId: String(d?.channel_id ?? ""),
-        messageId: String(d?.id ?? ""),
-        authorId: String(d?.author_id ?? "")
-      });
-      return;
   }
 }
 
@@ -137,11 +127,6 @@ export async function handleGatewayRelay(request: Request, env: Env, url: URL): 
     console.error("gateway relay event failed", payload.t, error);
     // 500 を返すと中継側が再送する（入退室は記録済みかどうかを見て二重通知しない）
     return Response.json({ ok: false, error: "handler_failed" }, { status: 500 });
-  }
-  // 中継が「どのチャンネルの投稿を送ればよいか」を覚えられるよう、定期連絡と接続時に設定を返す
-  if (payload.t === "RELAY_HEARTBEAT" || payload.t === "READY") {
-    const checkChannels = await checkChannelIdsForRelay(env).catch(() => null);
-    return Response.json({ ok: true, config: checkChannels ? { checkChannels } : undefined });
   }
   return Response.json({ ok: true });
 }

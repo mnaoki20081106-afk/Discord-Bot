@@ -104,7 +104,7 @@ async function runtime(t) {
         return m ? Response.json(m) : Response.json({message: 'Unknown Member'}, {status: 404});
       }
       if (method === 'POST' && p === `/guilds/${guildId}/channels`) return Response.json({id: tradeChannel, type: 0});
-      if (method === 'POST' && /^\/channels\/\d+\/messages$/.test(p)) return Response.json({id: String(++messageSeq)});
+      if (method === 'POST' && /^\/channels\/\d+\/messages$/.test(p)) return Response.json({id: String(800000000000000000n + BigInt(++messageSeq))});
       if (method === 'PATCH' && /^\/channels\/\d+\/messages\/\d+$/.test(p)) return Response.json({id: 'x'});
       if (method === 'PUT' && /^\/channels\/\d+\/permissions\/\d+$/.test(p)) return new Response(null, {status: 204});
       if (method === 'GET' && /^\/channels\/\d+\/messages$/.test(p)) {
@@ -123,6 +123,7 @@ async function runtime(t) {
         return new Response(null, {status: 204});
       }
       if (method === 'DELETE' && /^\/channels\/\d+$/.test(p)) return Response.json({id: p.split('/')[2]});
+      if (method === 'GET' && /^\/channels\/\d+$/.test(p)) return Response.json({id: p.split('/')[2], type: 0, permission_overwrites: [{id: guildId, type: 0, allow: '2048', deny: '0'}]});
       if (method === 'PATCH' && /^\/channels\/\d+$/.test(p)) return Response.json({id: p.split('/')[2]});
       if (method === 'PUT' && p === `/applications/${botId}/commands`) return Response.json([]);
       if (method === 'PATCH' && p.startsWith('/webhooks/')) return Response.json({id: 'orig'});
@@ -236,7 +237,7 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
   assert.equal(panel.status, 200, JSON.stringify(panel.body));
   const panelMessage = env.calls.find(c => c.method === 'POST' && c.path === `/api/v10/channels/${panelChannel}/messages`);
   assert.equal(panelMessage.body.components[0].components[0].custom_id, 'md:start');
-  assert.ok(env.calls.some(c => c.method === 'PUT' && c.path.endsWith('/commands') && c.body.some(cmd => cmd.name === 'check')));
+  assert.ok(env.calls.some(c => c.method === 'PUT' && c.path.endsWith('/commands') && c.body.some(cmd => cmd.name === 'payment')));
 
   const blocked = await interact(env, {type: 3, channel_id: panelChannel, member: member(userA, [blacklistRole]), data: {custom_id: 'md:start', component_type: 2}});
   assert.match(blocked.content, /利用できません/);
@@ -353,22 +354,13 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
   assert.equal(cur.status, 'CLOSED');
   assert.ok(cur.delete_at > Date.now());
 
-  // /check: search the whole server, not just people who can see this channel
-  const auto = q => interact(env, {type: 4, channel_id: tradeChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: q, focused: true}]}});
-  const byName = await auto('car');
-  assert.equal(byName.type, 8);
-  assert.deepEqual(byName.data.choices.map(c => c.value), ['323456789012345099'], 'a member outside the trade channel can be found');
-  const empty = await auto('');
-  assert.deepEqual(empty.data.choices.slice(0, 2).map(c => c.value).sort(), [userA, userB].sort(), 'members with trade records come first');
-  assert.match(empty.data.choices.find(c => c.value === userB).name, /ボブ \(@bob\) ― 買い手0件 \/ 売り手1件/);
-  assert.ok(!empty.data.choices.some(c => c.value === '323456789012345098'), 'bots are not offered');
-  const check = await interact(env, {type: 2, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: userB}]}});
-  assert.equal(check.data.embeds[0].fields[1].value, '1 件');
-  assert.match(check.data.embeds[0].title, /ボブ/);
-  const typed = await interact(env, {type: 2, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: 'bob'}]}});
-  assert.equal(typed.data.embeds[0].fields[1].value, '1 件', 'a typed name without picking a choice still resolves');
-  const notFound = await interact(env, {type: 2, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: 'nobody-here'}]}});
-  assert.match(notFound.content, /見つかりませんでした/);
+  // The records panel: picking a member in the select menu shows their record to the picker only.
+  const picked = await interact(env, {type: 3, channel_id: panelChannel, member: member(userA), data: {custom_id: 'md:checkuser', component_type: 5, values: [userB], resolved: {users: {[userB]: {id: userB, username: 'bob', global_name: 'Bob'}}, members: {[userB]: {nick: 'ボブ', roles: []}}}}});
+  assert.equal(picked.type, 4);
+  assert.equal(picked.data.flags, 64, 'only the picker sees it');
+  assert.match(picked.data.embeds[0].title, /ボブ \(@bob\) さんの取引実績/);
+  assert.equal(picked.data.embeds[0].fields[0].value, '0 件');
+  assert.equal(picked.data.embeds[0].fields[1].value, '1 件');
 
   // cleanup by cron: transcript to the log channel, channel deletion, result channel rename
   await env.db.prepare('UPDATE mediation_trades SET delete_at=? WHERE id=?').bind(Date.now() - 1000, id).run();
@@ -556,13 +548,10 @@ test('split fee keeps the received share when the other member mistypes, and rep
   assert.ok(env.calls.some(c => c.method === 'POST' && c.path === `/api/v10/channels/${staffChannel}/messages`));
 });
 
-test('commands only run where they belong: trade commands in trade channels, /check in its channel', async t => {
+test('trade commands only run inside trade channels, and /check is gone', async t => {
   const env = await setup(t);
-  const saved = await request(env.mf, `/api/guilds/${guildId}/mediation/settings`, env.token, 'PUT', {checkChannelIds: [logChannel]});
-  assert.deepEqual(saved.body.settings.checkChannelIds, [logChannel]);
   const slash = (userId, channel, name, options = [], roles = []) =>
     interact(env, {type: 2, channel_id: channel, member: member(userId, roles), data: {name, options}});
-
   for (const name of ['complete', 'report']) {
     const r = await slash(userA, panelChannel, name);
     assert.match(r.content, /取引のプライベートチャンネルの中でだけ/, name);
@@ -570,56 +559,38 @@ test('commands only run where they belong: trade commands in trade channels, /ch
   const pay = await slash(staffUser, panelChannel, 'payment', [{name: 'action', type: 3, value: 'refund'}], [staffRole]);
   assert.match(pay.content, /取引のプライベートチャンネルの中でだけ/);
 
-  const memberOpt = [{name: 'member', type: 3, value: userB}];
-  const elsewhere = await slash(userA, panelChannel, 'check', memberOpt);
-  assert.match(elsewhere.content, new RegExp(`<#${logChannel}> で使ってください`));
-  const auto = await interact(env, {type: 4, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: 'b', focused: true}]}});
-  assert.match(auto.data.choices[0].name, /このチャンネルでは使えません/);
-  const here = await slash(userA, logChannel, 'check', memberOpt);
-  assert.ok(here.data.embeds?.[0], 'works in the configured channel');
-  const staffAnywhere = await slash(staffUser, panelChannel, 'check', memberOpt, [staffRole]);
-  assert.ok(staffAnywhere.data.embeds?.[0], 'staff can use it anywhere');
+  await request(env.mf, `/api/guilds/${guildId}/mediation/panel`, env.token, 'POST', {channelId: panelChannel});
+  const registered = env.calls.filter(c => c.method === 'PUT' && c.path.endsWith('/commands')).at(-1);
+  assert.deepEqual(registered.body.map(c => c.name).filter(n => ['complete', 'report', 'payment', 'check'].includes(n)).sort(), ['complete', 'payment', 'report']);
 });
 
-test('the /check channel keeps only the panel: other messages are deleted every minute', async t => {
+test('records panel: set up in a channel that becomes read-only, and kept when settings are saved', async t => {
   const env = await setup(t);
-  await request(env.mf, `/api/guilds/${guildId}/mediation/settings`, env.token, 'PUT', {checkChannelIds: [logChannel]});
-  // Discord message IDs encode their time; these two are "now", one is from 2020.
-  const nowId = n => String(((BigInt(Date.now()) - 1420070400000n) << 22n) + BigInt(n));
-  const oldId = '700000000000000001';
-  const [m1, m2, m4, m5] = [nowId(1), nowId(2), nowId(4), nowId(5)];
-  env.channelMessages.set(logChannel, [
-    {id: m2, author: {id: userA}, content: 'hello'},
-    {id: m1, author: {id: userB}, content: 'yo'},
-    {id: oldId, author: {id: userA}, content: 'ancient'}
-  ]);
-  const worker = await env.mf.getWorker();
-  const sweep = async () => { assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok'); await new Promise(r => setTimeout(r, 300)); };
-  await sweep();
+  const everyoneDeny = 2048n | 34359738368n | 68719476736n | 274877906944n | 64n;
+  const set = await request(env.mf, `/api/guilds/${guildId}/mediation/check-panel`, env.token, 'POST', {channelId: logChannel});
+  assert.equal(set.status, 200, JSON.stringify(set.body));
+  assert.equal(set.body.warning ?? null, null);
+  const panel = env.calls.find(c => c.method === 'POST' && c.path === `/api/v10/channels/${logChannel}/messages`);
+  assert.equal(panel.body.embeds[0].footer.text, 'dsm-check-panel');
+  const select = panel.body.components[0].components[0];
+  assert.equal(select.type, 5, 'a user select menu lists and searches every member');
+  assert.equal(select.custom_id, 'md:checkuser');
 
-  const bulk = env.calls.find(c => c.method === 'POST' && c.path === `/api/v10/channels/${logChannel}/messages/bulk-delete`);
-  assert.deepEqual(bulk.body.messages.sort(), [m1, m2].sort());
-  assert.ok(env.calls.some(c => c.method === 'DELETE' && c.path === `/api/v10/channels/${logChannel}/messages/${oldId}`), 'messages older than 2 weeks are deleted one by one');
-  const panels = () => env.calls.filter(c => c.method === 'POST' && c.path === `/api/v10/channels/${logChannel}/messages` && c.body?.embeds?.[0]?.footer?.text === 'dsm-check-panel');
-  assert.equal(panels().length, 1);
-  assert.match(panels()[0].body.embeds[0].description, /\/check` で相手の取引実績を確認できます/);
-  assert.equal(panels()[0].body.components[0].components[0].custom_id, 'md:checkopen');
+  const everyone = env.calls.find(c => c.method === 'PUT' && c.path === `/api/v10/channels/${logChannel}/permissions/${guildId}`);
+  assert.equal(BigInt(everyone.body.deny) & everyoneDeny, everyoneDeny, '@everyone cannot post');
+  const bot = env.calls.find(c => c.method === 'PUT' && c.path === `/api/v10/channels/${logChannel}/permissions/${botId}`);
+  assert.equal(BigInt(bot.body.allow) & 2048n, 2048n, 'the bot can still post the panel');
 
-  // Next minute: the panel is there, one new message arrives -> only that message goes, no second panel.
-  env.channelMessages.set(logChannel, [
-    {id: m5, author: {id: userB}, content: 'spam'},
-    {id: m4, author: {id: botId}, embeds: [{footer: {text: 'dsm-check-panel'}}]}
-  ]);
-  await sweep();
-  assert.ok(env.calls.some(c => c.method === 'DELETE' && c.path === `/api/v10/channels/${logChannel}/messages/${m5}`));
-  assert.ok(!env.calls.some(c => c.method === 'DELETE' && c.path === `/api/v10/channels/${logChannel}/messages/${m4}`), 'the panel stays');
-  assert.equal(panels().length, 1, 'no duplicate panel');
+  assert.equal(set.body.settings.checkPanelChannelId, logChannel);
+  const saved = await request(env.mf, `/api/guilds/${guildId}/mediation/settings`, env.token, 'PUT', {feeAmount: 300, checkPanelChannelId: null});
+  assert.equal(saved.body.settings.checkPanelChannelId, logChannel, 'only the panel API moves the panel');
 
-  // The panel button opens a name box and shows the result.
-  const open = await interact(env, {type: 3, channel_id: logChannel, member: member(userA), data: {custom_id: 'md:checkopen', component_type: 2}});
-  assert.equal(open.type, 9);
-  const result = await interact(env, {type: 5, channel_id: logChannel, member: member(userA), data: {custom_id: 'md:checkm', components: [{type: 1, components: [{type: 4, custom_id: 'member', value: 'bob'}]}]}});
-  assert.match(result.data.embeds[0].title, /ボブ/);
-  const elsewhere = await interact(env, {type: 3, channel_id: panelChannel, member: member(userA), data: {custom_id: 'md:checkopen', component_type: 2}});
-  assert.match(elsewhere.content, /使えません/);
+  const update = await request(env.mf, `/api/guilds/${guildId}/mediation/check-panel/update`, env.token, 'POST');
+  assert.equal(update.status, 200, JSON.stringify(update.body));
+  assert.ok(env.calls.some(c => c.method === 'PATCH' && c.path.startsWith(`/api/v10/channels/${logChannel}/messages/`)));
+
+  // Without locking, permissions are left alone.
+  const before = env.calls.length;
+  await request(env.mf, `/api/guilds/${guildId}/mediation/check-panel`, env.token, 'POST', {channelId: panelChannel, lock: false});
+  assert.ok(!env.calls.slice(before).some(c => c.method === 'PUT' && c.path.includes('/permissions/')));
 });

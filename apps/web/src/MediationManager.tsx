@@ -24,7 +24,8 @@ export type MediationSettings = {
   resultChannelBase: string;
   resultRenameEnabled: boolean;
   resultPostEnabled: boolean;
-  checkChannelIds: string[];
+  checkPanelChannelId: string | null;
+  checkPanelMessageId: string | null;
   logChannelId: string | null;
   blacklistRoleIds: string[];
   minAccountAgeDays: number;
@@ -209,6 +210,8 @@ export default function MediationManager({
   const [draft, setDraft] = useState<MediationSettings | null>(null);
   const [busy, setBusy] = useState(false);
   const [panelChannel, setPanelChannel] = useState("");
+  const [checkChannel, setCheckChannel] = useState("");
+  const [checkLock, setCheckLock] = useState(true);
   const [payForm, setPayForm] = useState({ phone: "", password: "", challengeId: "", otp: "" });
 
   const textChannels = useMemo(
@@ -548,33 +551,64 @@ export default function MediationManager({
           </button>
         </div>
 
-        <div className="field">
-          <span>実績確認（/check）を使えるチャンネル（複数選択可）</span>
-          <div className="role-picker">
-            {postable.map((channel) => {
-              const checked = (draft.checkChannelIds ?? []).includes(channel.id);
-              return (
-                <label key={channel.id} className={`role-choice ${checked ? "selected" : ""}`}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(event) => {
-                      const current = draft.checkChannelIds ?? [];
-                      const next = event.target.checked
-                        ? [...current, channel.id]
-                        : current.filter((id) => id !== channel.id);
-                      patch({ checkChannelIds: [...new Set(next)] });
-                    }}
-                  />
-                  <span>#{channel.name}</span>
-                </label>
-              );
-            })}
+        <div className="mediation-paypay">
+          <h3>実績確認パネル</h3>
+          <p className="muted">
+            メンバーを選ぶと、その人の買い手実績・売り手実績を本人にだけ表示するパネルです。
+            メニューを開くとメンバーの一覧が出て、名前で検索できます。
+            {draft.checkPanelMessageId ? ` 現在のパネル: ${channelName(draft.checkPanelChannelId)}` : " まだ設置していません。"}
+          </p>
+          <div className="form-grid two">
+            <label className="field">
+              <span>パネルを設置するチャンネル</span>
+              <select value={checkChannel || draft.checkPanelChannelId || ""} onChange={(e) => setCheckChannel(e.target.value)}>
+                <option value="">選択してください</option>
+                {postable.map((c) => (
+                  <option key={c.id} value={c.id}>#{c.name}</option>
+                ))}
+              </select>
+            </label>
+            <div className="field">
+              <span>設置</span>
+              <div className="button-row">
+                <button
+                  className="primary"
+                  disabled={busy || !(checkChannel || draft.checkPanelChannelId)}
+                  onClick={() =>
+                    void run(async () => {
+                      const result = await api<{ settings: MediationSettings; warning?: string | null }>(
+                        `/api/guilds/${guildId}/mediation/check-panel`,
+                        { method: "POST", body: JSON.stringify({ channelId: checkChannel || draft.checkPanelChannelId, lock: checkLock }) }
+                      );
+                      setOverview((current) => (current ? { ...current, settings: result.settings } : current));
+                      setDraft(result.settings);
+                      onNotice(result.warning ?? "実績確認パネルを設置しました");
+                    })
+                  }
+                >
+                  パネルを設置
+                </button>
+                <button
+                  className="secondary"
+                  disabled={busy || !draft.checkPanelMessageId}
+                  onClick={() =>
+                    void run(async () => {
+                      await api(`/api/guilds/${guildId}/mediation/check-panel/update`, { method: "POST" });
+                      onNotice("設置済みの実績確認パネルを更新しました");
+                    })
+                  }
+                >
+                  設置済みパネルを更新
+                </button>
+              </div>
+            </div>
           </div>
-          <small>
-            選んだチャンネル以外で /check を使うと「実績確認は #〇〇 で使ってください」と断ります。何も選ばなければどこでも使えます。スタッフはどこでも使えます。選んだチャンネルは1分ごとに確認し、BOTの案内パネル以外の発言（スタッフを含む）を自動で削除します。
-            /complete・/report・/payment は、取引のプライベートチャンネルの中でだけ使えます。
-          </small>
+          <Check
+            checked={checkLock}
+            onChange={setCheckLock}
+            title="設置するチャンネルを発言禁止にする（おすすめ）"
+            description="@everyone のメッセージ送信・スレッド作成・リアクションを禁止します。メニューは発言禁止でも使えます"
+          />
         </div>
 
         <label className="field">

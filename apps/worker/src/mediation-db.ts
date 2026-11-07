@@ -30,8 +30,9 @@ export type MediationSettings={
   resultChannelBase:string;
   resultRenameEnabled:boolean;
   resultPostEnabled:boolean;
-  /** /check を使えるチャンネル。空ならどこでも */
-  checkChannelIds:string[];
+  /** 実績確認パネルの場所（設置APIだけが変える） */
+  checkPanelChannelId:string|null;
+  checkPanelMessageId:string|null;
   logChannelId:string|null;
   blacklistRoleIds:string[];
   minAccountAgeDays:number;
@@ -57,7 +58,8 @@ export const DEFAULT_MEDIATION_SETTINGS:MediationSettings={
   resultChannelBase:"仲介実績",
   resultRenameEnabled:true,
   resultPostEnabled:true,
-  checkChannelIds:[],
+  checkPanelChannelId:null,
+  checkPanelMessageId:null,
   logChannelId:null,
   blacklistRoleIds:[],
   minAccountAgeDays:0,
@@ -115,7 +117,8 @@ export function normalizeMediationSettings(raw:any,base:MediationSettings=DEFAUL
     resultChannelBase:has("resultChannelBase")?(text(r.resultChannelBase,60,base.resultChannelBase)||DEFAULT_MEDIATION_SETTINGS.resultChannelBase):base.resultChannelBase,
     resultRenameEnabled:has("resultRenameEnabled")?Boolean(r.resultRenameEnabled):base.resultRenameEnabled,
     resultPostEnabled:has("resultPostEnabled")?Boolean(r.resultPostEnabled):base.resultPostEnabled,
-    checkChannelIds:has("checkChannelIds")?snowflakeList(r.checkChannelIds):(base.checkChannelIds??[]),
+    checkPanelChannelId:has("checkPanelChannelId")?snowflakeOrNull(r.checkPanelChannelId):(base.checkPanelChannelId??null),
+    checkPanelMessageId:has("checkPanelMessageId")?snowflakeOrNull(r.checkPanelMessageId):(base.checkPanelMessageId??null),
     logChannelId:has("logChannelId")?snowflakeOrNull(r.logChannelId):base.logChannelId,
     blacklistRoleIds:has("blacklistRoleIds")?snowflakeList(r.blacklistRoleIds):base.blacklistRoleIds,
     minAccountAgeDays:has("minAccountAgeDays")?clampInt(r.minAccountAgeDays,0,3650,base.minAccountAgeDays):base.minAccountAgeDays,
@@ -210,20 +213,6 @@ export async function markResultDirty(env:Env,guildId:string){
   await env.DB.prepare("UPDATE mediation_settings SET result_dirty=1 WHERE guild_id=?").bind(guildId).run();
 }
 
-/** /check 用チャンネルを設定しているサーバー */
-export async function listCheckChannelGuilds(env:Env):Promise<Array<{guildId:string;settings:MediationSettings}>>{
-  const rows=(await env.DB.prepare("SELECT guild_id,settings_json FROM mediation_settings WHERE settings_json LIKE '%\"checkChannelIds\":[\"%' LIMIT 50")
-    .all<{guild_id:string;settings_json:string}>()).results;
-  const out:Array<{guildId:string;settings:MediationSettings}>=[];
-  for(const r of rows){
-    try{
-      const settings=normalizeMediationSettings(JSON.parse(r.settings_json));
-      if(settings.checkChannelIds.length) out.push({guildId:r.guild_id,settings});
-    }catch{ /* 壊れた設定は飛ばす */ }
-  }
-  return out;
-}
-
 export async function listDirtyResultGuilds(env:Env){
   return (await env.DB.prepare("SELECT guild_id,settings_json,result_renamed_at,result_renamed_name FROM mediation_settings WHERE result_dirty=1 ORDER BY result_renamed_at ASC LIMIT 10")
     .all<{guild_id:string;settings_json:string;result_renamed_at:number;result_renamed_name:string|null}>()).results;
@@ -302,26 +291,6 @@ export async function addRecord(env:Env,guildId:string,buyerId:string,sellerId:s
     env.DB.prepare("INSERT INTO mediation_stats(guild_id,user_id,buyer_count) VALUES (?,?,1) ON CONFLICT(guild_id,user_id) DO UPDATE SET buyer_count=buyer_count+1").bind(guildId,buyerId),
     env.DB.prepare("INSERT INTO mediation_stats(guild_id,user_id,seller_count) VALUES (?,?,1) ON CONFLICT(guild_id,user_id) DO UPDATE SET seller_count=seller_count+1").bind(guildId,sellerId)
   ]);
-}
-
-export async function getStatsMany(env:Env,guildId:string,userIds:string[]):Promise<Map<string,{buyer:number;seller:number}>>{
-  const out=new Map<string,{buyer:number;seller:number}>();
-  for(let i=0;i<userIds.length;i+=90){
-    const chunk=userIds.slice(i,i+90);
-    if(!chunk.length) continue;
-    const rows=(await env.DB.prepare(
-      `SELECT user_id,buyer_count,seller_count FROM mediation_stats WHERE guild_id=? AND user_id IN (${chunk.map(()=>"?").join(",")})`
-    ).bind(guildId,...chunk).all<{user_id:string;buyer_count:number;seller_count:number}>()).results;
-    for(const r of rows) out.set(r.user_id,{buyer:r.buyer_count,seller:r.seller_count});
-  }
-  return out;
-}
-
-/** 実績の多い順（何も入力していないときの候補に使う） */
-export async function topTraders(env:Env,guildId:string,limit:number){
-  return (await env.DB.prepare(
-    "SELECT user_id,buyer_count,seller_count FROM mediation_stats WHERE guild_id=? ORDER BY buyer_count+seller_count DESC LIMIT ?"
-  ).bind(guildId,limit).all<{user_id:string;buyer_count:number;seller_count:number}>()).results;
 }
 
 export async function getStats(env:Env,guildId:string,userId:string):Promise<{buyer:number;seller:number}>{
