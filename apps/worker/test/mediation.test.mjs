@@ -83,6 +83,24 @@ async function runtime(t) {
       assert.equal(url.hostname, 'discord.com', 'unexpected outbound host ' + url.hostname);
       const p = url.pathname.replace('/api/v10', '');
       if (method === 'GET' && p === `/guilds/${guildId}`) return Response.json({id: guildId, name: 'Fixture', icon: null});
+      // Server members for /check (A, B, staff, plus an unrelated member and a bot)
+      const roster = [
+        {user: {id: userA, username: 'alice', global_name: 'Alice'}},
+        {user: {id: userB, username: 'bob', global_name: 'Bob'}, nick: 'ボブ'},
+        {user: {id: staffUser, username: 'staff'}},
+        {user: {id: '323456789012345099', username: 'carol', global_name: 'Carol'}},
+        {user: {id: '323456789012345098', username: 'somebot', bot: true}}
+      ];
+      if (method === 'GET' && p === `/guilds/${guildId}/members/search`) {
+        const q = (url.searchParams.get('query') ?? '').toLowerCase();
+        return Response.json(roster.filter(m => [m.user.username, m.user.global_name, m.nick].some(v => v && v.toLowerCase().startsWith(q))).slice(0, Number(url.searchParams.get('limit') ?? 25)));
+      }
+      if (method === 'GET' && p === `/guilds/${guildId}/members`) return Response.json(roster);
+      const oneMember = p.match(new RegExp(`^/guilds/${guildId}/members/(\\d+)$`));
+      if (method === 'GET' && oneMember) {
+        const m = roster.find(x => x.user.id === oneMember[1]);
+        return m ? Response.json(m) : Response.json({message: 'Unknown Member'}, {status: 404});
+      }
       if (method === 'POST' && p === `/guilds/${guildId}/channels`) return Response.json({id: tradeChannel, type: 0});
       if (method === 'POST' && /^\/channels\/\d+\/messages$/.test(p)) return Response.json({id: String(++messageSeq)});
       if (method === 'PATCH' && /^\/channels\/\d+\/messages\/\d+$/.test(p)) return Response.json({id: 'x'});
@@ -319,8 +337,22 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
   assert.equal(cur.status, 'CLOSED');
   assert.ok(cur.delete_at > Date.now());
 
-  const check = await interact(env, {type: 2, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 6, value: userB}], resolved: {users: {[userB]: {id: userB, username: 'b'}}}}});
+  // /check: search the whole server, not just people who can see this channel
+  const auto = q => interact(env, {type: 4, channel_id: tradeChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: q, focused: true}]}});
+  const byName = await auto('car');
+  assert.equal(byName.type, 8);
+  assert.deepEqual(byName.data.choices.map(c => c.value), ['323456789012345099'], 'a member outside the trade channel can be found');
+  const empty = await auto('');
+  assert.deepEqual(empty.data.choices.slice(0, 2).map(c => c.value).sort(), [userA, userB].sort(), 'members with trade records come first');
+  assert.match(empty.data.choices.find(c => c.value === userB).name, /ボブ \(@bob\) ― 買い手0件 \/ 売り手1件/);
+  assert.ok(!empty.data.choices.some(c => c.value === '323456789012345098'), 'bots are not offered');
+  const check = await interact(env, {type: 2, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: userB}]}});
   assert.equal(check.data.embeds[0].fields[1].value, '1 件');
+  assert.match(check.data.embeds[0].title, /ボブ/);
+  const typed = await interact(env, {type: 2, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: 'bob'}]}});
+  assert.equal(typed.data.embeds[0].fields[1].value, '1 件', 'a typed name without picking a choice still resolves');
+  const notFound = await interact(env, {type: 2, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: 'nobody-here'}]}});
+  assert.match(notFound.content, /見つかりませんでした/);
 
   // cleanup by cron: transcript to the log channel, channel deletion, result channel rename
   await env.db.prepare('UPDATE mediation_trades SET delete_at=? WHERE id=?').bind(Date.now() - 1000, id).run();

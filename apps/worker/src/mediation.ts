@@ -30,7 +30,7 @@ import {
 import {
   AMOUNT, CANCELLED, CLOSED, COMPLETE_PENDING, CONFIRMING, DISPUTE, FEE, FEE_RECEIVING, PAID, PAYMENT, PAYOUT, ROLE, TRADING,
   activeTradeBetween, addRecord, completedCount, countOpenTrades, createTrade, ensureMediationSchema, getMediationSettings, getStats, getTrade,
-  guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
+  getStatsMany, topTraders, guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
   normalizeMediationSettings, saveMediationSettings, setResultRenameState, tradeByChannel, transition, updateTrade,
   type MediationSettings, type Trade
 } from "./mediation-db";
@@ -1066,19 +1066,80 @@ async function editStaffMessage(env:Env,channelId:string,message:any,note:string
 }
 
 // ---- /check -------------------------------------------------------------------
+type GuildMemberLite={user?:{id:string;username?:string;global_name?:string|null;avatar?:string|null;bot?:boolean};nick?:string|null};
+
+function memberLabel(m:GuildMemberLite):string{
+  const u=m.user!;
+  const display=m.nick||u.global_name||u.username||u.id;
+  return u.username&&u.username!==display?`${display} (@${u.username})`:display;
+}
+
+function statsLabel(stats:{buyer:number;seller:number}|undefined){
+  return stats?` ― 買い手${stats.buyer}件 / 売り手${stats.seller}件`:"";
+}
+
+/**
+ * /check のメンバー候補。Discord 標準のメンバー選択は「今のチャンネルを見られる人」しか候補に出ず、
+ * 取引チャンネルでは当事者2人しか選べなかったので、サーバーの全メンバーから自前で検索する。
+ */
+async function onCheckAutocomplete(env:Env,c:Ctx){
+  const option=(c.interaction.data?.options??[]).find((o:any)=>o.name==="member");
+  const query=String(option?.value??"").trim().replace(/^@/,"");
+  let members:GuildMemberLite[]=[];
+  try{
+    if(query){
+      const id=query.match(/^<@!?(\d+)>$/)?.[1]??(/^\d{15,22}$/.test(query)?query:null);
+      if(id){
+        const m=await botJson<GuildMemberLite>(env,`/guilds/${c.guildId}/members/${id}`).catch(()=>null);
+        if(m) members=[m];
+      }else{
+        members=await botJson<GuildMemberLite[]>(env,`/guilds/${c.guildId}/members/search?query=${encodeURIComponent(query.slice(0,100))}&limit=25`);
+      }
+    }else{
+      // 何も入力していないときは、実績のある人を多い順に出す
+      const top=await topTraders(env,c.guildId,25);
+      const fetched=await Promise.all(top.map(r=>botJson<GuildMemberLite>(env,`/guilds/${c.guildId}/members/${r.user_id}`).catch(()=>null)));
+      members=fetched.filter((m):m is GuildMemberLite=>Boolean(m));
+      if(members.length<25){
+        const more=await botJson<GuildMemberLite[]>(env,`/guilds/${c.guildId}/members?limit=50`).catch(()=>[] as GuildMemberLite[]);
+        const seen=new Set(members.map(m=>m.user?.id));
+        for(const m of more){ if(members.length>=25) break; if(m.user&&!seen.has(m.user.id)) members.push(m); }
+      }
+    }
+  }catch(error){
+    console.error("check autocomplete failed",error);
+  }
+  members=members.filter(m=>m.user&&!m.user.bot).slice(0,25);
+  const stats=await getStatsMany(env,c.guildId,members.map(m=>m.user!.id));
+  return ires({type:8,data:{choices:members.map(m=>({
+    name:(memberLabel(m)+statsLabel(stats.get(m.user!.id))).slice(0,100),
+    value:m.user!.id
+  }))}});
+}
+
 async function onCheck(env:Env,c:Ctx){
   const option=(c.interaction.data?.options??[]).find((o:any)=>o.name==="member");
-  const userId=String(option?.value??"");
-  if(!userId) return reply("メンバーを指定してください。");
-  const user=c.interaction.data?.resolved?.users?.[userId];
-  const member=c.interaction.data?.resolved?.members?.[userId];
+  const raw=String(option?.value??"").trim().replace(/^@/,"");
+  if(!raw) return reply("メンバーを指定してください。");
+  // 候補から選べば ID が入る。候補を選ばずに名前を打って送信した場合は、名前で探す
+  let userId=raw.match(/^<@!?(\d+)>$/)?.[1]??(/^\d{15,22}$/.test(raw)?raw:null);
+  let member:GuildMemberLite|null=null;
+  if(userId){
+    member=await botJson<GuildMemberLite>(env,`/guilds/${c.guildId}/members/${userId}`).catch(()=>null);
+  }else{
+    const found=await botJson<GuildMemberLite[]>(env,`/guilds/${c.guildId}/members/search?query=${encodeURIComponent(raw.slice(0,100))}&limit=1`).catch(()=>[] as GuildMemberLite[]);
+    member=found[0]??null;
+    userId=member?.user?.id??null;
+  }
+  if(!userId) return reply(`「${raw.slice(0,50)}」に当てはまるメンバーが見つかりませんでした。候補の一覧から選んでください。`);
   const stats=await getStats(env,c.guildId,userId);
-  const name=String(member?.nick??user?.global_name??user?.username??userId);
+  const user=member?.user;
+  const name=member?memberLabel(member):userId;
   const avatar=user?.avatar?`https://cdn.discordapp.com/avatars/${userId}/${user.avatar}.png?size=128`:undefined;
-  return ires({type:4,data:{flags:64,embeds:[embed(`${name} さんの取引実績`,"",COLOR.teal,{
+  return ires({type:4,data:{flags:64,allowed_mentions:{parse:[]},embeds:[embed(`${name} さんの取引実績`,member?`<@${userId}>`:"（サーバーにいないメンバーです）",COLOR.teal,{
     ...(avatar?{thumbnail:{url:avatar}}:{}),
     fields:[{name:"買い手実績",value:`${stats.buyer} 件`,inline:true},{name:"売り手実績",value:`${stats.seller} 件`,inline:true}],
-    footer:{text:"買い手の取引完了で正常に終わった取引の件数です"}
+    footer:{text:"正常に完了した取引の件数です"}
   })]}});
 }
 
@@ -1086,7 +1147,7 @@ async function onCheck(env:Env,c:Ctx){
 export const MEDIATION_COMMANDS=[
   {name:"complete",description:"取引完了（買い手は確認後に売り手へ支払い、売り手は買い手に完了を依頼）※取引チャンネル内で使用",type:1,dm_permission:false},
   {name:"report",description:"トラブルを通報し、取引を保留にします（取引チャンネル内で使用）",type:1,dm_permission:false},
-  {name:"check",description:"メンバーの取引実績を確認します",type:1,dm_permission:false,options:[{type:6,name:"member",description:"実績を確認したいメンバー",required:true}]},
+  {name:"check",description:"メンバーの取引実績を確認します",type:1,dm_permission:false,options:[{type:3,name:"member",description:"名前の一部を入力して、サーバーの全メンバーから選べます",required:true,autocomplete:true}]},
   {name:"payment",description:"【スタッフ用】取引の代金を売り手に支払う／買い手に返金する（取引チャンネル内で使用）",type:1,dm_permission:false,options:[
     {type:3,name:"action",description:"どちらに送金するか",required:true,choices:[
       {name:"売り手に支払い",value:"payseller"},
@@ -1096,7 +1157,7 @@ export const MEDIATION_COMMANDS=[
 ];
 
 export function isMediationInteraction(interaction:any):boolean{
-  if(interaction?.type===2) return MEDIATION_COMMANDS.some(c=>c.name===interaction?.data?.name);
+  if(interaction?.type===2||interaction?.type===4) return MEDIATION_COMMANDS.some(c=>c.name===interaction?.data?.name);
   if(interaction?.type===3||interaction?.type===5) return String(interaction?.data?.custom_id??"").startsWith("md:");
   return false;
 }
@@ -1105,7 +1166,7 @@ export function isMediationInteraction(interaction:any):boolean{
 export function mediationShouldDefer(interaction:any):boolean{
   if(!isMediationInteraction(interaction)) return false;
   // スラッシュコマンドはどれも確認や一覧を返すだけなので即答する
-  if(interaction.type===2) return false;
+  if(interaction.type===2||interaction.type===4) return false;
   if(interaction.type===5) return true;
   const id=String(interaction.data?.custom_id??"");
   if(id==="md:start"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
@@ -1131,6 +1192,10 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
   const c=await ctxOf(env,interaction);
   if(!c) return reply("サーバー内でのみ使用できます。");
 
+  if(interaction.type===4){
+    if(interaction.data?.name==="check") return onCheckAutocomplete(env,c);
+    return ires({type:8,data:{choices:[]}});
+  }
   if(interaction.type===2){
     const name=interaction.data?.name;
     if(name==="complete") return onComplete(env,c,null);
