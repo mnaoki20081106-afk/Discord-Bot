@@ -33,6 +33,8 @@ export type MediationSettings={
   /** 実績確認パネルの場所（設置APIだけが変える） */
   checkPanelChannelId:string|null;
   checkPanelMessageId:string|null;
+  /** 設置済みパネルの形の版。古ければ定期処理で書き換える */
+  checkPanelVersion:number;
   logChannelId:string|null;
   blacklistRoleIds:string[];
   minAccountAgeDays:number;
@@ -60,6 +62,7 @@ export const DEFAULT_MEDIATION_SETTINGS:MediationSettings={
   resultPostEnabled:true,
   checkPanelChannelId:null,
   checkPanelMessageId:null,
+  checkPanelVersion:0,
   logChannelId:null,
   blacklistRoleIds:[],
   minAccountAgeDays:0,
@@ -119,6 +122,7 @@ export function normalizeMediationSettings(raw:any,base:MediationSettings=DEFAUL
     resultPostEnabled:has("resultPostEnabled")?Boolean(r.resultPostEnabled):base.resultPostEnabled,
     checkPanelChannelId:has("checkPanelChannelId")?snowflakeOrNull(r.checkPanelChannelId):(base.checkPanelChannelId??null),
     checkPanelMessageId:has("checkPanelMessageId")?snowflakeOrNull(r.checkPanelMessageId):(base.checkPanelMessageId??null),
+    checkPanelVersion:has("checkPanelVersion")?clampInt(r.checkPanelVersion,0,1000,0):(base.checkPanelVersion??0),
     logChannelId:has("logChannelId")?snowflakeOrNull(r.logChannelId):base.logChannelId,
     blacklistRoleIds:has("blacklistRoleIds")?snowflakeList(r.blacklistRoleIds):base.blacklistRoleIds,
     minAccountAgeDays:has("minAccountAgeDays")?clampInt(r.minAccountAgeDays,0,3650,base.minAccountAgeDays):base.minAccountAgeDays,
@@ -291,6 +295,19 @@ export async function addRecord(env:Env,guildId:string,buyerId:string,sellerId:s
     env.DB.prepare("INSERT INTO mediation_stats(guild_id,user_id,buyer_count) VALUES (?,?,1) ON CONFLICT(guild_id,user_id) DO UPDATE SET buyer_count=buyer_count+1").bind(guildId,buyerId),
     env.DB.prepare("INSERT INTO mediation_stats(guild_id,user_id,seller_count) VALUES (?,?,1) ON CONFLICT(guild_id,user_id) DO UPDATE SET seller_count=seller_count+1").bind(guildId,sellerId)
   ]);
+}
+
+export async function getStatsMany(env:Env,guildId:string,userIds:string[]):Promise<Map<string,{buyer:number;seller:number}>>{
+  const out=new Map<string,{buyer:number;seller:number}>();
+  for(let i=0;i<userIds.length;i+=90){
+    const chunk=userIds.slice(i,i+90);
+    if(!chunk.length) continue;
+    const rows=(await env.DB.prepare(
+      `SELECT user_id,buyer_count,seller_count FROM mediation_stats WHERE guild_id=? AND user_id IN (${chunk.map(()=>"?").join(",")})`
+    ).bind(guildId,...chunk).all<{user_id:string;buyer_count:number;seller_count:number}>()).results;
+    for(const r of rows) out.set(r.user_id,{buyer:r.buyer_count,seller:r.seller_count});
+  }
+  return out;
 }
 
 export async function getStats(env:Env,guildId:string,userId:string):Promise<{buyer:number;seller:number}>{

@@ -489,6 +489,66 @@ export default function MediationManager({
             />
           </div>
         </details>
+        <div className="mediation-paypay">
+          <h3>実績確認パネル</h3>
+          <p className="muted">
+            メンバーの買い手実績・売り手実績を、押した本人にだけ表示するパネルです。
+            「メンバー一覧から選ぶ」で全メンバーを名前順に25人ずつ表示し、「名前で検索」で名前の一部から探せます。
+            {draft.checkPanelMessageId ? ` 現在のパネル: ${channelName(draft.checkPanelChannelId)}` : " まだ設置していません。"}
+          </p>
+          <div className="form-grid two">
+            <label className="field">
+              <span>パネルを設置するチャンネル</span>
+              <select value={checkChannel || draft.checkPanelChannelId || ""} onChange={(e) => setCheckChannel(e.target.value)}>
+                <option value="">選択してください</option>
+                {postable.map((c) => (
+                  <option key={c.id} value={c.id}>#{c.name}</option>
+                ))}
+              </select>
+            </label>
+            <div className="field">
+              <span>設置</span>
+              <div className="button-row">
+                <button
+                  className="primary"
+                  disabled={busy || !(checkChannel || draft.checkPanelChannelId)}
+                  onClick={() =>
+                    void run(async () => {
+                      const result = await api<{ settings: MediationSettings; warning?: string | null }>(
+                        `/api/guilds/${guildId}/mediation/check-panel`,
+                        { method: "POST", body: JSON.stringify({ channelId: checkChannel || draft.checkPanelChannelId, lock: checkLock }) }
+                      );
+                      setOverview((current) => (current ? { ...current, settings: result.settings } : current));
+                      setDraft(result.settings);
+                      onNotice(result.warning ?? "実績確認パネルを設置しました");
+                    })
+                  }
+                >
+                  パネルを設置
+                </button>
+                <button
+                  className="secondary"
+                  disabled={busy || !draft.checkPanelMessageId}
+                  onClick={() =>
+                    void run(async () => {
+                      await api(`/api/guilds/${guildId}/mediation/check-panel/update`, { method: "POST" });
+                      onNotice("設置済みの実績確認パネルを更新しました");
+                    })
+                  }
+                >
+                  設置済みパネルを更新
+                </button>
+              </div>
+            </div>
+          </div>
+          <Check
+            checked={checkLock}
+            onChange={setCheckLock}
+            title="設置するチャンネルを発言禁止にする（おすすめ）"
+            description="@everyone のメッセージ送信・スレッド作成・リアクションを禁止します。パネルのボタンは発言禁止でも使えます"
+          />
+        </div>
+
       </div>
 
       {/* ② 実績 */}
@@ -549,66 +609,6 @@ export default function MediationManager({
           >
             チャンネル名を今の件数に更新
           </button>
-        </div>
-
-        <div className="mediation-paypay">
-          <h3>実績確認パネル</h3>
-          <p className="muted">
-            メンバーを選ぶと、その人の買い手実績・売り手実績を本人にだけ表示するパネルです。
-            メニューを開くとメンバーの一覧が出て、名前で検索できます。
-            {draft.checkPanelMessageId ? ` 現在のパネル: ${channelName(draft.checkPanelChannelId)}` : " まだ設置していません。"}
-          </p>
-          <div className="form-grid two">
-            <label className="field">
-              <span>パネルを設置するチャンネル</span>
-              <select value={checkChannel || draft.checkPanelChannelId || ""} onChange={(e) => setCheckChannel(e.target.value)}>
-                <option value="">選択してください</option>
-                {postable.map((c) => (
-                  <option key={c.id} value={c.id}>#{c.name}</option>
-                ))}
-              </select>
-            </label>
-            <div className="field">
-              <span>設置</span>
-              <div className="button-row">
-                <button
-                  className="primary"
-                  disabled={busy || !(checkChannel || draft.checkPanelChannelId)}
-                  onClick={() =>
-                    void run(async () => {
-                      const result = await api<{ settings: MediationSettings; warning?: string | null }>(
-                        `/api/guilds/${guildId}/mediation/check-panel`,
-                        { method: "POST", body: JSON.stringify({ channelId: checkChannel || draft.checkPanelChannelId, lock: checkLock }) }
-                      );
-                      setOverview((current) => (current ? { ...current, settings: result.settings } : current));
-                      setDraft(result.settings);
-                      onNotice(result.warning ?? "実績確認パネルを設置しました");
-                    })
-                  }
-                >
-                  パネルを設置
-                </button>
-                <button
-                  className="secondary"
-                  disabled={busy || !draft.checkPanelMessageId}
-                  onClick={() =>
-                    void run(async () => {
-                      await api(`/api/guilds/${guildId}/mediation/check-panel/update`, { method: "POST" });
-                      onNotice("設置済みの実績確認パネルを更新しました");
-                    })
-                  }
-                >
-                  設置済みパネルを更新
-                </button>
-              </div>
-            </div>
-          </div>
-          <Check
-            checked={checkLock}
-            onChange={setCheckLock}
-            title="設置するチャンネルを発言禁止にする（おすすめ）"
-            description="@everyone のメッセージ送信・スレッド作成・リアクションを禁止します。メニューは発言禁止でも使えます"
-          />
         </div>
 
         <label className="field">

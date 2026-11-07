@@ -30,7 +30,7 @@ import {
 import {
   AMOUNT, CANCELLED, CLOSED, COMPLETE_PENDING, CONFIRMING, DISPUTE, FEE, FEE_RECEIVING, PAID, PAYMENT, PAYOUT, ROLE, TRADING,
   activeTradeBetween, addRecord, completedCount, countOpenTrades, createTrade, ensureMediationSchema, getMediationSettings, getStats, getTrade,
-  guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
+  getStatsMany, guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
   normalizeMediationSettings, saveMediationSettings, setResultRenameState, tradeByChannel, transition, updateTrade,
   type MediationSettings, type Trade
 } from "./mediation-db";
@@ -1066,35 +1066,121 @@ async function editStaffMessage(env:Env,channelId:string,message:any,note:string
   }catch(error){ console.error("mediation staff message edit failed",error); }
 }
 
-// ---- /check -------------------------------------------------------------------
 // ---- 実績確認パネル ----------------------------------------------------------------
 /** パネルを見分けるための印（embed のフッター） */
 const CHECK_PANEL_MARK="dsm-check-panel";
+/** パネルの形が変わったら上げる。古い形のパネルは定期処理で書き換える */
+export const CHECK_PANEL_VERSION=2;
+const CHECK_PAGE_SIZE=25;
+const CHECK_LIST_LIMIT=5000;
 
 export function checkPanelPayload(){
   return {
     embeds:[embed("🔎 取引実績の確認",
-      "下のメニューからメンバーを選ぶと、その人の **買い手実績・売り手実績** を確認できます。\n"+
-      "メニューを開くとメンバーの一覧が出ます。名前を入力すると検索できます。\n\n"+
+      "メンバーの **買い手実績・売り手実績** を確認できます。\n\n"+
+      "・**メンバー一覧から選ぶ**：サーバーの全メンバーを名前順に表示します（25人ずつページ送り）\n"+
+      "・**名前で検索**：名前の一部を入力して探します\n\n"+
       "結果はあなたにだけ表示されます。",
       COLOR.teal,{footer:{text:CHECK_PANEL_MARK}})],
-    components:[row({type:5,custom_id:"md:checkuser",placeholder:"実績を確認するメンバーを選ぶ（名前で検索できます）",min_values:1,max_values:1})],
+    components:[row(
+      {...button("md:ckopen","メンバー一覧から選ぶ",1),emoji:{name:"📋"}},
+      {...button("md:cksearch","名前で検索",2),emoji:{name:"🔎"}}
+    )],
     allowed_mentions:{parse:[]}
   };
 }
 
-/** パネルのユーザー選択メニューで選ばれたメンバーの実績を、本人にだけ表示する */
-async function onCheckUser(env:Env,c:Ctx){
-  const userId=String(c.interaction.data?.values?.[0]??"");
+type GuildMemberLite={user?:{id:string;username?:string;global_name?:string|null;avatar?:string|null;bot?:boolean};nick?:string|null};
+
+function displayNameOf(m:GuildMemberLite){
+  return m.nick||m.user?.global_name||m.user?.username||m.user?.id||"";
+}
+
+/** サーバーの全メンバー（BOT を除き、名前順）。1回1000人ずつ、最大 CHECK_LIST_LIMIT 人 */
+async function allGuildMembers(env:Env,guildId:string):Promise<GuildMemberLite[]>{
+  const out:GuildMemberLite[]=[];
+  let after="0";
+  while(out.length<CHECK_LIST_LIMIT){
+    const batch=await botJson<GuildMemberLite[]>(env,`/guilds/${guildId}/members?limit=1000&after=${after}`);
+    out.push(...batch);
+    if(batch.length<1000) break;
+    after=batch[batch.length-1]!.user!.id;
+  }
+  return out
+    .filter(m=>m.user&&!m.user.bot)
+    .sort((a,b)=>displayNameOf(a).localeCompare(displayNameOf(b),"ja"));
+}
+
+async function memberOptions(env:Env,guildId:string,members:GuildMemberLite[]){
+  const stats=await getStatsMany(env,guildId,members.map(m=>m.user!.id));
+  return members.map(m=>{
+    const st=stats.get(m.user!.id);
+    const handle=m.user?.username?`@${m.user.username}`:"";
+    return {
+      label:displayNameOf(m).slice(0,100)||m.user!.id,
+      value:m.user!.id,
+      description:`${handle}${handle?"・":""}買い手${st?.buyer??0}件 / 売り手${st?.seller??0}件`.slice(0,100)
+    };
+  });
+}
+
+/** 一覧の1ページ（ページ送りのたびに、このメッセージ自体を書き換える） */
+async function checkListPage(env:Env,c:Ctx,page:number){
+  let members:GuildMemberLite[];
+  try{ members=await allGuildMembers(env,c.guildId); }
+  catch(error){
+    console.error("member list failed",error);
+    return reply("メンバー一覧を取得できませんでした。BOTの「Server Members Intent」がONになっているか確認してください。",{components:[]});
+  }
+  if(!members.length) return reply("表示できるメンバーがいません。",{components:[]});
+  const pages=Math.ceil(members.length/CHECK_PAGE_SIZE);
+  const p=Math.min(Math.max(0,page),pages-1);
+  const slice=members.slice(p*CHECK_PAGE_SIZE,(p+1)*CHECK_PAGE_SIZE);
+  const first=displayNameOf(slice[0]!),last=displayNameOf(slice[slice.length-1]!);
+  return reply(
+    `**メンバー一覧**（${p+1} / ${pages} ページ・全${members.length}人${members.length>=CHECK_LIST_LIMIT?"以上。見つからない人は「名前で検索」から":""}）\n`+
+    `このページ: ${first.slice(0,30)} 〜 ${last.slice(0,30)}\nメニューからメンバーを選ぶと実績が表示されます。`,
+    {allowed_mentions:{parse:[]},components:[
+      row({type:3,custom_id:"md:ckpick",placeholder:`メンバーを選ぶ（${p*CHECK_PAGE_SIZE+1}〜${p*CHECK_PAGE_SIZE+slice.length}人目）`,options:await memberOptions(env,c.guildId,slice)}),
+      row(
+        {...button(`md:ckpage:${p-1}`,"◀ 前へ",2),disabled:p===0},
+        {...button(`md:ckpage:${p+1}`,"次へ ▶",2),disabled:p>=pages-1},
+        {...button("md:cksearch","名前で検索",2),emoji:{name:"🔎"}}
+      )
+    ]}
+  );
+}
+
+function checkSearchModal(){
+  return modal("md:cksearchm","名前で検索",[
+    textInput("query","名前の一部（表示名・ユーザー名・@メンション・ID）",{max_length:100,placeholder:"例: ぼぶ / bob / @bob"})
+  ]);
+}
+
+async function checkSearch(env:Env,c:Ctx,input:string){
+  const query=input.trim().replace(/^@/,"");
+  if(!query) return reply("名前を入力してください。");
+  const id=query.match(/^<@!?(\d+)>$/)?.[1]??(/^\d{15,22}$/.test(query)?query:null);
+  if(id) return checkResult(env,c,id);
+  let found=await botJson<GuildMemberLite[]>(env,`/guilds/${c.guildId}/members/search?query=${encodeURIComponent(query.slice(0,100))}&limit=25`).catch(()=>[] as GuildMemberLite[]);
+  found=found.filter(m=>m.user&&!m.user.bot);
+  if(!found.length) return reply(`「${query.slice(0,50)}」に当てはまるメンバーが見つかりませんでした。名前の最初の文字から入力するか、「メンバー一覧から選ぶ」を使ってください。`);
+  if(found.length===1) return checkResult(env,c,found[0]!.user!.id,found[0]);
+  return reply(`「${query.slice(0,50)}」に当てはまるメンバーが${found.length}人います。選んでください。`,{allowed_mentions:{parse:[]},components:[
+    row({type:3,custom_id:"md:ckpick",placeholder:"メンバーを選ぶ",options:await memberOptions(env,c.guildId,found)})
+  ]});
+}
+
+/** 選ばれたメンバーの実績を、本人にだけ表示する */
+async function checkResult(env:Env,c:Ctx,userId:string,known?:GuildMemberLite|null){
   if(!/^\d+$/.test(userId)) return reply("メンバーを選んでください。");
-  const resolved=c.interaction.data?.resolved??{};
-  const user=resolved.users?.[userId];
-  const member=resolved.members?.[userId];
+  const m=known??await botJson<GuildMemberLite>(env,`/guilds/${c.guildId}/members/${userId}`).catch(()=>null);
+  const user=m?.user;
   const stats=await getStats(env,c.guildId,userId);
-  const display=member?.nick||user?.global_name||user?.username||userId;
+  const display=m?displayNameOf(m):userId;
   const name=user?.username&&user.username!==display?`${display} (@${user.username})`:display;
   const avatar=user?.avatar?`https://cdn.discordapp.com/avatars/${userId}/${user.avatar}.png?size=128`:undefined;
-  return ires({type:4,data:{flags:64,allowed_mentions:{parse:[]},embeds:[embed(`${name} さんの取引実績`,`<@${userId}>`+(user?.bot?"（BOT）":""),COLOR.teal,{
+  return ires({type:4,data:{flags:64,allowed_mentions:{parse:[]},embeds:[embed(`${name} さんの取引実績`,m?`<@${userId}>`:"（サーバーにいないメンバーです）",COLOR.teal,{
     ...(avatar?{thumbnail:{url:avatar}}:{}),
     fields:[{name:"買い手実績",value:`${stats.buyer} 件`,inline:true},{name:"売り手実績",value:`${stats.seller} 件`,inline:true}],
     footer:{text:"正常に完了した取引の件数です"}
@@ -1147,7 +1233,7 @@ export function mediationShouldDefer(interaction:any):boolean{
   if(interaction.type===2) return false;
   if(interaction.type===5) return true;
   const id=String(interaction.data?.custom_id??"");
-  if(id==="md:start"||id==="md:checkuser"||id==="md:checkopen"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
+  if(id==="md:start"||id==="md:cksearch"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
   // 確認を出すだけ・取り消すだけの操作も即答する
   if(id.startsWith("md:complete:")||id.startsWith("md:agree:")||id.startsWith("md:opcancel:")) return false;
   if(id.startsWith("md:staff:payseller:")||id.startsWith("md:staff:refund:")) return false;
@@ -1158,7 +1244,7 @@ export function mediationShouldDefer(interaction:any):boolean{
 /** 確認メッセージのボタンから実行する操作は、確認メッセージそのものを結果に書き換える（type 6） */
 export function mediationDefersAsUpdate(interaction:any):boolean{
   const id=String(interaction?.data?.custom_id??"");
-  return interaction?.type===3&&(id.startsWith("md:payok:")||id.startsWith("md:completeok:"));
+  return interaction?.type===3&&(id.startsWith("md:payok:")||id.startsWith("md:completeok:")||id.startsWith("md:ckpage:"));
 }
 
 function errorText(error:unknown){
@@ -1184,11 +1270,12 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
 
   if(interaction.type===3){
     if(id==="md:start") return onStart(env,c);
-    if(id==="md:checkuser") return onCheckUser(env,c);
-    // 以前のパネル（ボタン式）の名残り。自動の切り替えが済むまでは、その場でメンバー選択メニューを出す
-    if(id==="md:checkopen"){
-      return reply("確認したいメンバーを選んでください（名前で検索できます）。",{components:checkPanelPayload().components});
-    }
+    // 実績確認パネル（以前の形のパネルのボタン・メニューも、同じ一覧を出す）
+    if(id==="md:ckopen"||id==="md:checkopen") return checkListPage(env,c,0);
+    if(id.startsWith("md:ckpage:")) return checkListPage(env,c,Number(parts[2]));
+    if(id==="md:ckpick") return checkResult(env,c,String(c.interaction.data?.values?.[0]??""));
+    if(id==="md:checkuser") return checkResult(env,c,String(c.interaction.data?.values?.[0]??""));
+    if(id==="md:cksearch") return checkSearchModal();
     if(id==="md:partner") return onPartner(env,c);
     if(!tid) return reply("未対応の操作です。");
     switch(parts[1]){
@@ -1209,8 +1296,8 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
       case "staff": return onStaff(env,c,parts[2]!,tid);
     }
   }
-  if(interaction.type===5&&id==="md:checkm"){
-    return reply("実績確認パネルが新しくなりました。パネルのメニューからメンバーを選んでください。",{components:checkPanelPayload().components});
+  if(interaction.type===5&&(id==="md:cksearchm"||id==="md:checkm")){
+    return checkSearch(env,c,modalValue(interaction,id==="md:checkm"?"member":"query"));
   }
   if(interaction.type===5&&tid){
     switch(parts[1]){
@@ -1309,12 +1396,34 @@ async function migrateLegacyCheckChannels(env:Env){
         await lockCheckChannel(env,row.guild_id,channelId).catch(error=>console.error("legacy check channel lock failed",channelId,error));
         settings.checkPanelChannelId=channelId;
         settings.checkPanelMessageId=messageId;
+        settings.checkPanelVersion=CHECK_PANEL_VERSION;
       }
       // 保存し直すと、正規化で古い checkChannelIds が消える
       await saveMediationSettings(env,row.guild_id,settings);
     }catch(error){
       console.error("legacy check channel migration failed",row.guild_id,error);
     }
+  }
+}
+
+/** 古い形の実績確認パネルを、今の形に書き換える（1回だけ） */
+async function upgradeCheckPanels(env:Env){
+  const rows=(await env.DB.prepare("SELECT guild_id FROM mediation_settings WHERE settings_json LIKE '%\"checkPanelMessageId\":\"%' LIMIT 50")
+    .all<{guild_id:string}>()).results;
+  for(const row of rows){
+    const settings=await getMediationSettings(env,row.guild_id);
+    if(!settings.checkPanelChannelId||!settings.checkPanelMessageId||settings.checkPanelVersion>=CHECK_PANEL_VERSION) continue;
+    try{
+      await botJson(env,`/channels/${settings.checkPanelChannelId}/messages/${settings.checkPanelMessageId}`,{
+        method:"PATCH",body:JSON.stringify(checkPanelPayload())
+      });
+    }catch(error){
+      // パネルが消されていたら、記録だけ外す（管理画面から設置し直せる）
+      if(error instanceof DiscordApiError&&error.status===404){ settings.checkPanelMessageId=null; }
+      else{ console.error("check panel upgrade failed",row.guild_id,error); continue; }
+    }
+    settings.checkPanelVersion=CHECK_PANEL_VERSION;
+    await saveMediationSettings(env,row.guild_id,settings);
   }
 }
 
@@ -1332,6 +1441,7 @@ export async function mediationSweep(env:Env){
 
   // 0. 以前の /check 用チャンネル設定を、実績確認パネルに移す（1回だけ）
   await migrateLegacyCheckChannels(env).catch(error=>console.error("legacy check migration failed",error));
+  await upgradeCheckPanels(env).catch(error=>console.error("check panel upgrade failed",error));
 
   // 1b. PayPay処理の途中でWorkerが止まった取引を、スタッフに一度だけ知らせる
   for(const t of await listStuckTrades(env,now-15*60_000)){
@@ -1453,6 +1563,7 @@ export async function handleMediationApi(
     next.panelMessageId=current.panelMessageId;
     next.checkPanelChannelId=current.checkPanelChannelId;
     next.checkPanelMessageId=current.checkPanelMessageId;
+    next.checkPanelVersion=current.checkPanelVersion;
     await saveMediationSettings(env,guildId,next);
     return json(env,{settings:next});
   }
@@ -1504,6 +1615,7 @@ export async function handleMediationApi(
     const settings=await getMediationSettings(env,guildId);
     settings.checkPanelChannelId=channelId;
     settings.checkPanelMessageId=message.id;
+    settings.checkPanelVersion=CHECK_PANEL_VERSION;
     await saveMediationSettings(env,guildId,settings);
     return json(env,{ok:true,settings,messageUrl:`https://discord.com/channels/${guildId}/${channelId}/${message.id}`,warning:lockWarning});
   }
@@ -1520,6 +1632,10 @@ export async function handleMediationApi(
         throw new MediationHttpError(404,"設置済みの実績確認パネルが見つかりません。もう一度設置してください");
       }
       throw error;
+    }
+    if(settings.checkPanelVersion!==CHECK_PANEL_VERSION){
+      settings.checkPanelVersion=CHECK_PANEL_VERSION;
+      await saveMediationSettings(env,guildId,settings);
     }
     return json(env,{ok:true});
   }
