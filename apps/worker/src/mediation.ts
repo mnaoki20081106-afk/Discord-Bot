@@ -30,7 +30,7 @@ import {
 import {
   AMOUNT, CANCELLED, CLOSED, COMPLETE_PENDING, CONFIRMING, DISPUTE, FEE, FEE_RECEIVING, PAID, PAYMENT, PAYOUT, ROLE, TRADING,
   activeTradeBetween, addRecord, completedCount, countOpenTrades, createTrade, ensureMediationSchema, getMediationSettings, getStats, getTrade,
-  getStatsMany, topTraders, guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
+  getStatsMany, topTraders, listCheckChannelGuilds, guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
   normalizeMediationSettings, saveMediationSettings, setResultRenameState, tradeByChannel, transition, updateTrade,
   type MediationSettings, type Trade
 } from "./mediation-db";
@@ -1133,7 +1133,18 @@ async function onCheck(env:Env,c:Ctx){
     return reply(`実績確認（/check）は ${c.settings.checkChannelIds.map(id=>`<#${id}>`).join(" / ")} で使ってください。`);
   }
   const option=(c.interaction.data?.options??[]).find((o:any)=>o.name==="member");
-  const raw=String(option?.value??"").trim().replace(/^@/,"");
+  return checkResult(env,c,String(option?.value??""));
+}
+
+/** パネルの「実績を確認する」ボタン：名前を入力する欄を出す */
+function onCheckPanelButton(){
+  return modal("md:checkm","取引実績の確認",[
+    textInput("member","確認したいメンバー（名前の一部・@メンション・ID）",{placeholder:"例: ぼぶ / @bob / 123456789012345678",max_length:100})
+  ]);
+}
+
+async function checkResult(env:Env,c:Ctx,input:string){
+  const raw=input.trim().replace(/^@/,"");
   if(!raw) return reply("メンバーを指定してください。");
   // 候補から選べば ID が入る。候補を選ばずに名前を打って送信した場合は、名前で探す
   let userId=raw.match(/^<@!?(\d+)>$/)?.[1]??(/^\d{15,22}$/.test(raw)?raw:null);
@@ -1183,7 +1194,7 @@ export function mediationShouldDefer(interaction:any):boolean{
   if(interaction.type===2||interaction.type===4) return false;
   if(interaction.type===5) return true;
   const id=String(interaction.data?.custom_id??"");
-  if(id==="md:start"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
+  if(id==="md:start"||id==="md:checkopen"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
   // 確認を出すだけ・取り消すだけの操作も即答する
   if(id.startsWith("md:complete:")||id.startsWith("md:agree:")||id.startsWith("md:opcancel:")) return false;
   if(id.startsWith("md:staff:payseller:")||id.startsWith("md:staff:refund:")) return false;
@@ -1225,6 +1236,7 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
 
   if(interaction.type===3){
     if(id==="md:start") return onStart(env,c);
+    if(id==="md:checkopen") return checkAllowedHere(c)?onCheckPanelButton():reply("このチャンネルでは使えません。");
     if(id==="md:partner") return onPartner(env,c);
     if(!tid) return reply("未対応の操作です。");
     switch(parts[1]){
@@ -1244,6 +1256,10 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
       case "pickup": return onPickup(env,c,tid);
       case "staff": return onStaff(env,c,parts[2]!,tid);
     }
+  }
+  if(interaction.type===5&&id==="md:checkm"){
+    if(!checkAllowedHere(c)) return reply("このチャンネルでは使えません。");
+    return checkResult(env,c,modalValue(interaction,"member"));
   }
   if(interaction.type===5&&tid){
     switch(parts[1]){
@@ -1315,6 +1331,66 @@ async function saveTranscript(env:Env,settings:MediationSettings,t:Trade){
   if(!res.ok) throw new Error("transcript upload failed: "+res.status+" "+(await res.text().catch(()=>"")).slice(0,200));
 }
 
+// ---- /check 用チャンネルの掃除 ----------------------------------------------------
+/** パネルを見分けるための印（embed のフッター） */
+const CHECK_PANEL_MARK="dsm-check-panel";
+
+function checkPanelPayload(){
+  return {
+    embeds:[embed("🔎 取引実績の確認",
+      "このチャンネルでは、**`/check` で相手の取引実績を確認できます。**\n"+
+      "名前の一部を入力すると、サーバーの全メンバーから候補が出ます。\n"+
+      "下の「実績を確認する」ボタンからも確認できます。\n\n"+
+      "※ このチャンネルへの発言は自動で削除されます。結果は本人にだけ表示されます。",
+      COLOR.teal,{footer:{text:CHECK_PANEL_MARK}})],
+    components:[row({...button("md:checkopen","実績を確認する",1),emoji:{name:"🔎"}})],
+    allowed_mentions:{parse:[]}
+  };
+}
+
+/**
+ * /check 用チャンネルは、コマンドは使えて発言はできない状態にしたいが、Discord の権限では分けられない
+ * （「メッセージを送信」を禁止すると入力欄ごと使えなくなる）。そこで1分ごとに確認し、
+ * BOT のパネル以外のメッセージをすべて削除して、パネルがなければ設置する。
+ */
+async function cleanCheckChannel(env:Env,channelId:string){
+  const botId=env.DISCORD_APPLICATION_ID.trim();
+  let messages:any[];
+  try{
+    messages=await botJson<any[]>(env,`/channels/${channelId}/messages?limit=100`);
+  }catch(error){
+    console.error("check channel read failed",channelId,error);
+    return;
+  }
+  const isPanel=(m:any)=>m?.author?.id===botId&&m?.embeds?.[0]?.footer?.text===CHECK_PANEL_MARK;
+  // 新しい順に並んでいるので、最初に見つかったパネルを残す
+  const keep=messages.find(isPanel);
+  const remove=messages.filter(m=>m.id!==keep?.id);
+  if(remove.length){
+    const twoWeeksAgo=Date.now()-13.5*86_400_000;
+    const recent=remove.filter(m=>snowflakeTime(m.id)>twoWeeksAgo).map(m=>m.id);
+    const old=remove.filter(m=>snowflakeTime(m.id)<=twoWeeksAgo).map(m=>m.id);
+    try{
+      if(recent.length>=2){
+        await botJson(env,`/channels/${channelId}/messages/bulk-delete`,{
+          method:"POST",
+          headers:{"X-Audit-Log-Reason":"Mediation: /check channel is command-only"},
+          body:JSON.stringify({messages:recent.slice(0,100)})
+        });
+      }else if(recent.length===1){
+        await botFetch(env,`/channels/${channelId}/messages/${recent[0]}`,{method:"DELETE"});
+      }
+      // 2週間より古いメッセージはまとめて消せないので、1件ずつ（1回に最大10件）
+      for(const id of old.slice(0,10)) await botFetch(env,`/channels/${channelId}/messages/${id}`,{method:"DELETE"});
+    }catch(error){
+      console.error("check channel cleanup failed",channelId,error);
+    }
+  }
+  if(!keep){
+    await trySend(env,channelId,checkPanelPayload());
+  }
+}
+
 export async function mediationSweep(env:Env){
   await ensureMediationSchema(env);
   const now=Date.now();
@@ -1326,6 +1402,13 @@ export async function mediationSweep(env:Env){
 
   // 完了申請への自動同意は廃止した（売り手が申請して放置すると、商品を渡さずに代金を受け取れてしまうため）。
   // 取引完了は買い手だけが実行し、買い手が完了しないときは売り手が /report で通報する。
+
+  // 0. /check 用チャンネルから発言を消し、パネルを置いておく
+  for(const g of await listCheckChannelGuilds(env)){
+    for(const channelId of g.settings.checkChannelIds){
+      await cleanCheckChannel(env,channelId).catch(error=>console.error("check channel sweep failed",channelId,error));
+    }
+  }
 
   // 1b. PayPay処理の途中でWorkerが止まった取引を、スタッフに一度だけ知らせる
   for(const t of await listStuckTrades(env,now-15*60_000)){

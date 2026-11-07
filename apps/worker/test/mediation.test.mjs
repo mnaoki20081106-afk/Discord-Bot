@@ -30,6 +30,8 @@ async function runtime(t) {
   const created = [];
   let tokenCalls = 0;
   let messageSeq = 1000;
+  // Messages per channel, newest first (as Discord returns them)
+  const channelMessages = new Map();
   const mf = new Miniflare({
     modules: true,
     scriptPath: '.test-worker/index.js',
@@ -105,7 +107,21 @@ async function runtime(t) {
       if (method === 'POST' && /^\/channels\/\d+\/messages$/.test(p)) return Response.json({id: String(++messageSeq)});
       if (method === 'PATCH' && /^\/channels\/\d+\/messages\/\d+$/.test(p)) return Response.json({id: 'x'});
       if (method === 'PUT' && /^\/channels\/\d+\/permissions\/\d+$/.test(p)) return new Response(null, {status: 204});
-      if (method === 'GET' && /^\/channels\/\d+\/messages$/.test(p)) return Response.json([]);
+      if (method === 'GET' && /^\/channels\/\d+\/messages$/.test(p)) {
+        const ch = p.split('/')[2];
+        return Response.json(channelMessages.get(ch) ?? []);
+      }
+      const bulk = p.match(/^\/channels\/(\d+)\/messages\/bulk-delete$/);
+      if (method === 'POST' && bulk) {
+        const list = channelMessages.get(bulk[1]) ?? [];
+        channelMessages.set(bulk[1], list.filter(m => !body.messages.includes(m.id)));
+        return new Response(null, {status: 204});
+      }
+      const single = p.match(/^\/channels\/(\d+)\/messages\/(\d+)$/);
+      if (method === 'DELETE' && single) {
+        channelMessages.set(single[1], (channelMessages.get(single[1]) ?? []).filter(m => m.id !== single[2]));
+        return new Response(null, {status: 204});
+      }
       if (method === 'DELETE' && /^\/channels\/\d+$/.test(p)) return Response.json({id: p.split('/')[2]});
       if (method === 'PATCH' && /^\/channels\/\d+$/.test(p)) return Response.json({id: p.split('/')[2]});
       if (method === 'PUT' && p === `/applications/${botId}/commands`) return Response.json([]);
@@ -114,7 +130,7 @@ async function runtime(t) {
     }
   });
   t.after(() => mf.dispose());
-  return {mf, calls, links, accepted, created, privateKey, db: await mf.getD1Database('DB')};
+  return {mf, calls, links, accepted, created, privateKey, channelMessages, db: await mf.getD1Database('DB')};
 }
 
 async function request(mf, path, token, method = 'GET', body) {
@@ -563,4 +579,47 @@ test('commands only run where they belong: trade commands in trade channels, /ch
   assert.ok(here.data.embeds?.[0], 'works in the configured channel');
   const staffAnywhere = await slash(staffUser, panelChannel, 'check', memberOpt, [staffRole]);
   assert.ok(staffAnywhere.data.embeds?.[0], 'staff can use it anywhere');
+});
+
+test('the /check channel keeps only the panel: other messages are deleted every minute', async t => {
+  const env = await setup(t);
+  await request(env.mf, `/api/guilds/${guildId}/mediation/settings`, env.token, 'PUT', {checkChannelIds: [logChannel]});
+  // Discord message IDs encode their time; these two are "now", one is from 2020.
+  const nowId = n => String(((BigInt(Date.now()) - 1420070400000n) << 22n) + BigInt(n));
+  const oldId = '700000000000000001';
+  const [m1, m2, m4, m5] = [nowId(1), nowId(2), nowId(4), nowId(5)];
+  env.channelMessages.set(logChannel, [
+    {id: m2, author: {id: userA}, content: 'hello'},
+    {id: m1, author: {id: userB}, content: 'yo'},
+    {id: oldId, author: {id: userA}, content: 'ancient'}
+  ]);
+  const worker = await env.mf.getWorker();
+  const sweep = async () => { assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok'); await new Promise(r => setTimeout(r, 300)); };
+  await sweep();
+
+  const bulk = env.calls.find(c => c.method === 'POST' && c.path === `/api/v10/channels/${logChannel}/messages/bulk-delete`);
+  assert.deepEqual(bulk.body.messages.sort(), [m1, m2].sort());
+  assert.ok(env.calls.some(c => c.method === 'DELETE' && c.path === `/api/v10/channels/${logChannel}/messages/${oldId}`), 'messages older than 2 weeks are deleted one by one');
+  const panels = () => env.calls.filter(c => c.method === 'POST' && c.path === `/api/v10/channels/${logChannel}/messages` && c.body?.embeds?.[0]?.footer?.text === 'dsm-check-panel');
+  assert.equal(panels().length, 1);
+  assert.match(panels()[0].body.embeds[0].description, /\/check` で相手の取引実績を確認できます/);
+  assert.equal(panels()[0].body.components[0].components[0].custom_id, 'md:checkopen');
+
+  // Next minute: the panel is there, one new message arrives -> only that message goes, no second panel.
+  env.channelMessages.set(logChannel, [
+    {id: m5, author: {id: userB}, content: 'spam'},
+    {id: m4, author: {id: botId}, embeds: [{footer: {text: 'dsm-check-panel'}}]}
+  ]);
+  await sweep();
+  assert.ok(env.calls.some(c => c.method === 'DELETE' && c.path === `/api/v10/channels/${logChannel}/messages/${m5}`));
+  assert.ok(!env.calls.some(c => c.method === 'DELETE' && c.path === `/api/v10/channels/${logChannel}/messages/${m4}`), 'the panel stays');
+  assert.equal(panels().length, 1, 'no duplicate panel');
+
+  // The panel button opens a name box and shows the result.
+  const open = await interact(env, {type: 3, channel_id: logChannel, member: member(userA), data: {custom_id: 'md:checkopen', component_type: 2}});
+  assert.equal(open.type, 9);
+  const result = await interact(env, {type: 5, channel_id: logChannel, member: member(userA), data: {custom_id: 'md:checkm', components: [{type: 1, components: [{type: 4, custom_id: 'member', value: 'bob'}]}]}});
+  assert.match(result.data.embeds[0].title, /ボブ/);
+  const elsewhere = await interact(env, {type: 3, channel_id: panelChannel, member: member(userA), data: {custom_id: 'md:checkopen', component_type: 2}});
+  assert.match(elsewhere.content, /使えません/);
 });

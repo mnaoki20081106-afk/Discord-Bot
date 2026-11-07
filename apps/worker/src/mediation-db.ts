@@ -210,6 +210,20 @@ export async function markResultDirty(env:Env,guildId:string){
   await env.DB.prepare("UPDATE mediation_settings SET result_dirty=1 WHERE guild_id=?").bind(guildId).run();
 }
 
+/** /check 用チャンネルを設定しているサーバー */
+export async function listCheckChannelGuilds(env:Env):Promise<Array<{guildId:string;settings:MediationSettings}>>{
+  const rows=(await env.DB.prepare("SELECT guild_id,settings_json FROM mediation_settings WHERE settings_json LIKE '%\"checkChannelIds\":[\"%' LIMIT 50")
+    .all<{guild_id:string;settings_json:string}>()).results;
+  const out:Array<{guildId:string;settings:MediationSettings}>=[];
+  for(const r of rows){
+    try{
+      const settings=normalizeMediationSettings(JSON.parse(r.settings_json));
+      if(settings.checkChannelIds.length) out.push({guildId:r.guild_id,settings});
+    }catch{ /* 壊れた設定は飛ばす */ }
+  }
+  return out;
+}
+
 export async function listDirtyResultGuilds(env:Env){
   return (await env.DB.prepare("SELECT guild_id,settings_json,result_renamed_at,result_renamed_name FROM mediation_settings WHERE result_dirty=1 ORDER BY result_renamed_at ASC LIMIT 10")
     .all<{guild_id:string;settings_json:string;result_renamed_at:number;result_renamed_name:string|null}>()).results;
