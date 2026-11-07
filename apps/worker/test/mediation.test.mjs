@@ -360,7 +360,7 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
   assert.ok(cur.delete_at > Date.now());
 
   // The records panel: picking a member in the select menu shows their record to the picker only.
-  const picked = await interact(env, {type: 3, channel_id: panelChannel, member: member(userA), data: {custom_id: 'md:ckpick', component_type: 3, values: [userB]}});
+  const picked = await interact(env, {type: 3, channel_id: panelChannel, member: member(userA), data: {custom_id: 'md:checkuser', component_type: 5, values: [userB]}});
   assert.equal(picked.type, 'deferred', 'answered privately (ephemeral deferral)');
   assert.match(picked.data.embeds[0].title, /ボブ \(@bob\) さんの取引実績/);
   assert.equal(picked.data.embeds[0].fields[0].value, '0 件');
@@ -576,8 +576,10 @@ test('records panel: set up in a channel that becomes read-only, and kept when s
   assert.equal(set.body.warning ?? null, null);
   const panel = env.calls.find(c => c.method === 'POST' && c.path === `/api/v10/channels/${logChannel}/messages`);
   assert.equal(panel.body.embeds[0].footer.text, 'dsm-check-panel');
-  assert.deepEqual(panel.body.components[0].components.map(b => b.custom_id), ['md:ckopen', 'md:cksearch']);
-  assert.equal(set.body.settings.checkPanelVersion, 2);
+  const select = panel.body.components[0].components[0];
+  assert.equal(select.type, 5, "Discord's own member picker (same UI as a slash command's member option)");
+  assert.equal(select.custom_id, 'md:checkuser');
+  assert.equal(set.body.settings.checkPanelVersion, 3);
 
   const everyone = env.calls.find(c => c.method === 'PUT' && c.path === `/api/v10/channels/${logChannel}/permissions/${guildId}`);
   assert.equal(BigInt(everyone.body.deny) & everyoneDeny, everyoneDeny, '@everyone cannot post');
@@ -612,12 +614,13 @@ test('a server set up with the old /check channel is moved to the records panel 
 
   // Until the migration runs, the old button still works by offering the member menu.
   const oldButton = await interact(env, {type: 3, channel_id: logChannel, member: member(userA), data: {custom_id: 'md:checkopen', component_type: 2}});
-  assert.equal(oldButton.data.components[0].components[0].custom_id, 'md:ckpick', 'the old button opens the member list');
+  assert.equal(oldButton.type, 4, 'answered immediately');
+  assert.equal(oldButton.data.components[0].components[0].custom_id, 'md:checkuser', 'the old button offers the member picker');
 
   await sweep();
   const edit = env.calls.find(c => c.method === 'PATCH' && c.path === `/api/v10/channels/${logChannel}/messages/${oldPanelId}`);
   assert.ok(edit, 'the old panel is rewritten in place');
-  assert.equal(edit.body.components[0].components[0].custom_id, 'md:ckopen');
+  assert.equal(edit.body.components[0].components[0].custom_id, 'md:checkuser');
   assert.ok(env.calls.some(c => c.method === 'PUT' && c.path === `/api/v10/channels/${logChannel}/permissions/${guildId}`), 'the channel is made read-only');
   const after = JSON.parse((await env.db.prepare('SELECT settings_json FROM mediation_settings WHERE guild_id=?').bind(guildId).first()).settings_json);
   assert.equal(after.checkPanelChannelId, logChannel);
@@ -629,54 +632,30 @@ test('a server set up with the old /check channel is moved to the records panel 
   assert.ok(!env.calls.slice(before).some(c => c.path.startsWith(`/api/v10/channels/${logChannel}`)), 'runs only once');
 });
 
-test('records panel: the full member list pages through everyone, and name search finds anyone', async t => {
+test('records panel: old list/search controls answer with the member picker', async t => {
   const env = await setup(t);
-  const click = (custom_id, extra = {}) => interact(env, {type: 3, channel_id: panelChannel, member: member(userA), data: {custom_id, component_type: 2, ...extra}});
-
-  const page1 = await click('md:ckopen');
-  assert.equal(page1.type, 'deferred');
-  assert.match(page1.content, /1 \/ 2 ページ・全34人/, 'bots are excluded, 34 members over 2 pages');
-  const options1 = page1.data.components[0].components[0].options;
-  assert.equal(options1.length, 25);
-  assert.equal(options1[0].label, 'Alice', 'sorted by display name');
-  assert.ok(options1.some(o => o.value === '323456789012345099'), 'members outside any trade are listed');
-  assert.match(options1.find(o => o.value === userA).description, /@alice・買い手0件 \/ 売り手0件/);
-  const nav1 = page1.data.components[1].components;
-  assert.equal(nav1[0].disabled, true, 'no previous page on page 1');
-  assert.equal(nav1[1].custom_id, 'md:ckpage:1');
-
-  // Page buttons rewrite the list message itself (deferred update).
-  const page2 = await click('md:ckpage:1');
-  assert.match(page2.content, /2 \/ 2 ページ/);
-  assert.equal(page2.data.components[0].components[0].options.length, 9);
-  assert.equal(page2.data.components[1].components[1].disabled, true, 'no next page on the last page');
-
-  // Search: one hit shows the record, several hits offer a choice, none explains.
-  const search = q => interact(env, {type: 5, channel_id: panelChannel, member: member(userA), data: {custom_id: 'md:cksearchm', components: [{type: 1, components: [{type: 4, custom_id: 'query', value: q}]}]}});
-  assert.equal((await click('md:cksearch')).type, 9, 'search opens a name box');
-  const one = await search('car');
-  assert.match(one.data.embeds[0].title, /Carol \(@carol\) さんの取引実績/);
-  const many = await search('zz-user0');
-  assert.equal(many.data.components[0].components[0].options.length, 10);
-  const none = await search('nobody');
-  assert.match(none.content, /見つかりませんでした/);
-  const byId = await search(`<@${userB}>`);
-  assert.match(byId.data.embeds[0].title, /ボブ/);
+  for (const custom_id of ['md:ckopen', 'md:ckpage:1', 'md:cksearch']) {
+    const r = await interact(env, {type: 3, channel_id: panelChannel, member: member(userA), data: {custom_id, component_type: 2}});
+    assert.equal(r.type, 4, custom_id);
+    assert.equal(r.data.components[0].components[0].custom_id, 'md:checkuser', custom_id);
+  }
+  const pick = await interact(env, {type: 3, channel_id: panelChannel, member: member(userA), data: {custom_id: 'md:checkuser', component_type: 5, values: ['323456789012345099']}});
+  assert.match(pick.data.embeds[0].title, /Carol \(@carol\) さんの取引実績/);
 });
 
-test('a records panel from the previous version is rewritten to the list/search panel once', async t => {
+test('a records panel from a previous version is rewritten to the member picker once', async t => {
   const env = await setup(t);
   const worker = await env.mf.getWorker();
   const sweep = async () => { assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok'); await new Promise(r => setTimeout(r, 300)); };
   const raw = JSON.parse((await env.db.prepare('SELECT settings_json FROM mediation_settings WHERE guild_id=?').bind(guildId).first()).settings_json);
   raw.checkPanelChannelId = logChannel;
   raw.checkPanelMessageId = '800000000000077777';
-  delete raw.checkPanelVersion; // what production has right now
+  raw.checkPanelVersion = 2; // the list/search panel that production has right now
   await env.db.prepare('UPDATE mediation_settings SET settings_json=? WHERE guild_id=?').bind(JSON.stringify(raw), guildId).run();
   await sweep();
   const edits = () => env.calls.filter(c => c.method === 'PATCH' && c.path === `/api/v10/channels/${logChannel}/messages/800000000000077777`);
   assert.equal(edits().length, 1);
-  assert.deepEqual(edits()[0].body.components[0].components.map(b => b.custom_id), ['md:ckopen', 'md:cksearch']);
+  assert.equal(edits()[0].body.components[0].components[0].custom_id, 'md:checkuser');
   await sweep();
   assert.equal(edits().length, 1, 'only once');
 });

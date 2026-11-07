@@ -492,8 +492,8 @@ export default function MediationManager({
         <div className="mediation-paypay">
           <h3>実績確認パネル</h3>
           <p className="muted">
-            メンバーの買い手実績・売り手実績を、押した本人にだけ表示するパネルです。
-            「メンバー一覧から選ぶ」で全メンバーを名前順に25人ずつ表示し、「名前で検索」で名前の一部から探せます。
+            メンバーの買い手実績・売り手実績を、選んだ本人にだけ表示するパネルです。
+            Discord標準のメンバー選択メニュー（/コマンドのメンバー欄と同じ）で、名前を入力すると全員から検索できます。
             {draft.checkPanelMessageId ? ` 現在のパネル: ${channelName(draft.checkPanelChannelId)}` : " まだ設置していません。"}
           </p>
           <div className="form-grid two">
@@ -545,7 +545,7 @@ export default function MediationManager({
             checked={checkLock}
             onChange={setCheckLock}
             title="設置するチャンネルを発言禁止にする（おすすめ）"
-            description="@everyone のメッセージ送信・スレッド作成・リアクションを禁止します。パネルのボタンは発言禁止でも使えます"
+            description="@everyone のメッセージ送信・スレッド作成・リアクションを禁止します。パネルのメニューは発言禁止でも使えます"
           />
         </div>
 

@@ -297,19 +297,6 @@ export async function addRecord(env:Env,guildId:string,buyerId:string,sellerId:s
   ]);
 }
 
-export async function getStatsMany(env:Env,guildId:string,userIds:string[]):Promise<Map<string,{buyer:number;seller:number}>>{
-  const out=new Map<string,{buyer:number;seller:number}>();
-  for(let i=0;i<userIds.length;i+=90){
-    const chunk=userIds.slice(i,i+90);
-    if(!chunk.length) continue;
-    const rows=(await env.DB.prepare(
-      `SELECT user_id,buyer_count,seller_count FROM mediation_stats WHERE guild_id=? AND user_id IN (${chunk.map(()=>"?").join(",")})`
-    ).bind(guildId,...chunk).all<{user_id:string;buyer_count:number;seller_count:number}>()).results;
-    for(const r of rows) out.set(r.user_id,{buyer:r.buyer_count,seller:r.seller_count});
-  }
-  return out;
-}
-
 export async function getStats(env:Env,guildId:string,userId:string):Promise<{buyer:number;seller:number}>{
   const row=await env.DB.prepare("SELECT buyer_count,seller_count FROM mediation_stats WHERE guild_id=? AND user_id=?").bind(guildId,userId).first<{buyer_count:number;seller_count:number}>();
   return {buyer:row?.buyer_count??0,seller:row?.seller_count??0};
