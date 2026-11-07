@@ -24,6 +24,7 @@ export type MediationSettings = {
   resultChannelBase: string;
   resultRenameEnabled: boolean;
   resultPostEnabled: boolean;
+  checkChannelIds: string[];
   logChannelId: string | null;
   blacklistRoleIds: string[];
   minAccountAgeDays: number;
@@ -545,6 +546,35 @@ export default function MediationManager({
           >
             チャンネル名を今の件数に更新
           </button>
+        </div>
+
+        <div className="field">
+          <span>実績確認（/check）を使えるチャンネル（複数選択可）</span>
+          <div className="role-picker">
+            {postable.map((channel) => {
+              const checked = (draft.checkChannelIds ?? []).includes(channel.id);
+              return (
+                <label key={channel.id} className={`role-choice ${checked ? "selected" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(event) => {
+                      const current = draft.checkChannelIds ?? [];
+                      const next = event.target.checked
+                        ? [...current, channel.id]
+                        : current.filter((id) => id !== channel.id);
+                      patch({ checkChannelIds: [...new Set(next)] });
+                    }}
+                  />
+                  <span>#{channel.name}</span>
+                </label>
+              );
+            })}
+          </div>
+          <small>
+            選んだチャンネル以外で /check を使うと「実績確認は #〇〇 で使ってください」と断ります。何も選ばなければどこでも使えます。スタッフはどこでも使えます。
+            /complete・/report・/payment は、取引のプライベートチャンネルの中でだけ使えます。
+          </small>
         </div>
 
         <label className="field">

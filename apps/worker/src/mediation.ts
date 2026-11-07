@@ -310,7 +310,8 @@ async function ctxOf(env:Env,interaction:any):Promise<Ctx|null>{
 async function tradeFor(env:Env,c:Ctx,tid:number|null,participantsOnly=true):Promise<Trade|string>{
   const t=tid?await getTrade(env,tid):await tradeByChannel(env,String(c.interaction.channel_id??""));
   if(!t||t.guild_id!==c.guildId||(t.channel_id&&String(c.interaction.channel_id??"")!==t.channel_id)){
-    return "このチャンネルの取引が見つかりません。";
+    // スラッシュコマンド（tid なし）は、取引チャンネル以外では使えない
+    return tid?"このチャンネルの取引が見つかりません。":"このコマンドは取引のプライベートチャンネルの中でだけ使えます。";
   }
   if(participantsOnly&&c.userId!==t.user_a&&c.userId!==t.user_b) return "この取引の当事者のみ操作できます。";
   return t;
@@ -1011,7 +1012,7 @@ function staffPaymentConfirm(t:Trade,action:string,originMessageId:string){
 async function onPaymentCommand(env:Env,c:Ctx){
   if(!isStaff(c.member,c.settings)) return reply("このコマンドはスタッフだけが使えます。");
   const t=await tradeFor(env,c,null,false);
-  if(typeof t==="string") return reply(t+"\n取引チャンネルの中で実行してください。");
+  if(typeof t==="string") return reply(t);
   const action=String((c.interaction.data?.options??[]).find((o:any)=>o.name==="action")?.value??"");
   return staffPaymentConfirm(t,action,"0");
 }
@@ -1082,7 +1083,17 @@ function statsLabel(stats:{buyer:number;seller:number}|undefined){
  * /check のメンバー候補。Discord 標準のメンバー選択は「今のチャンネルを見られる人」しか候補に出ず、
  * 取引チャンネルでは当事者2人しか選べなかったので、サーバーの全メンバーから自前で検索する。
  */
+/** /check を使えるチャンネルか。スタッフはどこでも使える */
+function checkAllowedHere(c:Ctx):boolean{
+  const allowed=c.settings.checkChannelIds??[];
+  if(!allowed.length||isStaff(c.member,c.settings)) return true;
+  return allowed.includes(String(c.interaction.channel_id??""));
+}
+
 async function onCheckAutocomplete(env:Env,c:Ctx){
+  if(!checkAllowedHere(c)){
+    return ires({type:8,data:{choices:[{name:"このチャンネルでは使えません（実績確認用のチャンネルで使ってください）",value:"__blocked__"}]}});
+  }
   const option=(c.interaction.data?.options??[]).find((o:any)=>o.name==="member");
   const query=String(option?.value??"").trim().replace(/^@/,"");
   let members:GuildMemberLite[]=[];
@@ -1118,6 +1129,9 @@ async function onCheckAutocomplete(env:Env,c:Ctx){
 }
 
 async function onCheck(env:Env,c:Ctx){
+  if(!checkAllowedHere(c)){
+    return reply(`実績確認（/check）は ${c.settings.checkChannelIds.map(id=>`<#${id}>`).join(" / ")} で使ってください。`);
+  }
   const option=(c.interaction.data?.options??[]).find((o:any)=>o.name==="member");
   const raw=String(option?.value??"").trim().replace(/^@/,"");
   if(!raw) return reply("メンバーを指定してください。");

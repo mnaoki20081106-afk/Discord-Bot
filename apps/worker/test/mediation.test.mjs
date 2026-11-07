@@ -482,7 +482,7 @@ test('mismatched amounts cancel; a seller reports a silent buyer and staff pays 
   assert.match(twice.content, /すでに処理/);
   assert.equal(env.created.length, 1, 'no second payout');
   const notInTrade = await interact(env, {...payment('refund'), channel_id: panelChannel, member: member(staffUser, [staffRole])});
-  assert.match(notInTrade.content, /取引チャンネル/);
+  assert.match(notInTrade.content, /取引のプライベートチャンネルの中でだけ/);
 });
 
 test('trades stuck mid-way alert staff once', async t => {
@@ -538,4 +538,29 @@ test('split fee keeps the received share when the other member mistypes, and rep
   await interact(env, submit(userA, `md:paym:${id}`, {link: payLink('pay4'), passcode: '2222'}));
   assert.equal((await trade(env)).status, 'CONFIRMING', 'after 3 retries staff takes over');
   assert.ok(env.calls.some(c => c.method === 'POST' && c.path === `/api/v10/channels/${staffChannel}/messages`));
+});
+
+test('commands only run where they belong: trade commands in trade channels, /check in its channel', async t => {
+  const env = await setup(t);
+  const saved = await request(env.mf, `/api/guilds/${guildId}/mediation/settings`, env.token, 'PUT', {checkChannelIds: [logChannel]});
+  assert.deepEqual(saved.body.settings.checkChannelIds, [logChannel]);
+  const slash = (userId, channel, name, options = [], roles = []) =>
+    interact(env, {type: 2, channel_id: channel, member: member(userId, roles), data: {name, options}});
+
+  for (const name of ['complete', 'report']) {
+    const r = await slash(userA, panelChannel, name);
+    assert.match(r.content, /取引のプライベートチャンネルの中でだけ/, name);
+  }
+  const pay = await slash(staffUser, panelChannel, 'payment', [{name: 'action', type: 3, value: 'refund'}], [staffRole]);
+  assert.match(pay.content, /取引のプライベートチャンネルの中でだけ/);
+
+  const memberOpt = [{name: 'member', type: 3, value: userB}];
+  const elsewhere = await slash(userA, panelChannel, 'check', memberOpt);
+  assert.match(elsewhere.content, new RegExp(`<#${logChannel}> で使ってください`));
+  const auto = await interact(env, {type: 4, channel_id: panelChannel, member: member(userA), data: {name: 'check', options: [{name: 'member', type: 3, value: 'b', focused: true}]}});
+  assert.match(auto.data.choices[0].name, /このチャンネルでは使えません/);
+  const here = await slash(userA, logChannel, 'check', memberOpt);
+  assert.ok(here.data.embeds?.[0], 'works in the configured channel');
+  const staffAnywhere = await slash(staffUser, panelChannel, 'check', memberOpt, [staffRole]);
+  assert.ok(staffAnywhere.data.embeds?.[0], 'staff can use it anywhere');
 });

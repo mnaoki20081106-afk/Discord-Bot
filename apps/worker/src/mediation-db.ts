@@ -30,6 +30,8 @@ export type MediationSettings={
   resultChannelBase:string;
   resultRenameEnabled:boolean;
   resultPostEnabled:boolean;
+  /** /check を使えるチャンネル。空ならどこでも */
+  checkChannelIds:string[];
   logChannelId:string|null;
   blacklistRoleIds:string[];
   minAccountAgeDays:number;
@@ -55,6 +57,7 @@ export const DEFAULT_MEDIATION_SETTINGS:MediationSettings={
   resultChannelBase:"仲介実績",
   resultRenameEnabled:true,
   resultPostEnabled:true,
+  checkChannelIds:[],
   logChannelId:null,
   blacklistRoleIds:[],
   minAccountAgeDays:0,
@@ -112,6 +115,7 @@ export function normalizeMediationSettings(raw:any,base:MediationSettings=DEFAUL
     resultChannelBase:has("resultChannelBase")?(text(r.resultChannelBase,60,base.resultChannelBase)||DEFAULT_MEDIATION_SETTINGS.resultChannelBase):base.resultChannelBase,
     resultRenameEnabled:has("resultRenameEnabled")?Boolean(r.resultRenameEnabled):base.resultRenameEnabled,
     resultPostEnabled:has("resultPostEnabled")?Boolean(r.resultPostEnabled):base.resultPostEnabled,
+    checkChannelIds:has("checkChannelIds")?snowflakeList(r.checkChannelIds):(base.checkChannelIds??[]),
     logChannelId:has("logChannelId")?snowflakeOrNull(r.logChannelId):base.logChannelId,
     blacklistRoleIds:has("blacklistRoleIds")?snowflakeList(r.blacklistRoleIds):base.blacklistRoleIds,
     minAccountAgeDays:has("minAccountAgeDays")?clampInt(r.minAccountAgeDays,0,3650,base.minAccountAgeDays):base.minAccountAgeDays,
