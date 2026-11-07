@@ -3391,7 +3391,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v79-buyer-complete",
+          version:"bot-coexistence-v80-seller-request-buyer-confirm",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),

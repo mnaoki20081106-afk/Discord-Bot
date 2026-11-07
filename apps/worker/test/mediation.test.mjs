@@ -267,29 +267,41 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
   assert.equal(env.accepted.at(-1).passcode, '1234');
   assert.ok(env.calls.some(c => c.method === 'PUT' && c.path === `/api/v10/channels/${tradeChannel}/permissions/${userA}` && c.body.allow === String(1024n|65536n|2048n|32768n)));
 
-  // ④ completion: only the buyer can complete, after a confirmation
-  const bySeller = await interact(env, button(userB, `md:complete:${id}`));
-  assert.match(bySeller.content, /買い手だけ/);
-  assert.match(bySeller.content, /買い手が\/completeを押さない/);
-  const slashBySeller = await interact(env, {type: 2, channel_id: tradeChannel, member: member(userB), data: {name: 'complete'}});
-  assert.match(slashBySeller.content, /買い手だけ/);
-  const forgedOk = await interact(env, button(userB, `md:completeok:${id}`));
-  assert.match(forgedOk.content, /買い手だけ/);
+  // ④ completion
+  // The buyer completing directly gets a confirmation; cancelling it changes nothing.
+  const direct = await interact(env, {type: 2, channel_id: tradeChannel, member: member(userA), data: {name: 'complete'}});
+  assert.equal(direct.type, 4);
+  assert.match(direct.content, /取引は終了し、相手（売り手 <@\d+> さん）には代金 \*\*¥5,000\*\* が支払われます。よろしいですか？/);
+  assert.equal((await interact(env, button(userA, `md:opcancel:${id}`))).type, 7);
   assert.equal((await trade(env)).status, 'TRADING');
-  const ask = await interact(env, button(userA, `md:complete:${id}`));
-  assert.equal(ask.type, 4, 'the confirmation is answered immediately');
-  assert.match(ask.content, /¥5,000/);
-  assert.deepEqual(ask.data.components[0].components.map(b => b.custom_id), [`md:completeok:${id}`, `md:opcancel:${id}`]);
-  const cancelled = await interact(env, button(userA, `md:opcancel:${id}`));
-  assert.equal(cancelled.type, 7);
-  assert.equal((await trade(env)).status, 'TRADING');
+
+  // The seller can request completion; nothing is paid until the buyer agrees and confirms.
+  const sellerRequest = await interact(env, button(userB, `md:complete:${id}`));
+  assert.match(sellerRequest.content, /依頼しました/);
+  assert.equal((await trade(env)).status, 'COMPLETE_PENDING');
+  const requestMsg = env.calls.filter(c => c.method === 'POST' && c.path === `/api/v10/channels/${tradeChannel}/messages`).at(-1);
+  assert.deepEqual(requestMsg.body.components[0].components.map(b => b.custom_id), [`md:agree:${id}`, `md:continue:${id}`, `md:report:${id}`]);
+  assert.match((await interact(env, button(userB, `md:complete:${id}`))).content, /すでに取引完了を依頼/);
+  assert.match((await interact(env, button(userB, `md:agree:${id}`))).content, /買い手が行います/);
+  assert.match((await interact(env, button(userB, `md:continue:${id}`))).content, /依頼した本人/);
+  assert.match((await interact(env, button(userB, `md:completeok:${id}`))).content, /買い手だけ/);
+  assert.equal((await trade(env)).status, 'COMPLETE_PENDING');
+  assert.equal(env.created.length, 0, 'a seller request alone never pays');
+
+  // The buyer's "同意する" opens the confirmation; only the second tap pays.
+  const agreeAsk = await interact(env, button(userA, `md:agree:${id}`));
+  assert.equal(agreeAsk.type, 4, 'agree is answered immediately with a confirmation');
+  assert.match(agreeAsk.content, /取引は終了し、相手.*が支払われます。よろしいですか？/);
+  assert.deepEqual(agreeAsk.data.components[0].components.map(b => b.custom_id), [`md:completeok:${id}`, `md:opcancel:${id}`]);
+  assert.equal((await trade(env)).status, 'COMPLETE_PENDING');
+  assert.equal(env.created.length, 0);
   const done = await interact(env, button(userA, `md:completeok:${id}`));
-  assert.match(done.content, /完了しました/);
+  assert.match(done.content, /終了しました/);
   assert.deepEqual(done.data.components, [], 'the confirmation buttons are removed');
   const doubleTap = await interact(env, button(userA, `md:completeok:${id}`));
   assert.match(doubleTap.content, /すでに処理/);
   cur = await trade(env);
-  assert.equal(cur.decision, '買い手完了');
+  assert.equal(cur.decision, '両者合意');
   assert.equal(cur.status, 'PAID');
   assert.equal(cur.payout_target, userB);
   assert.equal(env.created.length, 1);

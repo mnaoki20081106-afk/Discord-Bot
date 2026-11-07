@@ -69,7 +69,6 @@ const STAFF_LABELS:Record<string,[string,number]>={
 // ---- 小さなヘルパー -----------------------------------------------------------
 const yen=(n:number|null|undefined)=>"¥"+Number(n??0).toLocaleString("ja-JP");
 const no=(t:Trade)=>"#"+String(t.number).padStart(4,"0");
-const hoursLabel=(h:number)=>String(Math.round(h*100)/100);
 
 function embed(title:string,description="",color=COLOR.blurple,extra:Record<string,unknown>={}){
   return {title:title.slice(0,256),description:description.slice(0,4096),color,...extra};
@@ -329,7 +328,7 @@ export function panelPayload(settings:MediationSettings){
     "4. 買い手 / 売り手を選択",
     "5. 買い手がPayPay送金リンクを提出 → 金額を確認して運営が代金を預かります",
     "6. チャンネル内で商品を受け渡し",
-    "7. 買い手が取引完了 → 売り手に代金を支払い",
+    "7. 買い手が取引完了（売り手からの依頼に同意でもOK）→ 売り手に代金を支払い",
     "",
     "⚠️ スタッフ・botがDMで送金を求めることは絶対にありません。"
   ];
@@ -733,8 +732,9 @@ async function startTrading(env:Env,t:Trade){
       `運営が代金 **${yen(t.amount)}** を預かりました。（売り手にはまだ支払われていません）\n`+
       `<@${t.seller_id}> さん、商品の受け渡しを始めてください。\n\n`+
       "・アカウント情報やファイルは**このチャンネル内で**渡してください（記録が判断材料になります）。\n"+
-      `・商品を受け取ったら、**買い手の <@${t.buyer_id}> さん**が「取引完了」ボタンか /complete を実行してください。売り手に代金が支払われます。\n`+
-      "・取引完了は買い手だけが実行できます。商品を渡したのに買い手が完了しない場合は、売り手が /report の「買い手が/completeを押さない」で通報してください。\n"+
+      `・商品を受け取ったら、**買い手の <@${t.buyer_id}> さん**が「取引完了」ボタンか /complete を実行してください（確認画面が出ます）。売り手に代金が支払われます。\n`+
+      "・売り手も「取引完了」で買い手に完了を依頼できます。買い手が同意するまで代金は支払われません。\n"+
+      "・商品を渡したのに買い手が応じない場合は、売り手が /report の「買い手が/completeを押さない」で通報してください。\n"+
       "・トラブルがあれば「通報」ボタンか /report で通報してください。取引が保留になり、スタッフが対応します。",
       COLOR.green
     )],
@@ -790,66 +790,71 @@ async function onReportModal(env:Env,c:Ctx,idx:number,tid:number){
   return reply("通報を受け付けました。");
 }
 
+/** 買い手に出す確認画面。誤タップで支払われないよう、必ずもう一度押してもらう */
+function buyerCompleteConfirm(t:Trade){
+  return reply(
+    `取引は終了し、相手（売り手 <@${t.seller_id}> さん）には代金 **${yen(t.amount)}** が支払われます。よろしいですか？\n`+
+    "商品を受け取って、内容に問題がないことを確認してから押してください。**支払い後は取り消せません。**",
+    {components:[row(button(`md:completeok:${t.id}`,"取引を終了して支払う",3),button(`md:opcancel:${t.id}`,"キャンセル",2))],allowed_mentions:{parse:[]}}
+  );
+}
+
 async function onComplete(env:Env,c:Ctx,tid:number|null){
   const t=await tradeFor(env,c,tid);
   if(typeof t==="string") return reply(t);
-  // 売り手が完了できると、商品を渡さずに代金だけ受け取れてしまうので、完了は買い手だけ
-  if(c.userId!==t.buyer_id){
-    return reply("取引完了は買い手だけが実行できます。\n商品を渡したのに買い手が完了しない場合は、/report で「買い手が/completeを押さない」を選んで通報してください。スタッフが確認して対応します。");
-  }
   if(t.status!==TRADING&&t.status!==COMPLETE_PENDING) return reply("現在は取引完了できません。");
-  return reply(
-    `取引を完了して、売り手 <@${t.seller_id}> さんに **${yen(t.amount)}** を支払います。\n`+
-    "商品を受け取って、内容に問題がないことを確認しましたか？ **支払い後は取り消せません。**",
-    {components:[row(button(`md:completeok:${t.id}`,"完了して支払う",3),button(`md:opcancel:${t.id}`,"キャンセル",2))],allowed_mentions:{parse:[]}}
-  );
+  // 買い手：確認画面を出して、確定したら売り手へ支払う
+  if(c.userId===t.buyer_id) return buyerCompleteConfirm(t);
+  // 売り手：買い手に完了を依頼するだけ。買い手が同意するまでお金は動かない（自動同意はない）
+  if(t.status===COMPLETE_PENDING) return reply("すでに取引完了を依頼しています。買い手の回答を待ってください。");
+  if(!await transition(env,t.id,[TRADING],COMPLETE_PENDING,{complete_requester:c.userId,complete_requested_at:Date.now()})){
+    return reply("現在は取引完了を依頼できません。");
+  }
+  await send(env,t.channel_id!,{
+    content:`<@${t.buyer_id}>`,
+    embeds:[embed("取引完了の依頼",
+      `売り手 <@${c.userId}> さんが取引完了を依頼しました。\n`+
+      `<@${t.buyer_id}> さん、商品を受け取って問題がなければ「同意する」を押してください（確認画面が出ます）。\n`+
+      "まだ受け取っていない・問題がある場合は「まだ続ける」か「通報」を押してください。\n\n"+
+      "同意するまで代金は支払われません。",
+      COLOR.green)],
+    components:[row(button(`md:agree:${t.id}`,"同意する",3),button(`md:continue:${t.id}`,"まだ続ける",2),button(`md:report:${t.id}`,"通報",4))]
+  });
+  return reply("買い手に取引完了を依頼しました。買い手が同意すると代金が支払われます。\n買い手が応じない場合は、/report で「買い手が/completeを押さない」を選んで通報できます。");
+}
+
+/** 依頼メッセージの「同意する」：買い手だけ。押すと確認画面を出す */
+async function onAgree(env:Env,c:Ctx,tid:number){
+  const t=await tradeFor(env,c,tid);
+  if(typeof t==="string") return reply(t);
+  if(c.userId!==t.buyer_id) return reply("取引完了への同意は買い手が行います。買い手の回答を待ってください。");
+  if(t.status!==TRADING&&t.status!==COMPLETE_PENDING) return reply("この依頼はすでに処理されています。");
+  return buyerCompleteConfirm(t);
 }
 
 async function onCompleteConfirmed(env:Env,c:Ctx,tid:number){
   const t=await tradeFor(env,c,tid);
   if(typeof t==="string") return reply(t,{components:[]});
-  if(c.userId!==t.buyer_id) return reply("取引完了は買い手だけが実行できます。",{components:[]});
-  if(!await transition(env,t.id,[TRADING,COMPLETE_PENDING],PAYOUT,{complete_requester:c.userId,complete_requested_at:Date.now()})){
+  if(c.userId!==t.buyer_id) return reply("取引の終了と支払いは買い手だけが確定できます。",{components:[]});
+  const requestedBySeller=t.status===COMPLETE_PENDING&&t.complete_requester===t.seller_id;
+  if(!await transition(env,t.id,[TRADING,COMPLETE_PENDING],PAYOUT)){
     return reply("この取引はすでに処理されています。",{components:[]});
   }
-  await send(env,t.channel_id!,{embeds:[embed("✅ 買い手が取引を完了しました",
+  await send(env,t.channel_id!,{embeds:[embed(requestedBySeller?"✅ 買い手が同意し、取引が完了しました":"✅ 買い手が取引を完了しました",
     `<@${t.buyer_id}> に買い手実績、<@${t.seller_id}> に売り手実績が付きました。\n売り手への支払いを準備しています…`,COLOR.green)]});
-  await finishAgreed(env,c.settings,t,"買い手完了");
-  return reply("取引を完了しました。売り手への支払いを進めています。",{components:[]});
-}
-
-function agreedEmbed(t:Trade,settings:MediationSettings,auto=false){
-  const head=auto?`完了申請から${hoursLabel(settings.autoAgreeHours)}時間返事がなかったため、自動で同意として扱いました。\n`:"";
-  return embed(auto?"✅ 自動で取引完了しました":"✅ 両者が合意しました",
-    `${head}<@${t.buyer_id}> に買い手実績、<@${t.seller_id}> に売り手実績が付きました。\n売り手への支払いを準備しています…`,COLOR.green);
-}
-
-async function confirmGuard(env:Env,c:Ctx,tid:number):Promise<Trade|Response>{
-  const t=await tradeFor(env,c,tid);
-  if(typeof t==="string") return reply(t);
-  if(t.status!==COMPLETE_PENDING) return reply("この申請はすでに処理されています。");
-  if(c.userId===t.complete_requester) return reply("申請した本人は操作できません。相手の回答を待ってください。");
-  return t;
-}
-
-async function agree(env:Env,c:Ctx,t:Trade){
-  // 以前の「売り手が申請 → 買い手が同意」の残り。売り手が自分への支払いに同意することはできない
-  if(c.userId!==t.buyer_id&&t.complete_requester!==t.buyer_id){
-    return reply("取引完了は買い手だけが実行できます。");
-  }
-  if(!await transition(env,t.id,[COMPLETE_PENDING],PAYOUT)) return reply("この申請はすでに処理されています。");
-  await send(env,t.channel_id!,{embeds:[agreedEmbed(t,c.settings)]});
-  await finishAgreed(env,c.settings,t,"両者合意");
-  return reply("同意しました。");
+  await finishAgreed(env,c.settings,t,requestedBySeller?"両者合意":"買い手完了");
+  return reply("取引を終了しました。売り手への支払いを進めています。",{components:[]});
 }
 
 async function onContinue(env:Env,c:Ctx,tid:number){
-  const g=await confirmGuard(env,c,tid);
-  if(g instanceof Response) return g;
-  if(!await transition(env,g.id,[COMPLETE_PENDING],TRADING,{complete_requester:null,complete_requested_at:null})){
-    return reply("この申請はすでに処理されています。");
+  const t=await tradeFor(env,c,tid);
+  if(typeof t==="string") return reply(t);
+  if(t.status!==COMPLETE_PENDING) return reply("この依頼はすでに処理されています。");
+  if(c.userId!==t.buyer_id) return reply("依頼した本人は操作できません。買い手の回答を待ってください。");
+  if(!await transition(env,t.id,[COMPLETE_PENDING],TRADING,{complete_requester:null,complete_requested_at:null})){
+    return reply("この依頼はすでに処理されています。");
   }
-  await send(env,g.channel_id!,{embeds:[embed("取引を続行",`<@${c.userId}> はまだ終了しないと回答しました。受け渡しを続けてください。`)]});
+  await send(env,t.channel_id!,{embeds:[embed("取引を続行",`<@${c.userId}> さんはまだ終了しないと回答しました。受け渡しを続けてください。`)]});
   return reply("取引を続行します。");
 }
 
@@ -1079,7 +1084,7 @@ async function onCheck(env:Env,c:Ctx){
 
 // ---- Interaction ルーティング --------------------------------------------------
 export const MEDIATION_COMMANDS=[
-  {name:"complete",description:"【買い手用】商品を受け取ったら取引を完了し、売り手に支払います（取引チャンネル内で使用）",type:1,dm_permission:false},
+  {name:"complete",description:"取引完了（買い手は確認後に売り手へ支払い、売り手は買い手に完了を依頼）※取引チャンネル内で使用",type:1,dm_permission:false},
   {name:"report",description:"トラブルを通報し、取引を保留にします（取引チャンネル内で使用）",type:1,dm_permission:false},
   {name:"check",description:"メンバーの取引実績を確認します",type:1,dm_permission:false,options:[{type:6,name:"member",description:"実績を確認したいメンバー",required:true}]},
   {name:"payment",description:"【スタッフ用】取引の代金を売り手に支払う／買い手に返金する（取引チャンネル内で使用）",type:1,dm_permission:false,options:[
@@ -1105,7 +1110,7 @@ export function mediationShouldDefer(interaction:any):boolean{
   const id=String(interaction.data?.custom_id??"");
   if(id==="md:start"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
   // 確認を出すだけ・取り消すだけの操作も即答する
-  if(id.startsWith("md:complete:")||id.startsWith("md:opcancel:")) return false;
+  if(id.startsWith("md:complete:")||id.startsWith("md:agree:")||id.startsWith("md:opcancel:")) return false;
   if(id.startsWith("md:staff:payseller:")||id.startsWith("md:staff:refund:")) return false;
   if(id.startsWith("md:fee:")) return id.startsWith("md:fee:other:");
   return true;
@@ -1155,10 +1160,7 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
       case "opcancel": return ires({type:7,data:{content:"キャンセルしました。",components:[]}});
       case "report": return onReportOpen(env,c,tid);
       case "rtype": return onReportType(env,c,tid);
-      case "agree":{
-        const g=await confirmGuard(env,c,tid);
-        return g instanceof Response?g:agree(env,c,g);
-      }
+      case "agree": return onAgree(env,c,tid);
       case "continue": return onContinue(env,c,tid);
       case "pickup": return onPickup(env,c,tid);
       case "staff": return onStaff(env,c,parts[2]!,tid);
