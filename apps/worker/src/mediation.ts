@@ -1147,7 +1147,7 @@ export function mediationShouldDefer(interaction:any):boolean{
   if(interaction.type===2) return false;
   if(interaction.type===5) return true;
   const id=String(interaction.data?.custom_id??"");
-  if(id==="md:start"||id==="md:checkuser"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
+  if(id==="md:start"||id==="md:checkuser"||id==="md:checkopen"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
   // 確認を出すだけ・取り消すだけの操作も即答する
   if(id.startsWith("md:complete:")||id.startsWith("md:agree:")||id.startsWith("md:opcancel:")) return false;
   if(id.startsWith("md:staff:payseller:")||id.startsWith("md:staff:refund:")) return false;
@@ -1185,6 +1185,10 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
   if(interaction.type===3){
     if(id==="md:start") return onStart(env,c);
     if(id==="md:checkuser") return onCheckUser(env,c);
+    // 以前のパネル（ボタン式）の名残り。自動の切り替えが済むまでは、その場でメンバー選択メニューを出す
+    if(id==="md:checkopen"){
+      return reply("確認したいメンバーを選んでください（名前で検索できます）。",{components:checkPanelPayload().components});
+    }
     if(id==="md:partner") return onPartner(env,c);
     if(!tid) return reply("未対応の操作です。");
     switch(parts[1]){
@@ -1204,6 +1208,9 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
       case "pickup": return onPickup(env,c,tid);
       case "staff": return onStaff(env,c,parts[2]!,tid);
     }
+  }
+  if(interaction.type===5&&id==="md:checkm"){
+    return reply("実績確認パネルが新しくなりました。パネルのメニューからメンバーを選んでください。",{components:checkPanelPayload().components});
   }
   if(interaction.type===5&&tid){
     switch(parts[1]){
@@ -1275,6 +1282,42 @@ async function saveTranscript(env:Env,settings:MediationSettings,t:Trade){
   if(!res.ok) throw new Error("transcript upload failed: "+res.status+" "+(await res.text().catch(()=>"")).slice(0,200));
 }
 
+/**
+ * 以前の「/check 用チャンネル」設定（checkChannelIds）を、実績確認パネルに移す。
+ * そのチャンネルの古いパネル（ボタン式）を新しいパネルに書き換え（なければ設置し）、
+ * 発言を消す処理はもう動かないのでチャンネルを発言禁止にする。移したら設定から古い項目が消えるので、1回だけ動く。
+ */
+async function migrateLegacyCheckChannels(env:Env){
+  const rows=(await env.DB.prepare("SELECT guild_id,settings_json FROM mediation_settings WHERE settings_json LIKE '%\"checkChannelIds\":[\"%' LIMIT 10")
+    .all<{guild_id:string;settings_json:string}>()).results;
+  for(const row of rows){
+    try{
+      const raw=JSON.parse(row.settings_json);
+      const channelId=String(raw.checkChannelIds?.[0]??"");
+      const settings=await getMediationSettings(env,row.guild_id);
+      if(/^\d{15,22}$/.test(channelId)&&!settings.checkPanelMessageId){
+        const botId=env.DISCORD_APPLICATION_ID.trim();
+        const messages=await botJson<any[]>(env,`/channels/${channelId}/messages?limit=50`).catch(()=>[] as any[]);
+        const old=messages.find(m=>m?.author?.id===botId&&m?.embeds?.[0]?.footer?.text===CHECK_PANEL_MARK);
+        let messageId:string;
+        if(old){
+          await botJson(env,`/channels/${channelId}/messages/${old.id}`,{method:"PATCH",body:JSON.stringify(checkPanelPayload())});
+          messageId=old.id;
+        }else{
+          messageId=(await send(env,channelId,checkPanelPayload())).id;
+        }
+        await lockCheckChannel(env,row.guild_id,channelId).catch(error=>console.error("legacy check channel lock failed",channelId,error));
+        settings.checkPanelChannelId=channelId;
+        settings.checkPanelMessageId=messageId;
+      }
+      // 保存し直すと、正規化で古い checkChannelIds が消える
+      await saveMediationSettings(env,row.guild_id,settings);
+    }catch(error){
+      console.error("legacy check channel migration failed",row.guild_id,error);
+    }
+  }
+}
+
 export async function mediationSweep(env:Env){
   await ensureMediationSchema(env);
   const now=Date.now();
@@ -1286,6 +1329,9 @@ export async function mediationSweep(env:Env){
 
   // 完了申請への自動同意は廃止した（売り手が申請して放置すると、商品を渡さずに代金を受け取れてしまうため）。
   // 取引完了は買い手だけが実行し、買い手が完了しないときは売り手が /report で通報する。
+
+  // 0. 以前の /check 用チャンネル設定を、実績確認パネルに移す（1回だけ）
+  await migrateLegacyCheckChannels(env).catch(error=>console.error("legacy check migration failed",error));
 
   // 1b. PayPay処理の途中でWorkerが止まった取引を、スタッフに一度だけ知らせる
   for(const t of await listStuckTrades(env,now-15*60_000)){

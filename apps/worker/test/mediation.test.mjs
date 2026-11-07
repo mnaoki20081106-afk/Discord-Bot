@@ -594,3 +594,35 @@ test('records panel: set up in a channel that becomes read-only, and kept when s
   await request(env.mf, `/api/guilds/${guildId}/mediation/check-panel`, env.token, 'POST', {channelId: panelChannel, lock: false});
   assert.ok(!env.calls.slice(before).some(c => c.method === 'PUT' && c.path.includes('/permissions/')));
 });
+
+test('a server set up with the old /check channel is moved to the records panel once', async t => {
+  const env = await setup(t);
+  const worker = await env.mf.getWorker();
+  const sweep = async () => { assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok'); await new Promise(r => setTimeout(r, 300)); };
+  await sweep(); // create tables
+  // The previous version stored checkChannelIds and posted a button panel there.
+  const raw = JSON.parse((await env.db.prepare('SELECT settings_json FROM mediation_settings WHERE guild_id=?').bind(guildId).first()).settings_json);
+  raw.checkChannelIds = [logChannel];
+  await env.db.prepare('UPDATE mediation_settings SET settings_json=? WHERE guild_id=?').bind(JSON.stringify(raw), guildId).run();
+  const oldPanelId = '800000000000099999';
+  env.channelMessages.set(logChannel, [{id: oldPanelId, author: {id: botId}, embeds: [{footer: {text: 'dsm-check-panel'}}], components: [{type: 1, components: [{type: 2, custom_id: 'md:checkopen'}]}]}]);
+
+  // Until the migration runs, the old button still works by offering the member menu.
+  const oldButton = await interact(env, {type: 3, channel_id: logChannel, member: member(userA), data: {custom_id: 'md:checkopen', component_type: 2}});
+  assert.equal(oldButton.type, 4, 'answered immediately');
+  assert.equal(oldButton.data.components[0].components[0].custom_id, 'md:checkuser');
+
+  await sweep();
+  const edit = env.calls.find(c => c.method === 'PATCH' && c.path === `/api/v10/channels/${logChannel}/messages/${oldPanelId}`);
+  assert.ok(edit, 'the old panel is rewritten in place');
+  assert.equal(edit.body.components[0].components[0].type, 5);
+  assert.ok(env.calls.some(c => c.method === 'PUT' && c.path === `/api/v10/channels/${logChannel}/permissions/${guildId}`), 'the channel is made read-only');
+  const after = JSON.parse((await env.db.prepare('SELECT settings_json FROM mediation_settings WHERE guild_id=?').bind(guildId).first()).settings_json);
+  assert.equal(after.checkPanelChannelId, logChannel);
+  assert.equal(after.checkPanelMessageId, oldPanelId);
+  assert.equal(after.checkChannelIds, undefined, 'the old setting is gone');
+
+  const before = env.calls.length;
+  await sweep();
+  assert.ok(!env.calls.slice(before).some(c => c.path.startsWith(`/api/v10/channels/${logChannel}`)), 'runs only once');
+});

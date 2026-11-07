@@ -3391,7 +3391,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v85-records-panel",
+          version:"bot-coexistence-v86-records-panel-migration",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
