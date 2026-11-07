@@ -121,7 +121,7 @@ async function interact(env, payload) {
     body
   });
   const result = await response.json();
-  if (result.type === 5) {
+  if (result.type === 5 || result.type === 6) {
     // Deferred: wait for the background PATCH to @original.
     const patched = await eventually(() => env.calls.find(c => c.method === 'PATCH' && c.path.includes(`/webhooks/${botId}/${token}/`)), 4000);
     assert.ok(patched, 'deferred interaction was never completed: ' + JSON.stringify(payload.data));
@@ -267,13 +267,29 @@ test('full mediation trade: fee, amount, roles, escrow with passcode, agreement,
   assert.equal(env.accepted.at(-1).passcode, '1234');
   assert.ok(env.calls.some(c => c.method === 'PUT' && c.path === `/api/v10/channels/${tradeChannel}/permissions/${userA}` && c.body.allow === String(1024n|65536n|2048n|32768n)));
 
-  // ④ completion
-  const own = await interact(env, button(userB, `md:complete:${id}`));
-  assert.match(own.content, /申請しました/);
-  const self = await interact(env, button(userB, `md:agree:${id}`));
-  assert.match(self.content, /申請した本人/);
-  await interact(env, button(userA, `md:agree:${id}`));
+  // ④ completion: only the buyer can complete, after a confirmation
+  const bySeller = await interact(env, button(userB, `md:complete:${id}`));
+  assert.match(bySeller.content, /買い手だけ/);
+  assert.match(bySeller.content, /買い手が\/completeを押さない/);
+  const slashBySeller = await interact(env, {type: 2, channel_id: tradeChannel, member: member(userB), data: {name: 'complete'}});
+  assert.match(slashBySeller.content, /買い手だけ/);
+  const forgedOk = await interact(env, button(userB, `md:completeok:${id}`));
+  assert.match(forgedOk.content, /買い手だけ/);
+  assert.equal((await trade(env)).status, 'TRADING');
+  const ask = await interact(env, button(userA, `md:complete:${id}`));
+  assert.equal(ask.type, 4, 'the confirmation is answered immediately');
+  assert.match(ask.content, /¥5,000/);
+  assert.deepEqual(ask.data.components[0].components.map(b => b.custom_id), [`md:completeok:${id}`, `md:opcancel:${id}`]);
+  const cancelled = await interact(env, button(userA, `md:opcancel:${id}`));
+  assert.equal(cancelled.type, 7);
+  assert.equal((await trade(env)).status, 'TRADING');
+  const done = await interact(env, button(userA, `md:completeok:${id}`));
+  assert.match(done.content, /完了しました/);
+  assert.deepEqual(done.data.components, [], 'the confirmation buttons are removed');
+  const doubleTap = await interact(env, button(userA, `md:completeok:${id}`));
+  assert.match(doubleTap.content, /すでに処理/);
   cur = await trade(env);
+  assert.equal(cur.decision, '買い手完了');
   assert.equal(cur.status, 'PAID');
   assert.equal(cur.payout_target, userB);
   assert.equal(env.created.length, 1);
@@ -345,11 +361,19 @@ test('PayPay failures fall back to staff, and disputes are settled by staff only
   const complete = await interact(env, button(userB, `md:complete:${id}`));
   assert.match(complete.content, /できません/);
 
-  await interact(env, {...button(staffUser, `md:staff:refund:${id}`, {roles: [staffRole]}), channel_id: staffChannel, message: {id: '2', embeds: [{title: 'x'}]}});
+  // The staff button only asks for confirmation; nothing moves until it is confirmed.
+  const confirm = await interact(env, {...button(staffUser, `md:staff:refund:${id}`, {roles: [staffRole]}), channel_id: staffChannel, message: {id: '222222222222222222', embeds: [{title: 'x'}]}});
+  assert.match(confirm.content, new RegExp(`<@${userB}>.*¥1,000.*返金します。よろしいですか`));
+  assert.equal((await trade(env)).status, 'DISPUTE');
+  const okId = confirm.data.components[0].components[0].custom_id;
+  assert.equal(okId, `md:payok:refund:222222222222222222:${id}`);
+  const notStaffOk = await interact(env, {...button(userB, okId), channel_id: staffChannel});
+  assert.match(notStaffOk.content, /スタッフのみ/);
+  await interact(env, {...button(staffUser, okId, {roles: [staffRole]}), channel_id: staffChannel});
   let cur = await trade(env);
   assert.equal(cur.status, 'PAYOUT');
   assert.equal(cur.payout_target, userB);
-  assert.equal(cur.decision.startsWith('通報→買い手へ返金'), true);
+  assert.equal(cur.decision.startsWith('スタッフ判断→買い手へ返金'), true);
   await interact(env, {...button(staffUser, `md:staff:done:${id}`, {roles: [staffRole]}), channel_id: staffChannel, message: {id: '3', embeds: [{title: 'x'}]}});
   cur = await trade(env);
   assert.equal(cur.status, 'CLOSED');
@@ -357,9 +381,9 @@ test('PayPay failures fall back to staff, and disputes are settled by staff only
   assert.equal(stats.n, 0, 'staff-settled trades do not count as records');
 });
 
-test('mismatched amounts cancel the trade and auto-agree completes after the configured time', async t => {
+test('mismatched amounts cancel; a seller reports a silent buyer and staff pays with /payment', async t => {
   const env = await setup(t);
-  await request(env.mf, `/api/guilds/${guildId}/mediation/settings`, env.token, 'PUT', {feeAmount: 0, autoAgreeHours: 1});
+  await request(env.mf, `/api/guilds/${guildId}/mediation/settings`, env.token, 'PUT', {feeAmount: 0});
   const first = await openTrade(env);
   await interact(env, submit(userA, `md:amountm:${first.id}`, {amount: '1000'}));
   await interact(env, submit(userB, `md:amountm:${first.id}`, {amount: '2000'}));
@@ -374,14 +398,47 @@ test('mismatched amounts cancel the trade and auto-agree completes after the con
   await interact(env, button(userB, `md:role:seller:${id}`));
   env.links.set('pay3', {amount: 3000, status: 'PENDING'});
   await interact(env, submit(userA, `md:paym:${id}`, {link: payLink('pay3'), passcode: ''}));
-  await interact(env, button(userB, `md:complete:${id}`));
-  assert.equal((await trade(env)).status, 'COMPLETE_PENDING');
-  await env.db.prepare('UPDATE mediation_trades SET complete_requested_at=? WHERE id=?').bind(Date.now() - 3600_000 - 1000, id).run();
+  assert.equal((await trade(env)).status, 'TRADING');
+
+  // Nothing pays out on its own any more, however long it waits.
+  await env.db.prepare('UPDATE mediation_trades SET complete_requested_at=?, complete_requester=? WHERE id=?').bind(Date.now() - 48 * 3600_000, userB, id).run();
   const worker = await env.mf.getWorker();
   assert.equal((await worker.scheduled({cron: '* * * * *'})).outcome, 'ok');
-  const done = await eventually(async () => (await trade(env)).status === 'PAID' && await trade(env));
-  assert.equal(done.decision, '自動同意');
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal((await trade(env)).status, 'TRADING');
+  assert.equal(env.created.length, 0);
+
+  // The seller reports that the buyer will not complete.
+  const report = await interact(env, button(userB, `md:report:${id}`));
+  const options = report.data.components[0].components[0].options;
+  const idx = options.findIndex(o => o.label === '買い手が/completeを押さない');
+  assert.ok(idx >= 0, 'report type exists');
+  await interact(env, submit(userB, `md:reportm:${idx}:${id}`, {detail: '渡しました'}));
+  let cur = await trade(env);
+  assert.equal(cur.status, 'DISPUTE');
+  assert.match(cur.report_reason, /買い手が\/completeを押さない/);
+
+  // /payment is staff only, asks for confirmation, then pays.
+  const payment = action => ({type: 2, channel_id: tradeChannel, data: {name: 'payment', options: [{name: 'action', type: 3, value: action}]}});
+  const byMember = await interact(env, {...payment('payseller'), member: member(userB)});
+  assert.match(byMember.content, /スタッフだけ/);
+  const ask = await interact(env, {...payment('payseller'), member: member(staffUser, [staffRole])});
+  assert.equal(ask.type, 4);
+  assert.match(ask.content, new RegExp(`売り手 <@${userB}> さんに \\*\\*¥3,000\\*\\* を支払います。よろしいですか`));
+  assert.equal((await trade(env)).status, 'DISPUTE');
+  const ok = ask.data.components[0].components[0].custom_id;
+  assert.equal(ok, `md:payok:payseller:0:${id}`);
+  await interact(env, {...button(staffUser, ok, {roles: [staffRole]})});
+  cur = await trade(env);
+  assert.equal(cur.status, 'PAID');
+  assert.equal(cur.payout_target, userB);
+  assert.match(cur.decision, /^スタッフ判断→売り手へ支払い/);
   assert.equal(env.created.at(-1).amount, 3000);
+  const twice = await interact(env, {...button(staffUser, ok, {roles: [staffRole]})});
+  assert.match(twice.content, /すでに処理/);
+  assert.equal(env.created.length, 1, 'no second payout');
+  const notInTrade = await interact(env, {...payment('refund'), channel_id: panelChannel, member: member(staffUser, [staffRole])});
+  assert.match(notInTrade.content, /取引チャンネル/);
 });
 
 test('trades stuck mid-way alert staff once', async t => {

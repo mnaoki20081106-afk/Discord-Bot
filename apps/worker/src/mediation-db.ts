@@ -293,7 +293,7 @@ export async function getStats(env:Env,guildId:string,userId:string):Promise<{bu
 
 /** 両者合意で正常に完了した取引の総数（運営の実績） */
 export async function completedCount(env:Env,guildId:string):Promise<number>{
-  const row=await env.DB.prepare("SELECT COUNT(*) AS n FROM mediation_trades WHERE guild_id=? AND decision IN ('両者合意','自動同意')").bind(guildId).first<{n:number}>();
+  const row=await env.DB.prepare("SELECT COUNT(*) AS n FROM mediation_trades WHERE guild_id=? AND decision IN ('買い手完了','両者合意','自動同意')").bind(guildId).first<{n:number}>();
   return Number(row?.n??0);
 }
 
@@ -302,7 +302,7 @@ export async function guildSummary(env:Env,guildId:string){
   const byStatus:Record<string,number>={};
   for(const r of rows) byStatus[r.status]=Number(r.n);
   const fee=await env.DB.prepare("SELECT COALESCE(SUM(COALESCE(fee_paid_a,0)+COALESCE(fee_paid_b,0)),0) AS fee FROM mediation_trades WHERE guild_id=?").bind(guildId).first<{fee:number}>();
-  const volume=await env.DB.prepare("SELECT COALESCE(SUM(amount),0) AS v FROM mediation_trades WHERE guild_id=? AND decision IN ('両者合意','自動同意')").bind(guildId).first<{v:number}>();
+  const volume=await env.DB.prepare("SELECT COALESCE(SUM(amount),0) AS v FROM mediation_trades WHERE guild_id=? AND decision IN ('買い手完了','両者合意','自動同意')").bind(guildId).first<{v:number}>();
   return {
     completed:await completedCount(env,guildId),
     active:ACTIVE_STATUSES.reduce((sum,s)=>sum+(byStatus[s]??0),0),

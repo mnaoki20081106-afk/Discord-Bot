@@ -30,7 +30,7 @@ import {
 import {
   AMOUNT, CANCELLED, CLOSED, COMPLETE_PENDING, CONFIRMING, DISPUTE, FEE, FEE_RECEIVING, PAID, PAYMENT, PAYOUT, ROLE, TRADING,
   activeTradeBetween, addRecord, completedCount, countOpenTrades, createTrade, ensureMediationSchema, getMediationSettings, getStats, getTrade,
-  guildSummary, listAutoAgreeCandidates, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
+  guildSummary, listDirtyResultGuilds, listDueDeletions, listRecentTrades, listStuckTrades, markAlerted, markResultDirty,
   normalizeMediationSettings, saveMediationSettings, setResultRenameState, tradeByChannel, transition, updateTrade,
   type MediationSettings, type Trade
 } from "./mediation-db";
@@ -53,6 +53,7 @@ const REPORT_TYPES:Array<[string,string]>=[
   ["説明と異なる商品","受け取った商品が説明・合意内容と違う"],
   ["持ち逃げ","相手が受け取った後に応答しない・逃げた"],
   ["商品が届かない","商品を受け取れていない"],
+  ["買い手が/completeを押さない","商品を渡したのに、買い手が取引完了しない"],
   ["その他","上記以外のトラブル"]
 ];
 const STAFF_LABELS:Record<string,[string,number]>={
@@ -328,7 +329,7 @@ export function panelPayload(settings:MediationSettings){
     "4. 買い手 / 売り手を選択",
     "5. 買い手がPayPay送金リンクを提出 → 金額を確認して運営が代金を預かります",
     "6. チャンネル内で商品を受け渡し",
-    "7. 片方が完了を申請し、もう片方が同意 → 売り手に代金を支払い",
+    "7. 買い手が取引完了 → 売り手に代金を支払い",
     "",
     "⚠️ スタッフ・botがDMで送金を求めることは絶対にありません。"
   ];
@@ -732,7 +733,8 @@ async function startTrading(env:Env,t:Trade){
       `運営が代金 **${yen(t.amount)}** を預かりました。（売り手にはまだ支払われていません）\n`+
       `<@${t.seller_id}> さん、商品の受け渡しを始めてください。\n\n`+
       "・アカウント情報やファイルは**このチャンネル内で**渡してください（記録が判断材料になります）。\n"+
-      "・受け渡しが終わったら、どちらかが「取引完了」ボタンか /complete を実行してください。相手も同意したら、売り手に代金が支払われます。\n"+
+      `・商品を受け取ったら、**買い手の <@${t.buyer_id}> さん**が「取引完了」ボタンか /complete を実行してください。売り手に代金が支払われます。\n`+
+      "・取引完了は買い手だけが実行できます。商品を渡したのに買い手が完了しない場合は、売り手が /report の「買い手が/completeを押さない」で通報してください。\n"+
       "・トラブルがあれば「通報」ボタンか /report で通報してください。取引が保留になり、スタッフが対応します。",
       COLOR.green
     )],
@@ -791,27 +793,29 @@ async function onReportModal(env:Env,c:Ctx,idx:number,tid:number){
 async function onComplete(env:Env,c:Ctx,tid:number|null){
   const t=await tradeFor(env,c,tid);
   if(typeof t==="string") return reply(t);
-  if(t.status===COMPLETE_PENDING&&t.complete_requester&&t.complete_requester!==c.userId){
-    // 相手がすでに申請している → 同意として扱う
-    return agree(env,c,t);
+  // 売り手が完了できると、商品を渡さずに代金だけ受け取れてしまうので、完了は買い手だけ
+  if(c.userId!==t.buyer_id){
+    return reply("取引完了は買い手だけが実行できます。\n商品を渡したのに買い手が完了しない場合は、/report で「買い手が/completeを押さない」を選んで通報してください。スタッフが確認して対応します。");
   }
-  if(!await transition(env,t.id,[TRADING],COMPLETE_PENDING,{complete_requester:c.userId,complete_requested_at:Date.now()})){
-    return reply(t.complete_requester===c.userId?"すでに完了を申請しています。相手の回答を待ってください。":"現在は完了申請できません。");
+  if(t.status!==TRADING&&t.status!==COMPLETE_PENDING) return reply("現在は取引完了できません。");
+  return reply(
+    `取引を完了して、売り手 <@${t.seller_id}> さんに **${yen(t.amount)}** を支払います。\n`+
+    "商品を受け取って、内容に問題がないことを確認しましたか？ **支払い後は取り消せません。**",
+    {components:[row(button(`md:completeok:${t.id}`,"完了して支払う",3),button(`md:opcancel:${t.id}`,"キャンセル",2))],allowed_mentions:{parse:[]}}
+  );
+}
+
+async function onCompleteConfirmed(env:Env,c:Ctx,tid:number){
+  const t=await tradeFor(env,c,tid);
+  if(typeof t==="string") return reply(t,{components:[]});
+  if(c.userId!==t.buyer_id) return reply("取引完了は買い手だけが実行できます。",{components:[]});
+  if(!await transition(env,t.id,[TRADING,COMPLETE_PENDING],PAYOUT,{complete_requester:c.userId,complete_requested_at:Date.now()})){
+    return reply("この取引はすでに処理されています。",{components:[]});
   }
-  const other=c.userId===t.user_a?t.user_b:t.user_a;
-  const hours=c.settings.autoAgreeHours;
-  await send(env,t.channel_id!,{
-    content:`<@${other}>`,
-    embeds:[embed("取引完了の申請",
-      `<@${c.userId}> が取引完了を申請しました。\n`+
-      `<@${other}> さん、取引を終了してよければ「同意する」を押してください。\n`+
-      (hours>0?`**${hoursLabel(hours)}時間以内に返事がない場合は、自動で同意したものとして取引を完了します。**\n`:"")+
-      "問題がある場合は「まだ続ける」か「通報」を押してください。\n\n"+
-      (other===t.buyer_id?"⚠️ 同意すると、代金が売り手に支払われます。取り消せません。":"⚠️ 同意すると取引が完了し、代金が支払われます。"),
-      COLOR.green)],
-    components:[row(button(`md:agree:${t.id}`,"同意する",3),button(`md:continue:${t.id}`,"まだ続ける",2),button(`md:report:${t.id}`,"通報",4))]
-  });
-  return reply("取引完了を申請しました。相手の回答を待っています。");
+  await send(env,t.channel_id!,{embeds:[embed("✅ 買い手が取引を完了しました",
+    `<@${t.buyer_id}> に買い手実績、<@${t.seller_id}> に売り手実績が付きました。\n売り手への支払いを準備しています…`,COLOR.green)]});
+  await finishAgreed(env,c.settings,t,"買い手完了");
+  return reply("取引を完了しました。売り手への支払いを進めています。",{components:[]});
 }
 
 function agreedEmbed(t:Trade,settings:MediationSettings,auto=false){
@@ -829,6 +833,10 @@ async function confirmGuard(env:Env,c:Ctx,tid:number):Promise<Trade|Response>{
 }
 
 async function agree(env:Env,c:Ctx,t:Trade){
+  // 以前の「売り手が申請 → 買い手が同意」の残り。売り手が自分への支払いに同意することはできない
+  if(c.userId!==t.buyer_id&&t.complete_requester!==t.buyer_id){
+    return reply("取引完了は買い手だけが実行できます。");
+  }
   if(!await transition(env,t.id,[COMPLETE_PENDING],PAYOUT)) return reply("この申請はすでに処理されています。");
   await send(env,t.channel_id!,{embeds:[agreedEmbed(t,c.settings)]});
   await finishAgreed(env,c.settings,t,"両者合意");
@@ -946,15 +954,9 @@ async function onStaff(env:Env,c:Ctx,action:string,tid:number){
       return reply("差し戻しました。");
     }
     case "payseller":
-    case "refund":{
-      if(!await transition(env,tid,[DISPUTE],PAYOUT)) return wrong();
-      const toSeller=action==="payseller";
-      await markStaffDone(env,c,toSeller?"売り手へ支払い":"買い手へ返金");
-      await trySend(env,t.channel_id,{embeds:[embed("スタッフの判断",toSeller?"売り手へ支払うと判断しました。":"買い手へ返金すると判断しました。")]});
-      const who=String(c.member?.user?.username??c.userId);
-      await payout(env,settings,tid,toSeller?t.seller_id!:t.buyer_id!,`通報→${toSeller?"売り手へ支払い":"買い手へ返金"}（${who}）`);
-      return reply("処理しました。");
-    }
+    case "refund":
+      // 押し間違いを防ぐため、確認を出してから実行する（スタッフ通知のメッセージは実行時に「処理済み」へ書き換える）
+      return staffPaymentConfirm(t,action,String(c.interaction.message?.id??"0"));
     case "feeok":
       if(!await transition(env,tid,[FEE_RECEIVING],AMOUNT)) return wrong();
       await markStaffDone(env,c,"仲介費の受け取り完了");
@@ -981,12 +983,70 @@ async function onStaff(env:Env,c:Ctx,action:string,tid:number){
   return reply("未対応の操作です。");
 }
 
+const STAFF_PAY_STATUSES=[TRADING,COMPLETE_PENDING,DISPUTE];
+
+function staffPaymentConfirm(t:Trade,action:string,originMessageId:string){
+  if(action!=="payseller"&&action!=="refund") return reply("未対応の操作です。");
+  if(!STAFF_PAY_STATUSES.includes(t.status)){
+    return reply("この取引は現在、支払い・返金できる状態ではありません（受け渡し中か通報中の取引だけが対象です）。");
+  }
+  const toSeller=action==="payseller";
+  const target=toSeller?t.seller_id:t.buyer_id;
+  return reply(
+    `取引 ${no(t)}：${toSeller?"売り手":"買い手"} <@${target}> さんに **${yen(t.amount)}** を${toSeller?"支払います":"返金します"}。よろしいですか？\n`+
+    "実行すると送金リンクが作られ、取り消せません。",
+    {components:[row(
+      button(`md:payok:${action}:${/^\d+$/.test(originMessageId)?originMessageId:"0"}:${t.id}`,toSeller?"売り手に支払う":"買い手に返金する",toSeller?1:4),
+      button(`md:opcancel:${t.id}`,"キャンセル",2)
+    )],allowed_mentions:{parse:[]}}
+  );
+}
+
+/** スタッフ用 /payment（取引チャンネルで使う） */
+async function onPaymentCommand(env:Env,c:Ctx){
+  if(!isStaff(c.member,c.settings)) return reply("このコマンドはスタッフだけが使えます。");
+  const t=await tradeFor(env,c,null,false);
+  if(typeof t==="string") return reply(t+"\n取引チャンネルの中で実行してください。");
+  const action=String((c.interaction.data?.options??[]).find((o:any)=>o.name==="action")?.value??"");
+  return staffPaymentConfirm(t,action,"0");
+}
+
+async function onStaffPaymentConfirmed(env:Env,c:Ctx,action:string,originMessageId:string,tid:number){
+  if(!isStaff(c.member,c.settings)) return reply("スタッフのみ操作できます。",{components:[]});
+  if(action!=="payseller"&&action!=="refund") return reply("未対応の操作です。",{components:[]});
+  const t=await getTrade(env,tid);
+  if(!t||t.guild_id!==c.guildId) return reply("取引が見つかりません。",{components:[]});
+  if(!await transition(env,tid,STAFF_PAY_STATUSES,PAYOUT,{complete_requester:null,complete_requested_at:null})){
+    return reply("この取引はすでに処理されているか、支払い・返金できる状態ではありません。",{components:[]});
+  }
+  const toSeller=action==="payseller";
+  const who=String(c.member?.user?.username??c.userId);
+  if(originMessageId!=="0"&&c.interaction.channel_id){
+    await markStaffMessageDone(env,String(c.interaction.channel_id),originMessageId,toSeller?"売り手へ支払い":"買い手へ返金",c.userId);
+  }
+  await trySend(env,t.channel_id,{embeds:[embed("スタッフの判断",
+    toSeller?`売り手 <@${t.seller_id}> さんへ支払うと判断しました。`:`買い手 <@${t.buyer_id}> さんへ返金すると判断しました。`)]});
+  await payout(env,c.settings,tid,toSeller?t.seller_id!:t.buyer_id!,`スタッフ判断→${toSeller?"売り手へ支払い":"買い手へ返金"}（${who}）`);
+  return reply(toSeller?"売り手への支払いを実行しました。":"買い手への返金を実行しました。",{components:[]});
+}
+
+async function markStaffMessageDone(env:Env,channelId:string,messageId:string,note:string,userId:string){
+  try{
+    const message=await botJson<any>(env,`/channels/${channelId}/messages/${messageId}`);
+    await editStaffMessage(env,channelId,message,note,userId);
+  }catch(error){ console.error("mediation staff message lookup failed",error); }
+}
+
 async function markStaffDone(env:Env,c:Ctx,note:string){
   const message=c.interaction.message;
   if(!message?.id||!c.interaction.channel_id) return;
-  const base=message.embeds?.[0]??{};
+  await editStaffMessage(env,String(c.interaction.channel_id),message,note,c.userId);
+}
+
+async function editStaffMessage(env:Env,channelId:string,message:any,note:string,userId:string){
+  const base=message?.embeds?.[0]??{};
   // 受け取った embed には送信できない読み取り専用の項目も含まれるので、必要な項目だけで作り直す
-  const fields=[...(Array.isArray(base.fields)?base.fields:[]),{name:"処理",value:`${note}（<@${c.userId}>）`,inline:false}].slice(-25);
+  const fields=[...(Array.isArray(base.fields)?base.fields:[]),{name:"処理",value:`${note}（<@${userId}>）`,inline:false}].slice(-25);
   const rebuilt={
     title:String(base.title??"処理済み").slice(0,256),
     ...(base.description?{description:String(base.description).slice(0,4096)}:{}),
@@ -994,7 +1054,7 @@ async function markStaffDone(env:Env,c:Ctx,note:string){
     fields:fields.map((f:any)=>({name:String(f.name).slice(0,256),value:String(f.value).slice(0,1024),inline:Boolean(f.inline)}))
   };
   try{
-    await botJson(env,`/channels/${c.interaction.channel_id}/messages/${message.id}`,{
+    await botJson(env,`/channels/${channelId}/messages/${message.id}`,{
       method:"PATCH",body:JSON.stringify({embeds:[rebuilt],components:[]})
     });
   }catch(error){ console.error("mediation staff message edit failed",error); }
@@ -1013,15 +1073,21 @@ async function onCheck(env:Env,c:Ctx){
   return ires({type:4,data:{flags:64,embeds:[embed(`${name} さんの取引実績`,"",COLOR.teal,{
     ...(avatar?{thumbnail:{url:avatar}}:{}),
     fields:[{name:"買い手実績",value:`${stats.buyer} 件`,inline:true},{name:"売り手実績",value:`${stats.seller} 件`,inline:true}],
-    footer:{text:"両者合意で正常に完了した取引の件数です"}
+    footer:{text:"買い手の取引完了で正常に終わった取引の件数です"}
   })]}});
 }
 
 // ---- Interaction ルーティング --------------------------------------------------
 export const MEDIATION_COMMANDS=[
-  {name:"complete",description:"取引完了を申請します（取引チャンネル内で使用）",type:1,dm_permission:false},
+  {name:"complete",description:"【買い手用】商品を受け取ったら取引を完了し、売り手に支払います（取引チャンネル内で使用）",type:1,dm_permission:false},
   {name:"report",description:"トラブルを通報し、取引を保留にします（取引チャンネル内で使用）",type:1,dm_permission:false},
-  {name:"check",description:"メンバーの取引実績を確認します",type:1,dm_permission:false,options:[{type:6,name:"member",description:"実績を確認したいメンバー",required:true}]}
+  {name:"check",description:"メンバーの取引実績を確認します",type:1,dm_permission:false,options:[{type:6,name:"member",description:"実績を確認したいメンバー",required:true}]},
+  {name:"payment",description:"【スタッフ用】取引の代金を売り手に支払う／買い手に返金する（取引チャンネル内で使用）",type:1,dm_permission:false,options:[
+    {type:3,name:"action",description:"どちらに送金するか",required:true,choices:[
+      {name:"売り手に支払い",value:"payseller"},
+      {name:"買い手に返金",value:"refund"}
+    ]}
+  ]}
 ];
 
 export function isMediationInteraction(interaction:any):boolean{
@@ -1033,12 +1099,22 @@ export function isMediationInteraction(interaction:any):boolean{
 /** 応答を先に返して、裏で処理を続けるべきか（モーダルを開く操作は即答が必要） */
 export function mediationShouldDefer(interaction:any):boolean{
   if(!isMediationInteraction(interaction)) return false;
-  if(interaction.type===2) return interaction.data?.name==="complete";
+  // スラッシュコマンドはどれも確認や一覧を返すだけなので即答する
+  if(interaction.type===2) return false;
   if(interaction.type===5) return true;
   const id=String(interaction.data?.custom_id??"");
   if(id==="md:start"||id.startsWith("md:report:")||id.startsWith("md:rtype:")||id.startsWith("md:amount:")||id.startsWith("md:pay:")) return false;
+  // 確認を出すだけ・取り消すだけの操作も即答する
+  if(id.startsWith("md:complete:")||id.startsWith("md:opcancel:")) return false;
+  if(id.startsWith("md:staff:payseller:")||id.startsWith("md:staff:refund:")) return false;
   if(id.startsWith("md:fee:")) return id.startsWith("md:fee:other:");
   return true;
+}
+
+/** 確認メッセージのボタンから実行する操作は、確認メッセージそのものを結果に書き換える（type 6） */
+export function mediationDefersAsUpdate(interaction:any):boolean{
+  const id=String(interaction?.data?.custom_id??"");
+  return interaction?.type===3&&(id.startsWith("md:payok:")||id.startsWith("md:completeok:"));
 }
 
 function errorText(error:unknown){
@@ -1055,6 +1131,7 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
     if(name==="complete") return onComplete(env,c,null);
     if(name==="report") return onReportOpen(env,c,null);
     if(name==="check") return onCheck(env,c);
+    if(name==="payment") return onPaymentCommand(env,c);
   }
 
   const id=String(interaction.data?.custom_id??"");
@@ -1073,6 +1150,9 @@ export async function handleMediationInteraction(interaction:any,env:Env):Promis
       case "role": return onRole(env,c,parts[2]!,tid);
       case "pay": return onPayButton(env,c,tid);
       case "complete": return onComplete(env,c,tid);
+      case "completeok": return onCompleteConfirmed(env,c,tid);
+      case "payok": return onStaffPaymentConfirmed(env,c,parts[2]!,parts[3]!,tid);
+      case "opcancel": return ires({type:7,data:{content:"キャンセルしました。",components:[]}});
       case "report": return onReportOpen(env,c,tid);
       case "rtype": return onReportType(env,c,tid);
       case "agree":{
@@ -1163,17 +1243,8 @@ export async function mediationSweep(env:Env){
     return settingsCache.get(guildId)!;
   };
 
-  // 1. 完了申請から一定時間返事がない取引を、自動で同意として完了させる
-  for(const t of await listAutoAgreeCandidates(env,now)){
-    try{
-      const s=await settingsOf(t.guild_id);
-      if(s.autoAgreeHours<=0||!t.complete_requested_at) continue;
-      if(t.complete_requested_at+s.autoAgreeHours*3600_000>now) continue;
-      if(!await transition(env,t.id,[COMPLETE_PENDING],PAYOUT)) continue;
-      await trySend(env,t.channel_id,{content:`<@${t.user_a}> <@${t.user_b}>`,embeds:[agreedEmbed(t,s,true)]});
-      await finishAgreed(env,s,t,"自動同意");
-    }catch(error){ console.error("mediation auto agree failed",t.id,error); }
-  }
+  // 完了申請への自動同意は廃止した（売り手が申請して放置すると、商品を渡さずに代金を受け取れてしまうため）。
+  // 取引完了は買い手だけが実行し、買い手が完了しないときは売り手が /report で通報する。
 
   // 1b. PayPay処理の途中でWorkerが止まった取引を、スタッフに一度だけ知らせる
   for(const t of await listStuckTrades(env,now-15*60_000)){

@@ -82,6 +82,7 @@ import {
   handleMediationInteraction,
   isMediationInteraction,
   mediationShouldDefer,
+  mediationDefersAsUpdate,
   mediationSweep
 } from "./mediation";
 export { DiscordGateway } from "./discord-gateway";
@@ -1631,21 +1632,41 @@ async function handleInteraction(
         .then(result=>finishDeferredInteraction(interaction,result))
         .catch(error=>failDeferredInteraction(interaction,error))
     );
+    // 確認メッセージのボタンは、その確認メッセージを結果へ書き換える（新しいメッセージを増やさない）
+    if(mediationDefersAsUpdate(interaction)) return interactionResponse({type:6});
     return deferredEphemeral();
   }
 
   return processInteraction(interaction,request,env,ctx);
 }
 
+function commandDefinitions(){
+  return [
+    {name:"dashboard",description:"管理ダッシュボードを開きます",type:1},
+    {name:"security-status",description:"セキュリティ設定を表示します",type:1},
+    ...MEDIATION_COMMANDS
+  ];
+}
+
 async function registerCommands(env:Env):Promise<void>{
   await botJson(env,`/applications/${env.DISCORD_APPLICATION_ID}/commands`,{
     method:"PUT",
-    body:JSON.stringify([
-      {name:"dashboard",description:"管理ダッシュボードを開きます",type:1},
-      {name:"security-status",description:"セキュリティ設定を表示します",type:1},
-      ...MEDIATION_COMMANDS
-    ])
+    body:JSON.stringify(commandDefinitions())
   });
+}
+
+/** コマンドの定義が変わったら、デプロイ後の最初の Cron で Discord に登録し直す（手作業の再登録を不要にする） */
+async function syncCommandsIfChanged(env:Env):Promise<void>{
+  const digest=await sha256Hex(JSON.stringify(commandDefinitions()));
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS worker_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+  ).run();
+  const row=await env.DB.prepare("SELECT value FROM worker_flags WHERE key='commands_digest'").first<{value:string}>();
+  if(row?.value===digest) return;
+  await registerCommands(env);
+  await env.DB.prepare(
+    "INSERT INTO worker_flags(key,value,updated_at) VALUES ('commands_digest',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"
+  ).bind(digest,Date.now()).run();
 }
 
 async function handleDashboardLogin(request:Request,env:Env):Promise<Response>{
@@ -3370,7 +3391,7 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v78-vps-gateway-relay",
+          version:"bot-coexistence-v79-buyer-complete",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
@@ -3481,6 +3502,7 @@ export default {
       vendingSweep(env),
       mediationSweep(env).catch(error=>console.error("mediation sweep failed",error)),
       retireDiscordGateway(env).catch(error=>console.error("discord gateway retire failed",error)),
+      syncCommandsIfChanged(env).catch(error=>console.error("command sync failed",error)),
       memberActivitySweep(env).catch(error=>console.error("member activity sweep failed",error)),
       botAccessGuardSweep(env),
       backupRestoreSweep(env)

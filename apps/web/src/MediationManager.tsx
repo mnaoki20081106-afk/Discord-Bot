@@ -730,7 +730,7 @@ export default function MediationManager({
           )}
         </div>
 
-        <div className="form-grid three">
+        <div className="form-grid two">
           <NumberField
             label="取引金額の下限"
             suffix="円"
@@ -745,16 +745,6 @@ export default function MediationManager({
             min={0}
             onChange={(v) => patch({ maxAmount: v })}
             hint="0で上限なし。凍結リスクに備えて上限を決めるのがおすすめです"
-          />
-          <NumberField
-            label="完了申請の自動同意"
-            suffix="時間後"
-            value={draft.autoAgreeHours}
-            min={0}
-            max={720}
-            step={0.5}
-            onChange={(v) => patch({ autoAgreeHours: v })}
-            hint="返事がなければ自動で同意して売り手へ支払います。0で無効"
           />
         </div>
 
